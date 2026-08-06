@@ -1,0 +1,51 @@
+import Foundation
+
+/// Interpreting raw palette/link input into a concrete URL and understanding
+/// whether typed text looks like a URL.
+enum URLIntent {
+
+    /// Does this text look like a URL the user meant to open directly?
+    /// Rules (from PROTOCOL.md palette contract):
+    ///   - has an explicit scheme (http://, https://, file://, etc.), OR
+    ///   - has a dot and no spaces (e.g. "example.com", "sub.domain.co/path").
+    static func looksLikeURL(_ raw: String) -> Bool {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { return false }
+        if text.contains(" ") { return false }
+
+        // Explicit scheme?
+        if let schemeRange = text.range(of: "://"), schemeRange.lowerBound != text.startIndex {
+            return true
+        }
+        // Common single-word schemes without "//" (e.g. mailto:) are not our
+        // job (we do not declare mailto), so ignore those.
+
+        // Dot with no spaces, and at least one char on each side of a dot.
+        if let dot = text.firstIndex(of: "."),
+           dot != text.startIndex,
+           text.index(after: dot) != text.endIndex {
+            return true
+        }
+        return false
+    }
+
+    /// Normalize typed URL-ish text into an absolute URL string.
+    /// Adds https:// when no scheme is present.
+    static func normalizedURL(_ raw: String) -> String {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.range(of: "://") != nil {
+            return text
+        }
+        return "https://\(text)"
+    }
+
+    /// Build a Google search URL for arbitrary query text.
+    static func googleSearchURL(_ query: String) -> String {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        // urlQueryAllowed keeps this safe; encode spaces as %20 (Google accepts).
+        let encoded = trimmed.addingPercentEncoding(
+            withAllowedCharacters: .urlQueryAllowed
+        ) ?? trimmed
+        return "https://www.google.com/search?q=\(encoded)"
+    }
+}

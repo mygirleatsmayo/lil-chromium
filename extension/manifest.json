@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "lil-chromium",
+  "version": "0.1.0",
+  "description": "Ephemeral little windows for lil-chromium, a Little Arc-style browser.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvRie/WjcfwsitIKqeuieS2UFJRluyPSkwtvRGDu5OXsA9y8uzSKBzLy5BvtmxNr7GYS5+28dTK8FcKViuj3aD1h8p9PGKMxB/gmw3zEDs2NCnMxineVNwtTxDTX/fnkNJZz3XwTaPuu4RmrdeFN82TR4gaid8LYJi3GQarJMi5k/NkpQcB9CRLQ0s+GdgAL8O93mNo66nUVbhaCaRt1uNhHYoQ11M9/y9gZtRNMYUAgEMX1wqvNva59qSigwSv3jFQZGYe568ngXlViNEabixwT2NWH40rllrOW6v0zDoAXCWzNVYEW5Xl0Sk+rIDOdjlQA/ANtK+4UIgZLqg3COWwIDAQAB",
+  "permissions": [
+    "nativeMessaging",
+    "history",
+    "storage",
+    "tabs",
+    "tabGroups",
+    "webNavigation",
+    "system.display"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["overlay.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "commands": {
+    "promote-tab": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+O",
+        "mac": "Command+Shift+O"
+      },
+      "description": "Open this little window as a Chrome tab"
+    }
+  }
+}
