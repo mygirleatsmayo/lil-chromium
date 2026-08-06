@@ -20,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self,
             andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
             forEventClass: AEEventClass(kInternetEventClass),
-            forEventID: AEEventID(kAEGetURL)
+            andEventID: AEEventID(kAEGetURL)
         )
     }
 
