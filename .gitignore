@@ -9,3 +9,7 @@
 *.pem
 *.key
 .mayo/scratch-todo.md
+
+# Swift build artifacts
+mac/.build/
+mac/build/
