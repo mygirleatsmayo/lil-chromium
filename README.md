@@ -1,4 +1,4 @@
-# lil-chromium
+# lil chromium
 
 Little Arc-style ephemeral browser for macOS that **isn't a browser**. Each "lil" is a popup window of your existing Chromium-family browser (Helium, Chrome, Brave, …), so your logins just work and a lil costs almost no extra memory.
 
