@@ -2,6 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 import LilShared
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem?
