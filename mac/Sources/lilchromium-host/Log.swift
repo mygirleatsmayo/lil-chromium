@@ -7,15 +7,29 @@ final class HostLog {
     static let shared = HostLog()
 
     private let queue = DispatchQueue(label: "com.lilchromium.host.log")
-    private let path: String
+    // The log path depends on the detected browser slug, which is known only
+    // after startup. It is set once via configure(slug:) before heavy logging.
+    // Guarded by the log queue so reads/writes never race.
+    private var path: String
+
     private let maxBytes: Int = 1_000_000
 
     private init() {
-        self.path = LilPaths.hostLogPath
+        // Fallback until the slug is known (pre-detection startup lines).
+        self.path = LilPaths.hostLogPath(forBrowser: "unknown")
+    }
+
+    /// Point the log at `host-<slug>.log`. Serialized on the log queue so it
+    /// applies before any subsequently-enqueued log lines are written.
+    func configure(slug: String) {
+        queue.async { [weak self] in
+            self?.path = LilPaths.hostLogPath(forBrowser: slug)
+        }
     }
 
     func log(_ message: String) {
-        queue.async { [path, maxBytes] in
+        queue.async { [maxBytes] in
+            let path = self.path
             let stamp = ISO8601DateFormatter().string(from: Date())
             let line = "[\(stamp)] \(message)\n"
             guard let data = line.data(using: .utf8) else { return }

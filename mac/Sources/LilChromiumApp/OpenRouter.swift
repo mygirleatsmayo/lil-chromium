@@ -1,8 +1,10 @@
 import AppKit
 import Foundation
+import LilShared
 
-/// Decides how to open a URL: over the relay (preferred) or via Chrome directly
-/// (fallback). Also owns the AppKit->Chrome coordinate conversion.
+/// Decides how to open a URL: over the relay (preferred) or by launching a
+/// browser directly (fallback). Also owns the AppKit->Chrome coordinate
+/// conversion.
 ///
 /// PROTOCOL.md coordinates:
 ///   AppKit: origin bottom-left of primary screen, Y up.
@@ -10,8 +12,6 @@ import Foundation
 ///   chromeY = primaryScreen.frame.height - appKitY. Only the Y flip is needed;
 ///   the global desktop space is otherwise shared.
 enum OpenRouter {
-
-    static let chromeBundleID = "com.google.Chrome"
 
     /// The primary screen (the one whose frame origin is (0,0)), falling back to
     /// NSScreen.main. Used for the Y flip and for palette anchoring.
@@ -79,33 +79,70 @@ enum OpenRouter {
                 // write is sufficient — no separate ping needed on the hot path.)
                 return
             } catch {
-                // Relay down: fall back to Chrome directly.
+                // Relay down: fall back to launching a browser directly.
                 DispatchQueue.main.async {
-                    fallbackOpenInChrome(urlString)
+                    fallbackOpenInBrowser(urlString)
                 }
             }
         }
     }
 
-    /// Fallback: open the URL in Chrome via NSWorkspace; if Chrome is missing,
-    /// open with the system default handler (which is us — but at that point the
-    /// relay was already down, so this hands off to whatever else can open it).
-    static func fallbackOpenInChrome(_ urlString: String) {
+    /// Fallback when no relay answered: launch the URL in a real browser by
+    /// bundle id, in order — config defaultBrowser, then fallbackBrowser, then
+    /// the first installed known browser. NEVER `NSWorkspace.shared.open(url)`
+    /// bare: this app IS the system default HTTP handler, so a bare open would
+    /// route straight back to us (infinite loop). If nothing can be launched
+    /// the link is dropped (logged) rather than looping.
+    static func fallbackOpenInBrowser(_ urlString: String) {
         guard let url = URL(string: urlString) else { return }
 
+        let cfg = LilConfig.load()
         let ws = NSWorkspace.shared
-        if let chromeURL = ws.urlForApplication(withBundleIdentifier: chromeBundleID) {
-            let config = NSWorkspace.OpenConfiguration()
-            config.activates = true
-            ws.open([url], withApplicationAt: chromeURL, configuration: config) { _, error in
-                if error != nil {
-                    // Last resort so we never drop the link.
-                    DispatchQueue.main.async { _ = ws.open(url) }
+
+        // Build the ordered candidate bundle-id list.
+        var candidateBundleIds: [String] = []
+        func appendBundleId(forSlug slug: String) {
+            guard !slug.isEmpty else { return }
+            // Prefer the config's recorded bundle id; fall back to the table.
+            let bid = cfg.knownBrowsers.first(where: { $0.slug == slug })?.bundleId
+                ?? BrowserTable.bundleId(forSlug: slug)
+            if let bid = bid, !bid.isEmpty, !candidateBundleIds.contains(bid) {
+                candidateBundleIds.append(bid)
+            }
+        }
+        appendBundleId(forSlug: cfg.defaultBrowser)
+        appendBundleId(forSlug: cfg.fallbackBrowser)
+        // Then any installed known browser from the config scan.
+        for kb in cfg.knownBrowsers where kb.installed && !candidateBundleIds.contains(kb.bundleId) {
+            candidateBundleIds.append(kb.bundleId)
+        }
+
+        openFirstAvailable(url, bundleIds: candidateBundleIds, ws: ws)
+    }
+
+    /// Try each bundle id in order; launch with the first one Launch Services
+    /// can resolve. Recurses to the next candidate on launch error so we never
+    /// bare-open (which would loop back into this app).
+    private static func openFirstAvailable(_ url: URL, bundleIds: [String], ws: NSWorkspace) {
+        guard let bundleId = bundleIds.first else {
+            NSLog("lil-chromium: fallback found no launchable browser for \(url.absoluteString)")
+            return
+        }
+        let rest = Array(bundleIds.dropFirst())
+
+        guard let appURL = ws.urlForApplication(withBundleIdentifier: bundleId) else {
+            openFirstAvailable(url, bundleIds: rest, ws: ws)
+            return
+        }
+
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        ws.open([url], withApplicationAt: appURL, configuration: config) { _, error in
+            if error != nil {
+                DispatchQueue.main.async {
+                    openFirstAvailable(url, bundleIds: rest, ws: ws)
                 }
             }
-        } else {
-            // Chrome missing entirely.
-            _ = ws.open(url)
         }
     }
 }

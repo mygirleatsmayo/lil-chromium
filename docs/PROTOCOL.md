@@ -1,80 +1,113 @@
-# lil-chromium — Component Protocol (v1)
+# lil-chromium — Component Protocol (v2)
 
 Three components. One contract. Any change here must update all three.
+Terminology: an ephemeral window is a **lil** (plural: **lils**).
 
 ## Components
 
-1. **LilChromium.app** — Swift menu-bar agent (`LSUIElement`). System default browser. Owns the ⌘⌥N palette. Socket **client**.
-2. **lilchromium-host** — native messaging host binary, launched by Chrome when the extension connects. Socket **server** + relay + queue.
-3. **extension/** — Chrome MV3 extension (unpacked). Owns all Chrome windows/tabs behavior.
+1. **LilChromium.app** — Swift menu-bar agent (`LSUIElement`). System default browser. Owns the ⌘⌥N palette + Settings window. Socket **client**.
+2. **lilchromium-host** — native messaging host binary, launched by each Chromium-family browser running the extension. Socket **server** (one per browser) + relay + queue.
+3. **extension/** — Chrome MV3 extension (unpacked), installable in any Chromium-family browser. Owns all window/tab behavior inside its browser.
 
 Extension ID (pinned via `key` in manifest): `oofeehjoocddelicpmnpbafmbalaakge`
 Native messaging host name: `com.lilchromium.relay`
-Native host manifest path (user-level): `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.lilchromium.relay.json`
 `allowed_origins`: `["chrome-extension://oofeehjoocddelicpmnpbafmbalaakge/"]`
+
+## Browser slugs
+
+`chrome`, `helium`, `brave`, `edge`, `arc`, `vivaldi`, `chromium`, `unknown`.
+The host detects its own browser at startup: `proc_pidpath(getppid())` → substring match on the executable path (helpers' paths contain the browser `.app` path). Bundle ids: chrome `com.google.Chrome`, helium `net.imput.helium`, brave `com.brave.Browser`, edge `com.microsoft.edgemac`, arc `company.thebrowser.Browser`, vivaldi `com.vivaldi.Vivaldi`, chromium `org.chromium.Chromium`.
+
+## Config file — `~/.lilchromium/config.json`
+
+Written by the app (Settings window / menu). Read by the app and by each host (fresh read per `get-context`). Schema (all fields present; unknown fields preserved on rewrite):
+
+```json
+{
+  "version": 1,
+  "defaultBrowser": "helium",
+  "fallbackBrowser": "chrome",
+  "paletteAnchor": "top-center",
+  "linkBehavior": "same-lil",
+  "knownBrowsers": [
+    {"slug": "helium", "name": "Helium", "bundleId": "net.imput.helium", "installed": true},
+    {"slug": "chrome", "name": "Google Chrome", "bundleId": "com.google.Chrome", "installed": true}
+  ]
+}
+```
+
+- `defaultBrowser`: promote target + palette history source + link-open fallback target.
+- `paletteAnchor`: `"top-center"` (centered horizontally, top edge at 20% of screen height) | `"top-right"` (24pt insets).
+- `linkBehavior`: `"same-lil"` (links that would spawn a new tab navigate the current lil instead) | `"new-lil"` (they cascade into a new lil). Per-click override via modifier/context menu flips the behavior.
+- `knownBrowsers`: app scans /Applications + NSWorkspace on launch and on settings-open, writes results. Hosts/extension treat it as read-only truth.
+- Missing file → components use built-in defaults (`helium`/`chrome`/`top-center`/`same-lil`). First app launch with no config opens the Settings window (onboarding) and writes it.
 
 ## Transports
 
-- **Extension ↔ host**: Chrome native messaging over stdio. 4-byte native-endian uint32 length prefix + UTF-8 JSON. Extension opens the port with `chrome.runtime.connectNative("com.lilchromium.relay")` on service-worker start (`onStartup`, `onInstalled`, and top-level SW execution), keeps it open forever, reconnects on `onDisconnect` (backoff 250ms → 5s max). The open port keeps the MV3 worker alive.
-- **App ↔ host**: Unix domain socket at `$HOME/.lilchromium/relay.sock`. Newline-delimited JSON (one object per line, no pretty-printing). App connects per request (short-lived connections are fine). Host creates `~/.lilchromium/` if missing; on bind failure, if a live host answers a `ping` on the existing socket the new host exits 0, otherwise it unlinks the stale socket and rebinds. Host exits when its stdin (Chrome pipe) closes, and removes the socket file on exit.
+- **Extension ↔ host**: Chrome native messaging (unchanged from v1): 4-byte native-endian length + UTF-8 JSON; extension keeps a forever-open `connectNative` port with reconnect backoff.
+- **App ↔ host**: Unix domain socket **per browser**: `~/.lilchromium/relay-<slug>.sock` (e.g. `relay-helium.sock`). Newline-delimited JSON. Host binds its own browser's socket; stale-socket rule as v1 (ping-probe live check → exit or unlink+rebind). Host removes its socket on exit (stdin EOF).
+
+### App routing order (link click / palette open)
+
+1. `relay-<defaultBrowser>.sock`
+2. `relay-<fallbackBrowser>.sock`
+3. any other `relay-*.sock` present (newest mtime first)
+4. `NSWorkspace.open` the URL with the default browser's bundle id (launches it; normal tab)
+5. same with fallback browser / any installed known browser.
+Never `NSWorkspace.shared.open(url)` bare — the app IS the system default handler (infinite loop).
+
+Palette `history-query` uses the same order but only steps 1–3 (no launch), returning empty items if no socket answers.
 
 ## Messages
 
-All JSON objects with a `type` field. `id` is a caller-generated string for request/response matching.
+All JSON with `type`. `id` for request/response matching.
 
-### app → extension (host relays socket → port)
+### app → extension (via socket → port)
 
-- `{"type":"open","url":string,"left":int,"top":int}`
-  Open an ephemeral window. `left`/`top` = suggested window top-left in **Chrome screen coordinates** (global desktop space, top-left origin, points/DIPs — the app performs the AppKit Y-flip before sending). Extension applies remembered size, clamps fully on-screen, creates `type:"popup"` window, registers it as ephemeral.
-- `{"type":"history-query","id":string,"text":string,"maxResults":int}`
-  Extension calls `chrome.history.search({text, maxResults, startTime: now − 90 days})` and replies.
+- `{"type":"open","url":string,"left":int,"top":int}` — open a lil. Coordinates as v1 (Chrome screen coords, app pre-flips Y). Extension applies remembered size, clamps, registers.
+- `{"type":"history-query","id":string,"text":string,"maxResults":int}` → reply `history-result` as v1.
 
-### extension → app (host relays port → socket, matched by `id` to the requesting socket connection)
+### extension → host (host handles directly; never reaches the app)
 
-- `{"type":"history-result","id":string,"items":[{"url":string,"title":string,"lastVisitTime":number,"visitCount":int,"typedCount":int}]}`
+- `{"type":"get-context","id":string}` → host replies on the port:
+  `{"type":"context","id":string,"browser":slug,"browserName":string,"defaultBrowser":slug,"defaultBrowserName":string,"fallbackBrowser":slug,"linkBehavior":"same-lil"|"new-lil","knownBrowsers":[{"slug":...,"name":...,"installed":bool}]}`
+  Host reads config.json fresh on every call and injects its own detected identity. Extension calls this on every port (re)connect and caches.
+- `{"type":"open-external","browser":slug,"url":string}` — host launches the URL in that browser via `open -b <bundleId> <url>` (or NSWorkspace equivalent). Fire-and-forget; host logs failures.
 
-### host-only (never forwarded)
+### host-only (socket side, never forwarded)
 
-- `{"type":"ping","id":string}` → `{"type":"pong","id":string,"extensionConnected":bool}`
-  Host answers directly on the socket. App uses this to decide fallback.
+- `{"type":"ping","id"}` → `{"type":"pong","id","extensionConnected":bool,"browser":slug}` (browser field new in v2).
 
 ### Queueing
 
-If the extension port is down when an `open` arrives, host queues it (max 20, FIFO, drop oldest) and flushes on reconnect. `history-query` while disconnected: reply immediately with `{"type":"history-result","id":...,"items":[]}`.
+As v1: host queues `open` (max 20 FIFO) while the port is down; `history-query` gets an immediate empty `history-result`.
 
-## App behavior contract
+## Extension behavior contract (v2 changes)
 
-- Registers `CFBundleURLTypes` for `http` + `https` (`LSHandlerRank: Default`) + `CFBundleDocumentTypes` for `public.html`. Does NOT declare `mailto`.
-- On URL receive: capture `NSEvent.mouseLocation`, convert to Chrome coords (flip Y against primary screen height, offset so cursor sits ~40pt inside the window's top-left, clamp to that display's visible frame), send `open`. On socket failure OR `pong.extensionConnected == false`: fall back to opening the URL in Chrome directly (`NSWorkspace`, bundle id `com.google.Chrome`) — never drop a link.
-- ⌘⌥N global hotkey (Carbon `RegisterEventHotKey`, no permissions) → palette panel, top-right of primary display. Palette: fuzzy search over history snapshot (`history-query` with `text:""`, `maxResults:3000` on open, cached; local fuzzy + frecency ranking), plus "Search Google" row and "Open URL" row when input looks like a URL. Enter → `open` with coords anchored at the palette's position. Esc / focus-loss closes.
-- Menu bar: New Little Window (⌘⌥N), Set as Default Browser, Launch at Login (SMAppService), Quit.
+- **Naming**: user-facing copy says "lil"/"lils" (e.g. "Open in a new lil").
+- **Hover-reveal top bar** replaces the always-visible pill. Hidden by default (nothing covers page UI). Reveal when cursor is within 24px of the viewport top (~80ms intent delay) or on ⌘L; hide 300ms after the cursor leaves unless the address field is focused or a menu is open; Esc hides. Bar (closed shadow DOM, slides down, glass-look CSS backdrop-blur, adapts to `prefers-color-scheme`): [back button] [editable address field, centered — shows current URL compactly, full URL + select-all on focus, Enter navigates via SW `tabs.update` (add https:// when missing; non-URL input → Google search)] [**Open in {defaultBrowserName}** ⌘O] [⌄ caret menu].
+- **Caret menu**: promote to default browser; "Open in {host browser} tab" when host ≠ default; tab groups of the host browser (`tabGroups.query`); other installed browsers ("Open in {name}…" → `open-external`); "Close lil".
+- **Promote semantics**: if `defaultBrowser == ` the browser the lil lives in → v1 no-reload move (`tabs.move` → `windows.create({tabId})` fallback) + optional group. Else → `open-external` to the default browser + close the lil (state not preservable across browsers — accepted).
+- **⌘O** (content-script capture + `promote-tab` command backstop) = promote to default browser. **⌘L** = reveal + focus address bar.
+- **Link behavior**: on `onCreatedNavigationTarget` from a lil:
+  - effective behavior = config `linkBehavior`, flipped if the originating click carried ⌘ (content script sends `{action:"clickHint",url,ts,meta:true|false}` on anchor clicks; SW matches hints within 1.5s by URL).
+  - `same-lil` → navigate the source lil's tab to the new URL and close the spawned tab.
+  - `new-lil` → v1 cascade (+32/+32 popup, registered).
+- **Context menus** (`contexts:["link"]`, created in `onInstalled`): "Open link in new lil" and "Open link in this lil" — onClicked no-ops unless `tab.windowId` is a registered lil.
+- Registry/restore/size-memory/history-responder: unchanged from v1.
 
-## Extension behavior contract
+## App behavior contract (v2 changes)
 
-- Ephemeral registry in `chrome.storage.local`: `{ [windowId]: {url, bounds} }`, updated on `tabs.onUpdated` (URL changes) and `windows.onBoundsChanged`. Removed on `windows.onRemoved`.
-- `chrome.runtime.onStartup`: reopen every registry entry (Chrome restart/crash restore — windows parked for days must survive), then rebuild registry with new window ids.
-- Remembered size: last user-resized ephemeral window size in `storage.local` (default 1100×800). `open` without explicit size uses it.
-- Child links: `chrome.webNavigation.onCreatedNavigationTarget` — if source tab is in an ephemeral window, re-parent the new tab into a new ephemeral popup window cascaded +32/+32 from the source window.
-- Overlay: content script on all http/https pages; on load asks SW "am I ephemeral?" (checks sender tab's windowId against registry); if yes, mounts a closed-shadow-DOM pill, top-right: **"Open in Chrome ⌘O"** + caret. Caret menu: "New tab in Chrome", existing tab groups (`tabGroups.query`), "New Chrome window". Content script intercepts ⌘O keydown (capture phase, preventDefault) as primary shortcut; `chrome.commands` `promote-tab` (suggested `MacCtrl+Shift+O` fallback binding) as backstop for pages where content scripts can't run.
-- Promote (no reload, state preserved), try in order:
-  1. `chrome.tabs.move(tabId, {windowId: lastFocusedNormalWindow, index: -1})` then `tabs.update(tabId,{active:true})` + focus that window;
-  2. fallback `chrome.windows.create({tabId, focused:true})`;
-  3. last resort `tabs.create` with URL + close popup.
-  Into a tab group: `chrome.tabs.group({tabIds:[tabId], groupId})` (moves tab to the group's window). After promote, deregister the window (it auto-closes when its only tab leaves).
+- Palette: anchor per config (`top-center` default: centered horizontally, panel top at 20% of the primary display's visibleFrame height). Dismiss ONLY on: Esc, ⌘⌥N toggle, X button, or opening a result. NOT on app deactivation (user can visit Raycast/pasteboard and come back). Panel level stays `.floating`, `.nonactivatingPanel`, visible across Spaces.
+- Palette sends `open` anchored near the panel; link clicks anchored at mouse (unchanged).
+- Settings window (Liquid Glass mini window): primary browser picker (installed only), fallback browser, palette position, link behavior, launch-at-login. Opens automatically on first run (no config.json).
+- Menu bar: "New Lil ⌘⌥N", "Settings…", "Set as Default Browser…", separator, "Quit".
 
-## Coordinates
+## Installer contract
 
-AppKit: origin bottom-left of primary screen, Y up. Chrome: origin top-left of primary screen, Y down. Conversion in the app:
-`chromeY = primaryScreen.frame.height − appKitY`. Multi-display: global space is shared; only the Y flip is needed. Chrome expects points (macOS DIPs) — no Retina scaling math.
+`scripts/install-host.sh` writes the manifest into every existing browser dir among:
+`Google/Chrome`, `Google/Chrome Beta`, `Google/Chrome Canary`, `net.imput.helium`, `BraveSoftware/Brave-Browser`, `Microsoft Edge`, `Arc/User Data`, `Vivaldi`, `Chromium` (each under `~/Library/Application Support/`, + `/NativeMessagingHosts/com.lilchromium.relay.json`). Helium does NOT read Chrome's manifests — its own dir is required.
 
-## Filesystem layout
+## Coordinates / filesystem layout
 
-```
-lil-chromium/
-  extension/            # MV3, plain JS, no build step, load unpacked
-  mac/                  # Swift Package: LilChromiumApp + lilchromium-host executables
-  scripts/              # bundle + install scripts
-  docs/PROTOCOL.md      # this file
-  Makefile
-  README.md
-```
+Unchanged from v1 (see git history for the v1 text). Sockets now `relay-<slug>.sock`; favicon cache `~/.lilchromium/favicons/`; logs `~/.lilchromium/host-<slug>.log`.

@@ -27,7 +27,21 @@ import Darwin
 
 final class Relay {
     private let native = NativeMessaging()
-    private let server = SocketServer(path: LilPaths.socketPath)
+
+    // The browser that launched us (detected at startup) and the socket path
+    // we bind for it.
+    private let browserSlug: String
+    private let socketPath: String
+    private let server: SocketServer
+
+    init() {
+        let slug = BrowserDetect.detectParentBrowser()
+        self.browserSlug = slug
+        self.socketPath = LilPaths.socketPath(forBrowser: slug)
+        self.server = SocketServer(path: self.socketPath)
+        // Route logging to host-<slug>.log as early as possible.
+        HostLog.shared.configure(slug: slug)
+    }
 
     // Map: history-query id -> the socket connection awaiting its result.
     private var pendingHistory: [String: SocketConnection] = [:]
@@ -52,7 +66,7 @@ final class Relay {
 
     func run() {
         LilPaths.ensureStateDir()
-        hlog("host: starting (pid \(getpid()))")
+        hlog("host: starting (pid \(getpid())) browser=\(browserSlug) socket=\(socketPath)")
 
         // 1) Bind the socket first so we can detect another live host.
         let bind = server.bindAndListen()
@@ -96,7 +110,7 @@ final class Relay {
         case MessageType.ping.rawValue:
             let id = env.id ?? ""
             if let reply = try? LilCodec.encodeLine(
-                PongMessage(id: id, extensionConnected: extensionUp)
+                PongMessage(id: id, extensionConnected: extensionUp, browser: browserSlug)
             ) {
                 conn.writeLine(reply)
             }
@@ -188,9 +202,96 @@ final class Relay {
             conn.writeLine(line)
             // The app closes after receiving; we leave close to the peer.
 
+        case MessageType.getContext.rawValue:
+            // Read config fresh and reply on the port with the runtime context.
+            handleGetContext(id: env.id ?? "")
+
+        case MessageType.openExternal.rawValue:
+            handleOpenExternal(data)
+
         default:
             // Unknown from extension -> drop (per PROTOCOL.md).
             hlog("extension: dropping unforwarded type \(env.type)")
+        }
+    }
+
+    // MARK: - get-context / open-external (v2)
+
+    /// Build a `context` reply from a fresh config read + our detected identity
+    /// and send it back on the extension port.
+    private func handleGetContext(id: String) {
+        let cfg = LilConfig.load()
+
+        // Prefer a name from the config's knownBrowsers, fall back to the table.
+        func displayName(forSlug slug: String) -> String {
+            if let kb = cfg.knownBrowsers.first(where: { $0.slug == slug }), !kb.name.isEmpty {
+                return kb.name
+            }
+            return BrowserTable.name(forSlug: slug)
+        }
+
+        // Prefer config's knownBrowsers list; if empty (no scan yet) fall back
+        // to the full table marked not-installed so the extension always has a
+        // menu to build from.
+        let known: [ContextBrowser]
+        if cfg.knownBrowsers.isEmpty {
+            known = BrowserTable.all.map {
+                ContextBrowser(slug: $0.slug, name: $0.name, installed: false)
+            }
+        } else {
+            known = cfg.knownBrowsers.map {
+                ContextBrowser(slug: $0.slug, name: $0.name, installed: $0.installed)
+            }
+        }
+
+        let ctx = ContextMessage(
+            id: id,
+            browser: browserSlug,
+            browserName: BrowserTable.name(forSlug: browserSlug),
+            defaultBrowser: cfg.defaultBrowser,
+            defaultBrowserName: displayName(forSlug: cfg.defaultBrowser),
+            fallbackBrowser: cfg.fallbackBrowser,
+            linkBehavior: cfg.linkBehavior,
+            knownBrowsers: known
+        )
+
+        guard let payload = try? LilCodec.encode(ctx) else {
+            hlog("host: failed to encode context reply")
+            return
+        }
+        if !native.send(payload) {
+            hlog("host: stdout write failed on context")
+            extensionUp = false
+        }
+    }
+
+    /// Launch a URL in another browser via `/usr/bin/open -b <bundleId> <url>`.
+    /// Validates the URL scheme (http/https only) and resolves the bundle id
+    /// from the slug table. Fire-and-forget; failures are logged.
+    private func handleOpenExternal(_ data: Data) {
+        guard let msg = try? LilCodec.decode(OpenExternalMessage.self, from: data) else {
+            hlog("host: undecodable open-external dropped")
+            return
+        }
+
+        let lower = msg.url.lowercased()
+        guard lower.hasPrefix("http://") || lower.hasPrefix("https://") else {
+            hlog("host: open-external refused non-http(s) url")
+            return
+        }
+        guard let bundleId = BrowserTable.bundleId(forSlug: msg.browser) else {
+            hlog("host: open-external unknown browser slug \(msg.browser)")
+            return
+        }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        proc.arguments = ["-b", bundleId, msg.url]
+        do {
+            try proc.run()
+            hlog("host: open-external \(msg.browser) \(msg.url)")
+        } catch {
+            hlog("host: open-external launch failed: \(error)")
         }
     }
 
@@ -201,7 +302,7 @@ final class Relay {
         server.stop()
         // Remove the socket file explicitly (server.stop unlinks too — belt and
         // braces in case bind used a path that differs from a symlink target).
-        unlink(LilPaths.socketPath)
+        unlink(socketPath)
         exit(0)
     }
 }

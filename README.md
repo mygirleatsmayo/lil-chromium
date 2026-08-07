@@ -1,74 +1,90 @@
 # lil-chromium
 
-Little Arc–style ephemeral browser for macOS — **without shipping a browser**. The "little windows" are Chrome popup windows in your existing profile, so every login you have in Chrome just works, and the memory cost is near zero.
+Little Arc–style ephemeral browser for macOS — **without shipping a browser**. Each "lil" is a popup window of your existing Chromium-family browser (Helium, Chrome, Brave, …), so every login just works and the memory cost is near zero.
 
 ## How it works
 
 ```
 link click in any app ──▶ LilChromium.app (default browser, menu bar)
 ⌘⌥N palette ────────────▶        │ url + mouse position
-                                  ▼ unix socket (~/.lilchromium/relay.sock)
-                          lilchromium-host (launched by Chrome)
+                                  ▼ unix socket (~/.lilchromium/relay-<browser>.sock)
+                          lilchromium-host (one per running browser)
                                   ▼ native messaging
-                          Chrome extension ──▶ minimal popup window at your cursor
-                                               "Open in Chrome ⌘O" ──▶ real tab / tab group
+                          extension ──▶ minimal lil at your cursor
+                                        hover top edge → address bar unfolds
+                                        "Open in Helium" ⌘O ──▶ real tab / tab group / other browser
 ```
 
-- Links clicked **inside Chrome** never touch this — Chrome handles its own links.
-- If Chrome or the relay is down, links fall back to opening in Chrome normally. **No link is ever dropped.**
-- Little windows are real Chrome tabs: video, audio, Slack, dev tools — everything works.
-- Windows you park for days **survive Chrome restarts** — the extension reopens them at the same size/position.
+- Links clicked **inside** your browser never touch this — the browser handles its own links.
+- If no browser/relay is up, links open normally in your primary browser. **No link is ever dropped.**
+- Lils are real browser tabs: video, audio, Slack, dev tools — everything works.
+- Lils parked for days **survive browser restarts** — reopened at the same size/position.
 
-## Install (one time, ~3 minutes)
+## Install (~3 minutes)
 
-Requires: macOS 13+, Xcode Command Line Tools (`xcode-select --install`), Google Chrome.
+Requires: macOS 13+ (Liquid Glass UI on macOS 26+), Xcode Command Line Tools, at least one Chromium-family browser.
 
 ```bash
 git clone https://github.com/mygirleatsmayo/lil-chromium && cd lil-chromium
-make install        # builds the app, copies to /Applications, installs the native host manifest
+make install        # builds the app, installs to /Applications, writes native host manifests
+                    # for every installed browser (Chrome, Helium, Brave, Edge, Arc, Vivaldi…)
 ```
 
-**Step 3 — load the extension (manual, once):**
-1. Chrome → `chrome://extensions` → enable **Developer mode** (top right).
-2. **Load unpacked** → select the `extension/` folder from this repo.
-3. The ID must read `oofeehjoocddelicpmnpbafmbalaakge` (it's pinned; if it doesn't, something's wrong).
+**Load the extension** (once per browser you want lils in):
+1. `chrome://extensions` (or `helium://extensions` etc.) → **Developer mode** → **Load unpacked** → the `extension/` folder.
+2. ID must read `oofeehjoocddelicpmnpbafmbalaakge`.
 
-**Step 4 — activate:**
-1. Launch `/Applications/LilChromium.app` (menu bar icon appears).
-2. Menu bar icon → **Set as Default Browser…** → confirm the system dialog.
-3. Optional: **Launch at Login**.
+**Activate:**
+1. Launch `/Applications/LilChromium.app` → Settings opens on first run: pick your **primary browser**, palette position, link behavior.
+2. Menu bar icon → **Set as Default Browser…** → confirm.
 
 ## Use
 
 | Action | How |
 |---|---|
-| Open link from Mail/Slack/Raycast/anywhere | Just click it — little window opens at your cursor |
-| Summon palette | **⌘⌥N** anywhere — fuzzy search Chrome history, or type a URL / search query, ↵ opens a little window |
-| Promote to Chrome | Click **Open in Chrome** pill (top right of the little window), or **⌘O** |
-| Promote into a tab group | Click the **▾** caret on the pill → pick a group |
-| Close little window | **⌘W** or the traffic light — gone, no trace |
-| Go back | Two-finger swipe or **⌘[** (native Chrome) |
-| Links inside a little window | Open in another little window, cascaded — big Chrome stays clean |
+| Open link from any app | Click it — a lil opens at your cursor |
+| Summon palette | **⌘⌥N** — fuzzy history search (type-ahead completes domains), URL, or Google search; ↵ opens a lil |
+| Address bar in a lil | Move cursor to the top edge — bar unfolds. **⌘L** focuses it. Edit URL, ↵ navigates |
+| Promote to your browser | **Open in {Browser}** button or **⌘O** — moves the live tab, no reload |
+| Promote into a tab group / other browser | **▾** caret next to the button |
+| Links inside a lil | Open in the **same lil** (default) · **⌘-click** for a new lil · right-click menu has both (configurable in Settings) |
+| Close a lil | **⌘W** — gone, no trace |
+| Go back | Two-finger swipe, **⌘[**, or the ← in the hover bar |
+
+Palette dismisses only on **Esc**, **⌘⌥N**, **X**, or opening a result — hop to Raycast or your clipboard manager and it stays put.
+
+## Settings
+
+Menu bar → **Settings…** — primary browser (button label + promote target + palette history source), fallback browser, palette position (centered near top / top right), link behavior in lils, launch at login. Stored at `~/.lilchromium/config.json`.
 
 ## Troubleshooting
 
-- **Links open as normal Chrome tabs instead of little windows** → the relay isn't up. Check: extension loaded and enabled? `~/.lilchromium/host.log` for errors. Reload the extension (`chrome://extensions`) to relaunch the host.
-- **Palette shows no history** → same relay check. Palette still works for URLs + Google search without it.
-- **⌘⌥N does nothing** → another app owns the hotkey (Arc's Little Arc uses the same one — quit Arc or change its binding).
-- **No overlay pill on a page** → some pages (Chrome error pages, PDFs, web store) block content scripts. Use the fallback shortcut **⌘⇧O**.
-- **App not listed in default-browser picker** → make sure it's in `/Applications` and launched once.
+- **Links open as normal tabs instead of lils** → relay down. Extension loaded in your primary browser? Check `~/.lilchromium/host-<browser>.log`. Reload the extension to relaunch the host.
+- **Palette has no history** → same relay check; palette still handles URLs + search.
+- **⌘⌥N does nothing** → another app owns the hotkey (Arc uses the same one).
+- **No hover bar on a page** → error pages/PDFs block content scripts; use **⌘⇧O** to promote.
+- **Helium specifics** → Helium reads only its own manifest dir (`~/Library/Application Support/net.imput.helium/NativeMessagingHosts`); `make install-host` writes it when Helium is installed.
 
 ## Known limits
 
-- A few apps with Universal Links (Zoom, Slack deep links) grab their own URLs before any browser sees them. OS behavior, unavoidable.
-- macOS shows a confirmation dialog when changing default browser; if you click "keep", nothing changes and the app can't tell.
-- One Chrome profile is targeted (your default). Multi-profile support isn't built.
+- The lil's title bar color follows the OS theme, not the page (Chromium limitation — no extension API for it).
+- Universal Links (Zoom, Slack deep links) may bypass any default browser. OS behavior.
+- Promoting to a *different* browser opens the URL fresh there (live tab state can't cross browsers).
+
+## Testing a branch side-by-side
+
+```bash
+git worktree add ../lil-chromium-v0.2 v0.2 && cd ../lil-chromium-v0.2
+make install    # swaps the installed app + manifests in place
+# roll back: cd ../lil-chromium && make install
+```
+Same app/extension IDs — builds swap in place rather than run simultaneously.
 
 ## Repo layout
 
 ```
-extension/   Chrome MV3 extension (load unpacked, no build step)
-mac/         Swift package: LilChromiumApp (menu bar) + lilchromium-host (relay)
+extension/   MV3 extension (load unpacked, no build step) — works in any Chromium-family browser
+mac/         Swift package: LilChromiumApp (menu bar, palette, settings) + lilchromium-host (relay)
 scripts/     bundle-app.sh, install-host.sh
 docs/        PROTOCOL.md — the contract between all three components
 ```

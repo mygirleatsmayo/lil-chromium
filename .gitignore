@@ -1,15 +1,4 @@
-# macOS
 .DS_Store
-**/.DS_Store
-
-# Secrets and credentials
-.env
-.env.*
-!.env.example
-*.pem
-*.key
-.mayo/scratch-todo.md
-
-# Swift build artifacts
 mac/.build/
 mac/build/
+*.pem

@@ -1,115 +1,103 @@
 import AppKit
 
-/// A borderless, non-activating panel that can still become key so the search
-/// field is typeable while the app stays .accessory. Verified pattern: subclass
-/// NSPanel, override canBecomeKey=true / canBecomeMain=false, use
-/// .nonactivatingPanel and orderFrontRegardless() (see SaneClip / Maccy prior
-/// art). This lets us receive key events without stealing the menu bar.
+/// The palette window: a borderless, non-activating panel with a Liquid Glass
+/// background (macOS 26+) and a NSVisualEffectView fallback for macOS 13–25.
+///
+/// Dismissal policy (v0.2): the panel closes ONLY on Esc, the ⌘⌥N toggle, the X
+/// button, or opening a result — NEVER on resignKey / app deactivation, so the
+/// user can hop to Raycast / a pasteboard manager and come back with the palette
+/// still up. Accordingly this panel has NO windowDidResignKey handler and
+/// `hidesOnDeactivate = false`.
+///
+/// It CAN become key (so the search field is typeable) without activating the
+/// app, via `.nonactivatingPanel` + `canBecomeKey = true` + orderFrontRegardless.
 final class PalettePanel: NSPanel {
+
+    /// The controller owns close(); we forward Esc to it.
+    weak var paletteDelegate: PaletteController?
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
-    // Escape and ⌘-anything routing convenience: forward cancelOperation.
+    /// Esc at the panel level (also reached from the search field's
+    /// cancelOperation which returns false and lets this fire). Closes.
     override func cancelOperation(_ sender: Any?) {
-        // The controller installs itself as delegate and handles closing on
-        // resignKey; we also close directly here for the Esc key.
-        (delegate as? PaletteController)?.close()
+        paletteDelegate?.close()
     }
 }
 
-/// A view that draws the accent-tinted rounded selection background for a row.
-final class RowBackgroundView: NSView {
-    var isSelected: Bool = false {
-        didSet { needsDisplay = true }
+/// Builds the glass (or fallback) container view holding the palette content.
+/// Kept separate so PaletteController stays focused on data flow.
+enum PaletteGlass {
+
+    /// Corner radius for the panel and the glass/mask.
+    static let cornerRadius: CGFloat = 20
+
+    /// Wrap `content` in a Liquid Glass container on macOS 26+, else a rounded
+    /// NSVisualEffectView. `content` is pinned to fill either container.
+    ///
+    /// Returns the container view to assign as the panel's contentView. The
+    /// window's `backgroundColor` MUST be `.clear` for the glass to show through
+    /// (the caller sets that).
+    static func makeContainer(content: NSView) -> NSView {
+        content.translatesAutoresizingMaskIntoConstraints = false
+
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.cornerRadius = cornerRadius
+            glass.clipsToBounds = true
+            // Only `contentView` is guaranteed to render inside the glass — do
+            // not addSubview directly (per research note).
+            glass.contentView = content
+            return glass
+        } else {
+            // Fallback: rounded corners on NSVisualEffectView REQUIRE a
+            // maskImage — layer.cornerRadius does not clip the vibrancy blur.
+            let vfx = NSVisualEffectView()
+            vfx.blendingMode = .behindWindow
+            vfx.state = .active
+            vfx.material = .hudWindow
+            vfx.maskImage = roundedMask(cornerRadius: cornerRadius)
+            vfx.addSubview(content)
+            NSLayoutConstraint.activate([
+                content.leadingAnchor.constraint(equalTo: vfx.leadingAnchor),
+                content.trailingAnchor.constraint(equalTo: vfx.trailingAnchor),
+                content.topAnchor.constraint(equalTo: vfx.topAnchor),
+                content.bottomAnchor.constraint(equalTo: vfx.bottomAnchor)
+            ])
+            return vfx
+        }
     }
+
+    /// A stretchable rounded-rect mask image (black fill = opaque) for the
+    /// fallback visual-effect view.
+    private static func roundedMask(cornerRadius r: CGFloat) -> NSImage {
+        let img = NSImage(size: NSSize(width: r * 2, height: r * 2), flipped: false) { rect in
+            NSColor.black.set()
+            NSBezierPath(roundedRect: rect, xRadius: r, yRadius: r).fill()
+            return true
+        }
+        img.capInsets = NSEdgeInsets(top: r, left: r, bottom: r, right: r)
+        img.resizingMode = .stretch
+        return img
+    }
+}
+
+/// A thin overlay view that draws a 1px hairline border on top of the glass, so
+/// the panel edge reads crisply against light backgrounds. Transparent fill.
+final class HairlineBorderView: NSView {
+    var cornerRadius: CGFloat = PaletteGlass.cornerRadius
+
+    override var isFlipped: Bool { false }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard isSelected else { return }
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 6, dy: 3),
-                                xRadius: 8, yRadius: 8)
-        NSColor.controlAccentColor.withAlphaComponent(0.22).setFill()
-        path.fill()
-    }
-}
-
-/// A single result row view: primary title line + secondary URL line.
-final class PaletteRowView: NSView {
-    /// Index of this row within the current result list (for click routing).
-    var rowIndex: Int = -1
-    let background = RowBackgroundView()
-    let titleLabel = NSTextField(labelWithString: "")
-    let subtitleLabel = NSTextField(labelWithString: "")
-    let hintLabel = NSTextField(labelWithString: "")
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        setup()
+        let inset = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let path = NSBezierPath(roundedRect: inset, xRadius: cornerRadius, yRadius: cornerRadius)
+        path.lineWidth = 1
+        NSColor.white.withAlphaComponent(0.14).setStroke()
+        path.stroke()
     }
 
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        setup()
-    }
-
-    private func setup() {
-        translatesAutoresizingMaskIntoConstraints = false
-        background.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
-        hintLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
-        titleLabel.textColor = .labelColor
-        titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.maximumNumberOfLines = 1
-        titleLabel.isBezeled = false
-        titleLabel.drawsBackground = false
-        titleLabel.isEditable = false
-
-        subtitleLabel.font = .systemFont(ofSize: 11, weight: .regular)
-        subtitleLabel.textColor = .secondaryLabelColor
-        subtitleLabel.lineBreakMode = .byTruncatingTail
-        subtitleLabel.maximumNumberOfLines = 1
-        subtitleLabel.isBezeled = false
-        subtitleLabel.drawsBackground = false
-        subtitleLabel.isEditable = false
-
-        hintLabel.font = .systemFont(ofSize: 11, weight: .regular)
-        hintLabel.textColor = .tertiaryLabelColor
-        hintLabel.alignment = .right
-        hintLabel.isBezeled = false
-        hintLabel.drawsBackground = false
-        hintLabel.isEditable = false
-        hintLabel.stringValue = ""
-
-        addSubview(background)
-        addSubview(titleLabel)
-        addSubview(subtitleLabel)
-        addSubview(hintLabel)
-
-        NSLayoutConstraint.activate([
-            background.leadingAnchor.constraint(equalTo: leadingAnchor),
-            background.trailingAnchor.constraint(equalTo: trailingAnchor),
-            background.topAnchor.constraint(equalTo: topAnchor),
-            background.bottomAnchor.constraint(equalTo: bottomAnchor),
-
-            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 5),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: hintLabel.leadingAnchor, constant: -8),
-
-            subtitleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
-            subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 1),
-            subtitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: hintLabel.leadingAnchor, constant: -8),
-
-            hintLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -18),
-            hintLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
-        ])
-    }
-
-    func configure(_ row: PaletteRow, selected: Bool, showHint: Bool) {
-        titleLabel.stringValue = row.title
-        subtitleLabel.stringValue = row.subtitle
-        background.isSelected = selected
-        hintLabel.stringValue = showHint ? "↵ Open  ·  esc Close" : ""
-    }
+    // Never intercept clicks — the rows/field below must receive them.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

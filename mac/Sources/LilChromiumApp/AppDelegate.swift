@@ -1,6 +1,5 @@
 import AppKit
 import Carbon.HIToolbox
-import ServiceManagement
 import LilShared
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -27,8 +26,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         LilPaths.ensureStateDir()
+
+        // First-run detection must happen BEFORE we scan+write config, since
+        // the scan creates config.json.
+        let isFirstRun = !LilConfig.fileExists
+
+        // Scan installed browsers, merge into config (preserving user choices),
+        // and persist so hosts/extension see current truth.
+        let merged = BrowserCatalog.merged(into: LilConfig.load())
+        merged.save()
+
         setupStatusItem()
         registerHotKey()
+
+        // First launch with no config: open Settings for onboarding.
+        if isFirstRun {
+            SettingsWindowController.show()
+        }
     }
 
     // MARK: - Status item / menu
@@ -45,13 +59,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
 
         let newWindow = NSMenuItem(
-            title: "New Little Window",
+            title: "New Lil",
             action: #selector(showPalette),
             keyEquivalent: "n"
         )
         newWindow.keyEquivalentModifierMask = [.command, .option]
         newWindow.target = self
         menu.addItem(newWindow)
+
+        let settings = NSMenuItem(
+            title: "Settings…",
+            action: #selector(showSettings),
+            keyEquivalent: ","
+        )
+        settings.keyEquivalentModifierMask = [.command]
+        settings.target = self
+        menu.addItem(settings)
 
         let setDefault = NSMenuItem(
             title: "Set as Default Browser…",
@@ -60,15 +83,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         setDefault.target = self
         menu.addItem(setDefault)
-
-        let launchLogin = NSMenuItem(
-            title: "Launch at Login",
-            action: #selector(toggleLaunchAtLogin(_:)),
-            keyEquivalent: ""
-        )
-        launchLogin.target = self
-        launchLogin.state = launchAtLoginEnabled ? .on : .off
-        menu.addItem(launchLogin)
 
         menu.addItem(.separator())
 
@@ -95,6 +109,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         palette.show()
     }
 
+    @objc private func showSettings() {
+        SettingsWindowController.show()
+    }
+
     @objc private func quit() {
         GlobalHotKey.shared.unregister()
         NSApp.terminate(nil)
@@ -118,25 +136,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    // MARK: - Launch at Login (SMAppService, verified)
-
-    private var launchAtLoginEnabled: Bool {
-        SMAppService.mainApp.status == .enabled
-    }
-
-    @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {
-        do {
-            if launchAtLoginEnabled {
-                try SMAppService.mainApp.unregister()
-            } else {
-                try SMAppService.mainApp.register()
-            }
-        } catch {
-            NSLog("lil-chromium: launch-at-login toggle failed: \(error)")
-        }
-        // Reflect the real system state (register can require approval).
-        sender.state = launchAtLoginEnabled ? .on : .off
-    }
+    // Launch-at-Login (SMAppService) now lives in the Settings window
+    // (SettingsStore.launchAtLogin).
 
     // MARK: - URL intake
 
