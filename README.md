@@ -1,6 +1,6 @@
 # lil-chromium
 
-Little Arc-style ephemeral browser for macOS that **ships no browser of its own**. Each "lil" is a popup window of your existing Chromium-family browser (Helium, Chrome, Brave, …), so your logins just work and a lil costs almost no extra memory.
+Little Arc-style ephemeral browser for macOS that **isn't a browser**. Each "lil" is a popup window of your existing Chromium-family browser (Helium, Chrome, Brave, …), so your logins just work and a lil costs almost no extra memory.
 
 ## How it works
 
@@ -18,15 +18,15 @@ link click in any app ──▶ LilChromium.app (default browser, menu bar)
 - Links clicked **inside** your browser never touch this; the browser handles its own links.
 - If no browser or relay is up, links open as normal tabs in your primary browser. **Nothing is ever dropped.**
 - Lils are real browser tabs: video, audio, Slack, and dev tools all work.
-- Lils parked for days **survive browser restarts**, reopening at the same size and position.
+- Lils parked for days **survive browser restarts**, and they reopen at the same size and position.
 
 ## Install (~3 minutes)
 
-Requires: macOS 13+ (Liquid Glass UI on macOS 26+), Xcode Command Line Tools, at least one Chromium-family browser.
+Requires: macOS 13+ (Liquid Glass UI on macOS 26+), Xcode Command Line Tools, and at least one Chromium-family browser.
 
 ```bash
 git clone https://github.com/mygirleatsmayo/lil-chromium && cd lil-chromium
-make install        # builds the app, installs to /Applications, writes native host manifests
+make install        # builds the app, installs to /Applications, and writes native host manifests
                     # for every installed browser (Chrome, Helium, Brave, Edge, Arc, Vivaldi…)
 ```
 
@@ -51,11 +51,11 @@ make install        # builds the app, installs to /Applications, writes native h
 | Close a lil | **⌘W**; gone, no trace |
 | Go back | Two-finger swipe, **⌘[**, or the ← in the hover bar |
 
-The palette closes only on **Esc**, **⌘⌥N**, **X**, or opening a result, so you can hop to Raycast or your clipboard manager and come back to it still open.
+The palette closes only on **Esc**, **⌘⌥N**, **X**, or opening a result, so you can hop to Raycast or your clipboard manager and find it still open.
 
 ## Settings
 
-Menu bar → **Settings…**: primary browser (button label + promote target + palette history source), fallback browser, palette position (centered near top / top right), link behavior in lils, launch at login. Stored at `~/.lilchromium/config.json`.
+Menu bar → **Settings…**: primary browser (button label + promote target + palette history source), fallback browser, palette position (centered near top / top right), link behavior in lils, and launch at login. Stored at `~/.lilchromium/config.json`.
 
 ## Troubleshooting
 
@@ -68,7 +68,7 @@ Menu bar → **Settings…**: primary browser (button label + promote target + p
 ## Known limits
 
 - The lil's title bar color follows the OS theme, not the page (Chromium limitation: no extension API for it).
-- Universal Links (Zoom, Slack deep links) may bypass any default browser, this one included. That is macOS behavior.
+- Universal Links (Zoom, Slack deep links) may bypass any default browser, this one included. That's macOS behavior.
 - Promoting to a *different* browser opens the URL fresh there (live tab state can't cross browsers).
 
 ## Testing a branch side-by-side
@@ -83,8 +83,8 @@ Same app/extension IDs, so builds swap in place rather than run at the same time
 ## Repo layout
 
 ```
-extension/   MV3 extension (load unpacked, no build step) — works in any Chromium-family browser
+extension/   MV3 extension (load unpacked, no build step); works in any Chromium-family browser
 mac/         Swift package: LilChromiumApp (menu bar, palette, settings) + lilchromium-host (relay)
 scripts/     bundle-app.sh, install-host.sh
-docs/        PROTOCOL.md — the contract between all three components
+docs/        PROTOCOL.md, the contract between all three components
 ```

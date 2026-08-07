@@ -1,8 +1,8 @@
 # Changelog
 
-## v0.2 — 2026-08-07
+## v0.2 - 2026-08-07
 
-Glass palette, hover address bar, multi-browser lils.
+Glass palette, hover address bar, and multi-browser lils.
 
 ### Palette (⌘⌥N)
 - **Enter opens the selected result** (was: selected the input text). Arrow keys wrap; Esc closes.
@@ -26,22 +26,22 @@ Glass palette, hover address bar, multi-browser lils.
 
 ### Multi-browser
 - Works across Chromium-family browsers: **Chrome, Helium, Brave, Edge, Arc, Vivaldi, Chromium** (+ Chrome Beta/Canary). The relay host detects which browser launched it; one socket per browser (`~/.lilchromium/relay-<browser>.sock`).
-- **Settings window** (Liquid Glass, opens on first launch): primary browser, fallback browser, palette position, link behavior, launch at login. Stored at `~/.lilchromium/config.json`.
+- **Settings window** (Liquid Glass, opens on first launch): primary browser, fallback browser, palette position, link behavior, and launch at login. Stored at `~/.lilchromium/config.json`.
 - Promote button and fallbacks target your **configured primary browser** (e.g. "Open in Helium").
-- Installer writes native-host manifests for every installed browser, including Helium's own dir (`net.imput.helium`), which does not read Chrome's manifests.
+- Installer writes native-host manifests for every installed browser, including Helium's own dir (`net.imput.helium`), which doesn't read Chrome's manifests.
 
 ### Fixes
 - `forEventID:` → `andEventID:` label in the Apple Event handler (v0.1 build fix).
 - `@MainActor` annotations for the Swift 6.2 toolchain (Xcode 26 beta), where isolation violations are hard errors.
 
 ### Known limits
-- A lil's title bar color follows the OS theme rather than the page. Chromium exposes no API for popup window frames.
+- A lil's title bar color follows the OS theme rather than the page: Chromium exposes no API for popup window frames.
 - Promoting to a *different* browser opens the URL fresh there (live tab state can't cross browsers).
-- Universal Links (Zoom, Slack deep links) may bypass any default browser, this one included. That is macOS behavior.
+- Universal Links (Zoom, Slack deep links) may bypass any default browser, this one included. That's macOS behavior.
 
 ---
 
-## v0.1 — 2026-08-06
+## v0.1 - 2026-08-06
 
 Initial release: the ephemeral-browser architecture, no new browser engine.
 
@@ -49,4 +49,4 @@ Initial release: the ephemeral-browser architecture, no new browser engine.
 - **⌘⌥N palette**: global hotkey, fuzzy search over Chrome history + Google search + direct URLs; Enter opens a lil.
 - **Native-messaging relay**: unix socket ↔ Chrome extension; queues links while the extension is down; falls back to opening a normal tab so no link is ever dropped.
 - **MV3 extension**: creates/positions lils, remembers window size, **restores parked lils after a browser restart**, cascades child links, and promotes: **Open in Chrome ⌘O** moves the live tab (no reload) into a normal window or a **tab group**.
-- Tooling: `make install` (app bundle without Xcode, ad-hoc signing, native-host manifest installer), pinned extension ID, `docs/PROTOCOL.md` contract.
+- Tooling: `make install` (app bundle without Xcode, ad-hoc signing, native-host manifest installer), pinned extension ID, and the `docs/PROTOCOL.md` contract.
