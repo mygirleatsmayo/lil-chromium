@@ -7,7 +7,9 @@ lil-chromium: a macOS menu-bar agent (the system default browser) that opens lin
 - Mark API/OS behavior you have confirmed on a real system with a `verified:` comment; keep existing ones accurate when changing the code they describe.
 - Validate with `make app` (release build; there are no test targets). `make install` goes further: it replaces the live app in /Applications and rewrites every browser's native-host manifest.
 
-## Agent skills
+## mayo SDD
+
+This project uses the mayo spec-driven development workflow. The settings below tell the skills where to read and write.
 
 ### Issue tracker
 
