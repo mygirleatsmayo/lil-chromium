@@ -1,4 +1,11 @@
 // lil-chromium sleep page.
+// Mascot ships as a data URI (text-only deploy pipeline); see assets/sleeping-lil-data.js.
+if (typeof window !== "undefined" && window.SLEEPING_LIL_DATA) {
+  document.addEventListener("DOMContentLoaded", () => {
+    const m = document.getElementById("mascot");
+    if (m && !m.src) m.src = window.SLEEPING_LIL_DATA;
+  });
+}
 //
 // Runs in the extension's own origin (chrome-extension://) so it shares the SW's
 // IndexedDB. Reads the capture key + original URL + tint from the query string,

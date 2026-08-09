@@ -30,7 +30,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["sleep.html", "sleep.js", "assets/sleeping-lil.png"],
+      "resources": ["sleep.html", "sleep.js", "assets/sleeping-lil-data.js"],
       "matches": ["<all_urls>"]
     }
   ],
