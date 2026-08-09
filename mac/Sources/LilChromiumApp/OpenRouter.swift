@@ -69,11 +69,14 @@ enum OpenRouter {
     }
 
     /// Open a URL at explicit Chrome coordinates (used by the palette, anchored
-    /// to the panel's position). Relay-first with Chrome fallback.
-    static func open(_ urlString: String, left: Int, top: Int) {
+    /// to the panel's position). Relay-first with Chrome fallback. `incognito`
+    /// (palette ⌘-Enter) is carried on the relay `open` message; the direct-
+    /// launch fallback cannot honor it (no extension in the loop), so an
+    /// incognito open that finds no relay degrades to a normal browser launch.
+    static func open(_ urlString: String, left: Int, top: Int, incognito: Bool = false) {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                try RelayClient.sendOpen(url: urlString, left: left, top: top)
+                try RelayClient.sendOpen(url: urlString, left: left, top: top, incognito: incognito)
                 // Success: the host is up. (If the extension port were down the
                 // host queues the open per PROTOCOL.md, so a successful socket
                 // write is sufficient — no separate ping needed on the hot path.)
