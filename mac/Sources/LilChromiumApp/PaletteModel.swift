@@ -30,6 +30,11 @@ final class PaletteModel {
     private(set) var index: Ranking.HistoryIndex = .empty
     let maxRows = 8
 
+    /// The search engine used to build the "Search {name} for …" row and its
+    /// action URL. Cached per palette open (set by the controller in show()) so
+    /// per-keystroke row building doesn't re-read config.json. Defaults to Google.
+    var searchEngine: SearchEngineConfig = .defaults
+
     /// Replace the cached snapshot and rebuild the index off the main thread's
     /// hot path is the caller's job; this just stores the prebuilt index.
     func setIndex(_ index: Ranking.HistoryIndex) {
@@ -114,11 +119,15 @@ final class PaletteModel {
     }
 
     private func searchRow(_ query: String) -> PaletteRow {
-        PaletteRow(
+        // Build from the configured search engine (template with %s). Subtitle
+        // shows the engine's host for a compact hint.
+        let actionURL = searchEngine.searchURL(for: query)
+        let subtitle = URLIntent.hostForDisplay(actionURL) ?? searchEngine.name.lowercased()
+        return PaletteRow(
             kind: .search,
-            title: "Search Google for “\(query)”",
-            subtitle: "google.com",
-            actionURL: URLIntent.googleSearchURL(query),
+            title: "Search \(searchEngine.name) for “\(query)”",
+            subtitle: subtitle,
+            actionURL: actionURL,
             host: nil,
             autocompleteHost: nil
         )

@@ -209,6 +209,9 @@ final class Relay {
         case MessageType.openExternal.rawValue:
             handleOpenExternal(data)
 
+        case MessageType.whitelistOp.rawValue:
+            handleWhitelistOp(data)
+
         default:
             // Unknown from extension -> drop (per PROTOCOL.md).
             hlog("extension: dropping unforwarded type \(env.type)")
@@ -244,6 +247,8 @@ final class Relay {
             }
         }
 
+        // v3: carry the full config objects verbatim so the extension has the
+        // whole runtime picture (ephemerality, sleep, search, hover bar).
         let ctx = ContextMessage(
             id: id,
             browser: browserSlug,
@@ -252,6 +257,10 @@ final class Relay {
             defaultBrowserName: displayName(forSlug: cfg.defaultBrowser),
             fallbackBrowser: cfg.fallbackBrowser,
             linkBehavior: cfg.linkBehavior,
+            ephemeralDefault: cfg.ephemeralDefault,
+            sleep: cfg.sleep,
+            searchEngine: cfg.searchEngine,
+            hoverBar: cfg.hoverBar,
             knownBrowsers: known
         )
 
@@ -263,6 +272,35 @@ final class Relay {
             hlog("host: stdout write failed on context")
             extensionUp = false
         }
+    }
+
+    /// Handle a `whitelist-op` from the extension: add/remove a domain in
+    /// config.json's `sleep.whitelist`. Atomic read-modify-write via the shared
+    /// ConfigMerge machinery, so every other field (including unknown ones) is
+    /// preserved and domains are lowercased + deduped. Fire-and-forget; logged.
+    private func handleWhitelistOp(_ data: Data) {
+        guard let msg = try? LilCodec.decode(WhitelistOpMessage.self, from: data) else {
+            hlog("host: undecodable whitelist-op dropped")
+            return
+        }
+        guard msg.op == "add" || msg.op == "remove" else {
+            hlog("host: whitelist-op unknown op \(msg.op)")
+            return
+        }
+        let host = ConfigMerge.normalizedDomain(msg.domain)
+        guard !host.isEmpty else {
+            hlog("host: whitelist-op empty domain dropped")
+            return
+        }
+
+        let url = LilConfig.fileURL
+        let existing = try? Data(contentsOf: url)
+        guard let merged = ConfigMerge.applyWhitelistOp(existing: existing, op: msg.op, domain: host) else {
+            hlog("host: whitelist-op \(msg.op) \(host) — merge failed")
+            return
+        }
+        ConfigMerge.atomicWrite(merged, to: url)
+        hlog("host: whitelist-op \(msg.op) \(host)")
     }
 
     /// Launch a URL in another browser via `/usr/bin/open -b <bundleId> <url>`.

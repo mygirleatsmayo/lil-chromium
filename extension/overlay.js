@@ -1,12 +1,13 @@
-// lil-chromium overlay content script.
+// lil-chromium overlay content script (v0.3).
 //
 // Runs on every http/https page. Asks the SW whether this tab lives in a lil
-// (ephemeral popup window); if not, it does absolutely nothing (normal browsing
-// must stay untouched). If it does, it mounts a HOVER-REVEAL top bar in a closed
-// shadow DOM: invisible by default so it never covers page UI, sliding down when
-// the cursor rests near the top edge (or on ⌘L). The bar carries a back button,
-// an editable address field, an "Open in {defaultBrowser}" promote button, and a
-// caret menu (promote targets, host tab groups, other browsers, close lil).
+// (ephemeral popup window); if not, it does almost nothing (normal browsing must
+// stay untouched, aside from silent form-dirty tracking which the sleep sweep
+// needs — reported only for lils via the SW's per-tab flag). If it is a lil, it
+// mounts a HOVER-REVEAL top bar in a closed shadow DOM with: back, editable
+// address field with an omnibox suggestions dropdown, reload, copy-URL,
+// "Open in {defaultBrowser}" promote, and a caret menu (promote targets, host
+// groups, other browsers, Keep/expiry, Sleep, Reopen incognito, Close).
 
 (() => {
   // Guard against double injection (SPA re-inject, doc replacement, etc.).
@@ -25,15 +26,16 @@
     orange: "#fa903e",
   };
 
-  // Hover-intent timing constants (see the reveal/hide logic below).
-  const REVEAL_DELAY_MS = 80; // cursor must dwell in the top strip this long
-  const HIDE_DELAY_MS = 300; // hide this long after the cursor leaves the bar
-  const SLIDE_MS = 160; // slide animation duration (mirrored in CSS)
-  const HOVER_STRIP_PX = 24; // invisible top strip that arms the reveal
-  const POLL_MS = 500; // URL re-check cadence while the bar is visible
+  const REVEAL_DELAY_MS = 80;
+  const HIDE_DELAY_MS = 300;
+  const SLIDE_MS = 160;
+  const HOVER_STRIP_PX = 24;
+  const POLL_MS = 500;
+  const OMNIBOX_DEBOUNCE_MS = 120;
+  const COPY_TICK_MS = 1200;
+  const INTERACTION_DEBOUNCE_MS = 30000; // report interaction at most every 30s
+  const FORM_DIRTY_DEBOUNCE_MS = 500;
 
-  // Wrapper so extension-context invalidation (reloads/updates) never throws
-  // into the page. Resolves null on any failure.
   function send(message) {
     return new Promise((resolve) => {
       try {
@@ -50,8 +52,6 @@
     });
   }
 
-  // Fire-and-forget variant for hot-path messages (clickHint) — no await, and
-  // never throws into the page.
   function fire(message) {
     try {
       chrome.runtime.sendMessage(message, () => void chrome.runtime.lastError);
@@ -63,24 +63,181 @@
   async function init() {
     const resp = await send({ action: "isEphemeral" });
     if (!resp || !resp.ephemeral) return; // normal window: stay invisible
+    startFormDirtyTracking();
+    startInteractionReporting();
+    listenForHints();
     mountUI();
   }
 
+  // =========================================================================
+  // INTERACTION REPORTING — refresh the lil's lastInteraction (ephemerality).
+  // Debounced to at most one message per INTERACTION_DEBOUNCE_MS.
+  // =========================================================================
+  function startInteractionReporting() {
+    let last = 0;
+    const report = () => {
+      const now = Date.now();
+      if (now - last < INTERACTION_DEBOUNCE_MS) return;
+      last = now;
+      fire({ action: "interaction" });
+    };
+    document.addEventListener("pointerdown", report, true);
+    document.addEventListener("keydown", report, true);
+    document.addEventListener("scroll", report, true);
+    // Report once up front so a freshly opened lil counts as interacted-with.
+    fire({ action: "interaction" });
+  }
+
+  // =========================================================================
+  // FORM-DIRTY TRACKING — feeds the sleep sweep's formGuard (research §7).
+  //
+  // On first beforeinput, snapshot defaults; track a Set of modified elements on
+  // input (value vs defaultValue, checked vs defaultChecked, select
+  // defaultSelected, contenteditable textContent); drop an element when it
+  // returns to default; clear on submit. Report dirty boolean to the SW,
+  // debounced, ONLY on transitions.
+  // =========================================================================
+  function startFormDirtyTracking() {
+    const dirty = new Set();
+    let snapshotted = false;
+    let reportedDirty = false;
+    let reportTimer = null;
+    const ceDefaults = new WeakMap(); // contenteditable → default textContent
+
+    function isDefault(el) {
+      const tag = el.tagName;
+      if (tag === "INPUT") {
+        const type = (el.type || "").toLowerCase();
+        if (type === "checkbox" || type === "radio") return el.checked === el.defaultChecked;
+        return el.value === el.defaultValue;
+      }
+      if (tag === "TEXTAREA") return el.value === el.defaultValue;
+      if (tag === "SELECT") {
+        for (const opt of el.options) {
+          if (opt.selected !== opt.defaultSelected) return false;
+        }
+        return true;
+      }
+      if (el.isContentEditable) {
+        const def = ceDefaults.has(el) ? ceDefaults.get(el) : "";
+        return el.textContent === def;
+      }
+      return true;
+    }
+
+    function snapshotContentEditable() {
+      // Snapshot current contenteditable text as the "default" baseline once.
+      const nodes = document.querySelectorAll("[contenteditable]");
+      nodes.forEach((n) => {
+        if (!ceDefaults.has(n)) ceDefaults.set(n, n.textContent);
+      });
+    }
+
+    function scheduleReport() {
+      const nowDirty = dirty.size > 0;
+      if (nowDirty === reportedDirty) return; // only on transitions
+      clearTimeout(reportTimer);
+      reportTimer = setTimeout(() => {
+        reportedDirty = dirty.size > 0;
+        fire({ action: "formDirty", dirty: reportedDirty });
+      }, FORM_DIRTY_DEBOUNCE_MS);
+    }
+
+    document.addEventListener(
+      "beforeinput",
+      () => {
+        if (!snapshotted) {
+          snapshotted = true;
+          snapshotContentEditable();
+        }
+      },
+      true
+    );
+
+    document.addEventListener(
+      "input",
+      (e) => {
+        const el = e.target;
+        if (!el || !el.tagName) return;
+        const tracked =
+          el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.tagName === "SELECT" ||
+          el.isContentEditable;
+        if (!tracked) return;
+        if (isDefault(el)) dirty.delete(el);
+        else dirty.add(el);
+        scheduleReport();
+      },
+      true
+    );
+
+    // selects fire "change" not always "input" for keyboard selection.
+    document.addEventListener(
+      "change",
+      (e) => {
+        const el = e.target;
+        if (!el || el.tagName !== "SELECT") return;
+        if (isDefault(el)) dirty.delete(el);
+        else dirty.add(el);
+        scheduleReport();
+      },
+      true
+    );
+
+    document.addEventListener(
+      "submit",
+      () => {
+        dirty.clear();
+        scheduleReport();
+      },
+      true
+    );
+  }
+
+  // =========================================================================
+  // INCOGNITO HINT — one-shot toast when an incognito lil fell back to normal.
+  // =========================================================================
+  let showToastFn = null; // set by mountUI
+
+  function listenForHints() {
+    try {
+      chrome.runtime.onMessage.addListener((msg) => {
+        if (msg && msg.action === "incognitoHint" && showToastFn) {
+          showToastFn(
+            "Incognito lils need “Allow in Incognito” — chrome://extensions → lil-chromium → Details"
+          );
+        }
+      });
+    } catch (_) {
+      /* context invalidated */
+    }
+    // Also poll for a queued one-shot in case the message raced our mount.
+    send({ action: "pendingIncognitoHint" }).then((resp) => {
+      if (resp && resp.hint && showToastFn) {
+        showToastFn(
+          "Incognito lils need “Allow in Incognito” — chrome://extensions → lil-chromium → Details"
+        );
+      }
+    });
+  }
+
   function mountUI() {
-    // Context (browser identity + config). Fetched at mount; defaults keep the
-    // UI usable if the handshake hasn't landed yet. Refreshed lazily on menu open.
     let context = {
       browser: "chrome",
       browserName: "Chrome",
       defaultBrowser: "chrome",
       defaultBrowserName: "Chrome",
       fallbackBrowser: "chrome",
-      linkBehavior: "same-lil",
+      linkBehavior: "new-lil",
+      ephemeralDefault: "never",
+      sleep: { whitelist: [] },
+      searchEngine: { name: "Google", template: "https://www.google.com/search?q=%s" },
+      hoverBar: { style: "glass", tint: null },
       knownBrowsers: [],
     };
+    let lilExpiry = "never"; // per-lil override
 
-    // Host div on documentElement (survives <body> replacement). Closed shadow
-    // root so page scripts/styles can't see or touch our UI.
     const host = document.createElement("div");
     host.style.cssText =
       "all: initial; position: fixed; top: 0; left: 0; width: 100%; height: 0; z-index: 2147483647; pointer-events: none;";
@@ -91,6 +248,23 @@
       <style>
         :host { all: initial; }
         * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        /* Data-driven theming via custom properties. Defaults = glass (light).
+           mountUI flips these for solid style + dark scheme + optional tint. */
+        .wrap {
+          --bar-bg: rgba(255, 255, 255, 0.72);
+          --bar-blur: blur(20px) saturate(1.4);
+          --bar-border: 0.5px solid rgba(0, 0, 0, 0.14);
+          --fg: #1c1c1e;
+          --hover: rgba(0, 0, 0, 0.08);
+          --field-bg: rgba(0, 0, 0, 0.06);
+          --field-bg-focus: rgba(0, 0, 0, 0.1);
+          --placeholder: rgba(0, 0, 0, 0.4);
+          --menu-bg: rgba(250, 250, 250, 0.96);
+          --menu-shadow: 0 8px 28px rgba(0, 0, 0, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.1);
+          --sep: rgba(0, 0, 0, 0.12);
+          --sel: rgba(0, 0, 0, 0.09);
+        }
 
         .bar {
           position: fixed;
@@ -106,21 +280,18 @@
           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
           font-size: 13px;
           line-height: 1;
-          /* Glassy look. Light defaults; dark via prefers-color-scheme below. */
-          background: rgba(255, 255, 255, 0.72);
-          -webkit-backdrop-filter: blur(20px) saturate(1.4);
-          backdrop-filter: blur(20px) saturate(1.4);
-          border-bottom: 0.5px solid rgba(0, 0, 0, 0.14);
-          color: #1c1c1e;
-          /* Hidden = slid up out of view + transparent. */
+          background: var(--bar-bg);
+          -webkit-backdrop-filter: var(--bar-blur);
+          backdrop-filter: var(--bar-blur);
+          border-bottom: var(--bar-border);
+          color: var(--fg);
           transform: translateY(-100%);
           opacity: 0;
           transition: transform ${SLIDE_MS}ms cubic-bezier(0.22, 1, 0.36, 1), opacity ${SLIDE_MS}ms ease;
         }
-        .bar.show {
-          transform: translateY(0);
-          opacity: 1;
-        }
+        .bar.show { transform: translateY(0); opacity: 1; }
+        /* Solid style: no blur on the bar itself (keeps the field glassy inset). */
+        .wrap.solid .bar { -webkit-backdrop-filter: none; backdrop-filter: none; }
 
         .btn {
           display: inline-flex;
@@ -139,71 +310,103 @@
           transition: background 120ms ease;
           user-select: none;
         }
-        .btn:hover { background: rgba(0, 0, 0, 0.08); }
+        .btn:hover { background: var(--hover); }
         .btn.icon { width: 30px; padding: 0; font-size: 16px; flex: 0 0 auto; }
         .btn .label { font-weight: 550; letter-spacing: 0.1px; }
-        .kbd {
-          font-size: 11px;
-          opacity: 0.55;
-          font-variant-numeric: tabular-nums;
-        }
+        .kbd { font-size: 11px; opacity: 0.55; font-variant-numeric: tabular-nums; }
         .caret { font-size: 11px; }
 
-        /* Address field — flex-1, centered text. Borderless; a subtle capsule. */
+        /* Address field container (positions the omnibox dropdown). */
+        .addrwrap { position: relative; flex: 1 1 auto; min-width: 0; height: 30px; }
+
         .addr {
-          flex: 1 1 auto;
-          min-width: 0;
+          width: 100%;
           height: 30px;
           border: none;
           outline: none;
           border-radius: 8px;
-          background: rgba(0, 0, 0, 0.06);
+          background: var(--field-bg);
           color: inherit;
           font: inherit;
           text-align: center;
           padding: 0 12px;
           transition: background 120ms ease;
+          /* Subtle glassy inset even in solid style. */
+          box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.05);
         }
-        .addr:focus { background: rgba(0, 0, 0, 0.1); text-align: left; }
-        .addr::placeholder { color: rgba(0, 0, 0, 0.4); }
+        .addr:focus { background: var(--field-bg-focus); text-align: left; }
+        .addr::placeholder { color: var(--placeholder); }
 
-        /* Compact idle URL display, shown in place of the input when unfocused. */
         .url {
-          flex: 1 1 auto;
-          min-width: 0;
+          width: 100%;
           height: 30px;
           display: flex;
           align-items: center;
           justify-content: center;
           gap: 0;
           border-radius: 8px;
-          background: rgba(0, 0, 0, 0.06);
+          background: var(--field-bg);
           padding: 0 12px;
           cursor: text;
           overflow: hidden;
           white-space: nowrap;
+          box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.05);
         }
         .url .host { font-weight: 600; }
         .url .path { opacity: 0.5; overflow: hidden; text-overflow: ellipsis; }
 
         .hidden { display: none !important; }
 
-        /* Caret menu, anchored under the promote button. */
+        /* Omnibox dropdown, anchored under the address field. */
+        .omni {
+          position: absolute;
+          top: 36px;
+          left: 0;
+          right: 0;
+          background: var(--menu-bg);
+          -webkit-backdrop-filter: blur(20px) saturate(1.4);
+          backdrop-filter: blur(20px) saturate(1.4);
+          border-radius: 11px;
+          box-shadow: var(--menu-shadow);
+          padding: 5px;
+          display: none;
+          max-height: 320px;
+          overflow-y: auto;
+          pointer-events: auto;
+        }
+        .omni.open { display: block; }
+        .orow {
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          padding: 7px 10px;
+          border-radius: 7px;
+          cursor: pointer;
+          overflow: hidden;
+        }
+        .orow.sel { background: var(--sel); }
+        .orow .fav { width: 16px; height: 16px; flex: 0 0 auto; border-radius: 3px; }
+        .orow .otitle { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+        .orow .ohost { opacity: 0.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+        .orow .search-ico { font-size: 14px; width: 16px; text-align: center; flex: 0 0 auto; }
+
         .menu {
           position: fixed;
           top: 46px;
           right: 10px;
           min-width: 240px;
           max-width: 340px;
-          background: rgba(250, 250, 250, 0.96);
+          background: var(--menu-bg);
           -webkit-backdrop-filter: blur(20px) saturate(1.4);
           backdrop-filter: blur(20px) saturate(1.4);
           border-radius: 11px;
-          box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.1);
+          box-shadow: var(--menu-shadow);
           padding: 5px;
           display: none;
-          color: #1c1c1e;
+          color: var(--fg);
           pointer-events: auto;
+          max-height: 80vh;
+          overflow-y: auto;
         }
         .menu.open { display: block; }
         .item {
@@ -215,85 +418,157 @@
           cursor: pointer;
           white-space: nowrap;
         }
-        .item:hover { background: rgba(0, 0, 0, 0.09); }
-        .item .k {
-          margin-left: auto;
-          font-size: 11px;
-          opacity: 0.5;
-          font-variant-numeric: tabular-nums;
-        }
-        .sep { height: 0.5px; background: rgba(0, 0, 0, 0.12); margin: 5px 6px; }
+        .item:hover { background: var(--sel); }
+        .item.checked .check { margin-left: auto; opacity: 0.9; }
+        .item .k { margin-left: auto; font-size: 11px; opacity: 0.5; font-variant-numeric: tabular-nums; }
+        .sub { padding: 5px 10px 2px; font-size: 11px; opacity: 0.5; text-transform: uppercase; letter-spacing: 0.4px; }
+        .sep { height: 0.5px; background: var(--sep); margin: 5px 6px; }
         .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
         .gname { overflow: hidden; text-overflow: ellipsis; max-width: 190px; }
 
+        /* One-shot toast (incognito hint). */
+        .toast {
+          position: fixed;
+          top: 54px;
+          left: 50%;
+          transform: translateX(-50%) translateY(-8px);
+          max-width: min(560px, 92vw);
+          background: rgba(30, 30, 32, 0.96);
+          color: #f2f2f7;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+          font-size: 13px;
+          line-height: 1.4;
+          padding: 12px 16px;
+          border-radius: 12px;
+          box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+          pointer-events: auto;
+          opacity: 0;
+          transition: opacity 200ms ease, transform 200ms ease;
+          z-index: 2;
+        }
+        .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
         @media (prefers-color-scheme: dark) {
-          .bar {
-            background: rgba(30, 30, 32, 0.72);
-            border-bottom: 0.5px solid rgba(255, 255, 255, 0.14);
-            color: #f2f2f7;
+          .wrap {
+            --bar-bg: rgba(30, 30, 32, 0.72);
+            --bar-border: 0.5px solid rgba(255, 255, 255, 0.14);
+            --fg: #f2f2f7;
+            --hover: rgba(255, 255, 255, 0.12);
+            --field-bg: rgba(255, 255, 255, 0.1);
+            --field-bg-focus: rgba(255, 255, 255, 0.16);
+            --placeholder: rgba(255, 255, 255, 0.45);
+            --menu-bg: rgba(40, 40, 42, 0.96);
+            --menu-shadow: 0 8px 28px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(255, 255, 255, 0.12);
+            --sep: rgba(255, 255, 255, 0.16);
+            --sel: rgba(255, 255, 255, 0.14);
           }
-          .btn:hover { background: rgba(255, 255, 255, 0.12); }
-          .addr { background: rgba(255, 255, 255, 0.1); }
-          .addr:focus { background: rgba(255, 255, 255, 0.16); }
-          .addr::placeholder { color: rgba(255, 255, 255, 0.45); }
-          .url { background: rgba(255, 255, 255, 0.1); }
-          .menu {
-            background: rgba(40, 40, 42, 0.96);
-            box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(255, 255, 255, 0.12);
-            color: #f2f2f7;
-          }
-          .item:hover { background: rgba(255, 255, 255, 0.14); }
-          .sep { background: rgba(255, 255, 255, 0.16); }
+          .addr, .url { box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.06); }
         }
       </style>
-      <div class="bar" part="bar">
-        <button class="btn icon back" title="Back" aria-label="Back">‹</button>
-        <div class="url" role="button" tabindex="0" title="Click to edit"></div>
-        <input class="addr hidden" type="text" spellcheck="false" autocomplete="off"
-               aria-label="Address" placeholder="Search or enter address" />
-        <button class="btn promote">
-          <span class="label">Open in Chrome</span>
-          <span class="kbd">⌘O</span>
-        </button>
-        <button class="btn icon caretbtn" aria-label="More options"><span class="caret">▾</span></button>
+      <div class="wrap">
+        <div class="bar" part="bar">
+          <button class="btn icon back" title="Back" aria-label="Back">‹</button>
+          <div class="addrwrap">
+            <div class="url" role="button" tabindex="0" title="Click to edit"></div>
+            <input class="addr hidden" type="text" spellcheck="false" autocomplete="off"
+                   aria-label="Address" placeholder="Search or enter address" />
+            <div class="omni" role="listbox"></div>
+          </div>
+          <button class="btn icon reload" title="Reload" aria-label="Reload">⟳</button>
+          <button class="btn icon copy" title="Copy URL" aria-label="Copy URL">⧉</button>
+          <button class="btn promote">
+            <span class="label">Open in Chrome</span>
+            <span class="kbd">⌘O</span>
+          </button>
+          <button class="btn icon caretbtn" aria-label="More options"><span class="caret">▾</span></button>
+        </div>
+        <div class="menu" role="menu"></div>
       </div>
-      <div class="menu" role="menu"></div>
     `;
 
+    const wrap = root.querySelector(".wrap");
     const bar = root.querySelector(".bar");
     const back = root.querySelector(".back");
     const urlDisplay = root.querySelector(".url");
     const addr = root.querySelector(".addr");
+    const omni = root.querySelector(".omni");
+    const reloadBtn = root.querySelector(".reload");
+    const copyBtn = root.querySelector(".copy");
     const promoteBtn = root.querySelector(".promote");
     const promoteLabel = promoteBtn.querySelector(".label");
     const caretBtn = root.querySelector(".caretbtn");
     const menu = root.querySelector(".menu");
 
+    // ---- Toast (used by the incognito hint listener). ----
+    let toastEl = null;
+    let toastTimer = null;
+    showToastFn = (text) => {
+      if (!toastEl) {
+        toastEl = document.createElement("div");
+        toastEl.className = "toast";
+        wrap.appendChild(toastEl);
+      }
+      toastEl.textContent = text;
+      // Force reflow so the transition runs on re-show.
+      void toastEl.offsetWidth;
+      toastEl.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toastEl.classList.remove("show"), 7000);
+      toastEl.addEventListener("click", () => toastEl.classList.remove("show"), { once: true });
+    };
+
+    // ---- Data-driven style application (glass vs solid + optional tint). ----
+    function applyStyle() {
+      const hb = context.hoverBar || {};
+      const solid = hb.style === "solid";
+      wrap.classList.toggle("solid", solid);
+      const dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      if (solid) {
+        // Opaque adaptive title-bar tones.
+        wrap.style.setProperty("--bar-bg", dark ? "#2c2c2e" : "#f2f2f4");
+      } else {
+        wrap.style.removeProperty("--bar-bg"); // fall back to CSS glass default
+      }
+      // Optional tint blended over the bar background in either style.
+      if (hb.tint && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(hb.tint)) {
+        const rgb = hexToRgb(hb.tint);
+        if (rgb) {
+          const base = solid ? (dark ? "#2c2c2e" : "#f2f2f4") : dark ? "rgba(30,30,32,0.72)" : "rgba(255,255,255,0.72)";
+          wrap.style.setProperty(
+            "--bar-bg",
+            `linear-gradient(rgba(${rgb[0]},${rgb[1]},${rgb[2]},0.18), rgba(${rgb[0]},${rgb[1]},${rgb[2]},0.18)), ${base}`
+          );
+        }
+      }
+    }
+
+    function hexToRgb(hex) {
+      let h = hex.replace(/^#/, "");
+      if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+      if (h.length !== 6) return null;
+      return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+    }
+
     // -----------------------------------------------------------------------
-    // Reveal / hide state machine.
-    //
-    // The bar is invisible by default. Dwelling in the top strip for
-    // REVEAL_DELAY_MS reveals it; leaving the bar+strip region hides it after
-    // HIDE_DELAY_MS UNLESS the address field is focused or the menu is open
-    // (those pin it open). Esc hides. A lightweight URL poll runs only while
-    // the bar is visible.
+    // Reveal / hide state machine (unchanged from v2, plus omnibox pinning).
     // -----------------------------------------------------------------------
     let revealTimer = null;
     let hideTimer = null;
     let pollTimer = null;
     let visible = false;
-    let cursorOverBar = false; // over the bar or its open menu
+    let cursorOverBar = false;
 
     function menuOpen() {
       return menu.classList.contains("open");
     }
+    function omniOpen() {
+      return omni.classList.contains("open");
+    }
     function addrFocused() {
       return root.activeElement === addr;
     }
-    // The bar must stay up while the user is typing an address, reading the
-    // menu, or hovering it. Any of these blocks the hide countdown.
     function pinned() {
-      return addrFocused() || menuOpen() || cursorOverBar;
+      return addrFocused() || menuOpen() || omniOpen() || cursorOverBar;
     }
 
     function reveal() {
@@ -307,13 +582,14 @@
     }
 
     function hide() {
-      if (pinned()) return; // never hide while pinned
+      if (pinned()) return;
       clearTimeout(revealTimer);
       revealTimer = null;
       if (!visible) return;
       visible = false;
       bar.classList.remove("show");
       closeMenu();
+      closeOmni();
       stopPoll();
     }
 
@@ -344,10 +620,6 @@
       }
     }
 
-    // Reveal intent via a page-level mousemove (rather than an overlay hit-strip)
-    // so we never intercept clicks on the page's own top 24px. When the cursor
-    // is within HOVER_STRIP_PX of the top, arm the reveal; when it drops below
-    // that (and isn't over the bar), start the hide countdown.
     let inStrip = false;
     document.addEventListener(
       "mousemove",
@@ -366,8 +638,6 @@
       true
     );
 
-    // Once visible, keep it up while the cursor is over the bar; start the hide
-    // countdown when it leaves. Entering cancels a pending hide.
     bar.addEventListener("mouseenter", () => {
       cursorOverBar = true;
       clearTimeout(hideTimer);
@@ -377,7 +647,6 @@
       cursorOverBar = false;
       if (!inStrip) scheduleHide();
     });
-    // Keep the menu region "part of the bar" for hover purposes.
     menu.addEventListener("mouseenter", () => {
       cursorOverBar = true;
       clearTimeout(hideTimer);
@@ -394,7 +663,7 @@
     let lastRenderedHref = "";
 
     function renderUrl() {
-      if (addrFocused()) return; // don't clobber what the user is typing
+      if (addrFocused()) return;
       const href = location.href;
       if (href === lastRenderedHref) return;
       lastRenderedHref = href;
@@ -430,14 +699,12 @@
       addr.select();
     }
 
-    // Restore the compact display and drop focus. If restoreUrl, also reset the
-    // field value (used by first-Esc, which should not navigate).
     function blurAddress() {
       addr.classList.add("hidden");
       urlDisplay.classList.remove("hidden");
-      lastRenderedHref = ""; // force re-render
+      closeOmni();
+      lastRenderedHref = "";
       renderUrl();
-      // Blur can trigger a hide if nothing else pins the bar.
       scheduleHide();
     }
 
@@ -449,30 +716,199 @@
       }
     });
 
+    // -----------------------------------------------------------------------
+    // OMNIBOX suggestions dropdown.
+    // -----------------------------------------------------------------------
+    let suggestions = []; // [{type:'history'|'search', url?, title, host?}]
+    let selIndex = -1;
+    let omniDebounce = null;
+    let omniSeq = 0;
+
+    function closeOmni() {
+      omni.classList.remove("open");
+      omni.innerHTML = "";
+      suggestions = [];
+      selIndex = -1;
+    }
+
+    function faviconUrl(hostName) {
+      return "https://www.google.com/s2/favicons?domain=" + encodeURIComponent(hostName || "") + "&sz=32";
+    }
+
+    function renderOmni() {
+      omni.innerHTML = "";
+      if (!suggestions.length) {
+        omni.classList.remove("open");
+        return;
+      }
+      suggestions.forEach((s, i) => {
+        const row = document.createElement("div");
+        row.className = "orow" + (i === selIndex ? " sel" : "");
+        row.setAttribute("role", "option");
+        if (s.type === "search") {
+          const ico = document.createElement("span");
+          ico.className = "search-ico";
+          ico.textContent = "⌕";
+          const t = document.createElement("span");
+          t.className = "otitle";
+          t.textContent = s.title;
+          row.appendChild(ico);
+          row.appendChild(t);
+        } else {
+          const fav = document.createElement("img");
+          fav.className = "fav";
+          fav.src = faviconUrl(s.host);
+          fav.addEventListener("error", () => {
+            fav.style.visibility = "hidden";
+          });
+          const t = document.createElement("span");
+          t.className = "otitle";
+          t.textContent = s.title || s.host;
+          const hst = document.createElement("span");
+          hst.className = "ohost";
+          hst.textContent = s.host;
+          row.appendChild(fav);
+          row.appendChild(t);
+          row.appendChild(hst);
+        }
+        row.addEventListener("mouseenter", () => {
+          selIndex = i;
+          updateSelection();
+        });
+        row.addEventListener("mousedown", (e) => {
+          // mousedown (not click) so we act before the input blurs.
+          e.preventDefault();
+          chooseSuggestion(i);
+        });
+        omni.appendChild(row);
+      });
+      omni.classList.add("open");
+    }
+
+    function updateSelection() {
+      const rows = omni.querySelectorAll(".orow");
+      rows.forEach((r, i) => r.classList.toggle("sel", i === selIndex));
+    }
+
+    function buildSearchRow(query) {
+      const name = (context.searchEngine && context.searchEngine.name) || "Google";
+      return { type: "search", title: `Search ${name} for “${query}”`, query };
+    }
+
+    async function queryOmni() {
+      const q = addr.value.trim();
+      if (!q) {
+        closeOmni();
+        return;
+      }
+      const seq = ++omniSeq;
+      const resp = await send({ action: "omnibox", query: q });
+      if (seq !== omniSeq) return; // a newer query superseded this one
+      if (!addrFocused()) return;
+      const hist = (resp && resp.suggestions) || [];
+      suggestions = hist.map((h) => ({ type: "history", url: h.url, title: h.title, host: h.host }));
+      suggestions.push(buildSearchRow(q));
+      selIndex = -1;
+      renderOmni();
+    }
+
+    function chooseSuggestion(i) {
+      const s = suggestions[i];
+      if (!s) return;
+      closeOmni();
+      addr.blur();
+      blurAddress();
+      if (s.type === "search") {
+        send({ action: "navigate", input: s.query });
+      } else {
+        send({ action: "navigate", url: s.url, input: s.url });
+      }
+    }
+
+    addr.addEventListener("input", () => {
+      clearTimeout(omniDebounce);
+      omniDebounce = setTimeout(queryOmni, OMNIBOX_DEBOUNCE_MS);
+    });
+
     addr.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
+      if (e.key === "ArrowDown") {
+        if (suggestions.length) {
+          e.preventDefault();
+          selIndex = (selIndex + 1) % suggestions.length;
+          updateSelection();
+        }
+      } else if (e.key === "ArrowUp") {
+        if (suggestions.length) {
+          e.preventDefault();
+          selIndex = (selIndex - 1 + suggestions.length) % suggestions.length;
+          updateSelection();
+        }
+      } else if (e.key === "Enter") {
         e.preventDefault();
-        const input = addr.value;
-        addr.blur();
-        blurAddress();
-        send({ action: "navigate", input });
+        if (selIndex >= 0 && suggestions[selIndex]) {
+          chooseSuggestion(selIndex);
+        } else {
+          // No selection: current behavior — URL-ish navigate else search.
+          const input = addr.value;
+          closeOmni();
+          addr.blur();
+          blurAddress();
+          send({ action: "navigate", input });
+        }
       } else if (e.key === "Escape") {
-        // First Esc while focused: blur + restore URL (handled here so the
-        // page/global Esc handler doesn't also hide the bar in one press).
+        // Esc closes the dropdown FIRST, then (next Esc) blurs/restores.
         e.preventDefault();
         e.stopPropagation();
+        if (omniOpen()) {
+          closeOmni();
+          return;
+        }
         addr.value = location.href;
         addr.blur();
         blurAddress();
       }
     });
     addr.addEventListener("blur", () => {
-      // If focus left the field for any reason, return to compact display.
       if (!addr.classList.contains("hidden")) blurAddress();
     });
 
     // -----------------------------------------------------------------------
-    // Promote + menu.
+    // Reload + copy-URL buttons.
+    // -----------------------------------------------------------------------
+    reloadBtn.addEventListener("click", () => {
+      send({ action: "reload" });
+    });
+
+    copyBtn.addEventListener("click", async () => {
+      let ok = false;
+      try {
+        await navigator.clipboard.writeText(location.href);
+        ok = true;
+      } catch (_) {
+        // Fallback: hidden textarea + execCommand.
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = location.href;
+          ta.style.position = "fixed";
+          ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          ta.select();
+          ok = document.execCommand("copy");
+          document.body.removeChild(ta);
+        } catch (_) {
+          ok = false;
+        }
+      }
+      if (ok) {
+        copyBtn.textContent = "✓";
+        setTimeout(() => {
+          copyBtn.textContent = "⧉";
+        }, COPY_TICK_MS);
+      }
+    });
+
+    // -----------------------------------------------------------------------
+    // Promote + caret menu.
     // -----------------------------------------------------------------------
     function labelForDefault() {
       return "Open in " + (context.defaultBrowserName || "Chrome");
@@ -491,53 +927,73 @@
     }
 
     async function openMenu() {
-      // Re-fetch context lazily so browser/group lists reflect current config.
       const ctxResp = await send({ action: "getContext" });
       if (ctxResp && ctxResp.context) {
         context = ctxResp.context;
         applyContextLabels();
+        applyStyle();
       }
+      const infoResp = await send({ action: "getLilInfo" });
+      const isIncognito = infoResp && infoResp.incognito;
+      if (infoResp && typeof infoResp.expiry !== "undefined") lilExpiry = infoResp.expiry;
 
       menu.innerHTML = "";
       const defName = context.defaultBrowserName || "Chrome";
       const hostName = context.browserName || "this browser";
 
-      // Promote to the configured default browser (⌘O action).
       addItem(menu, "Open in " + defName, "⌘O", () => promote("default"));
 
-      // If this browser isn't the default, offer a no-reload move into a host tab.
       if (context.browser && context.defaultBrowser && context.browser !== context.defaultBrowser) {
         addItem(menu, "Open in " + hostName + " tab", "", () => promote("host-tab"));
       }
 
-      // Host browser's tab groups (no-reload move into a group).
       const groupsResp = await send({ action: "listGroups" });
       const groups = (groupsResp && groupsResp.groups) || [];
       if (groups.length) {
         addSep(menu);
-        for (const g of groups) {
-          addGroupItem(menu, g, () => promote("group", { groupId: g.id }));
-        }
+        for (const g of groups) addGroupItem(menu, g, () => promote("group", { groupId: g.id }));
       }
 
-      // Other installed browsers (open-external hand-off). Skip the default and
-      // the host browser — those already have dedicated items above.
       const known = Array.isArray(context.knownBrowsers) ? context.knownBrowsers : [];
       const others = known.filter(
-        (b) =>
-          b &&
-          b.installed &&
-          b.slug &&
-          b.slug !== context.defaultBrowser &&
-          b.slug !== context.browser
+        (b) => b && b.installed && b.slug && b.slug !== context.defaultBrowser && b.slug !== context.browser
       );
       if (others.length) {
         addSep(menu);
         for (const b of others) {
-          addItem(menu, "Open in " + (b.name || b.slug), "", () =>
-            promote("browser", { browser: b.slug })
-          );
+          addItem(menu, "Open in " + (b.name || b.slug), "", () => promote("browser", { browser: b.slug }));
         }
+      }
+
+      // ---- Keep (per-lil expiry override). ----
+      addSep(menu);
+      addSubLabel(menu, "Keep");
+      const keepOpts = [
+        ["Forever", "never"],
+        ["6 hours", 6],
+        ["12 hours", 12],
+        ["24 hours", 24],
+        ["Until quit", "quit"],
+      ];
+      for (const [label, val] of keepOpts) {
+        addCheckItem(menu, label, expiryEquals(lilExpiry, val), () => {
+          lilExpiry = val;
+          closeMenu();
+          send({ action: "setExpiry", expiry: val });
+        });
+      }
+
+      // ---- Sleep + incognito. ----
+      addSep(menu);
+      if (!isIncognito) {
+        addItem(menu, "Sleep this lil", "", () => {
+          closeMenu();
+          send({ action: "sleepThisLil" });
+        });
+        addItem(menu, "Reopen in incognito lil", "", () => {
+          closeMenu();
+          send({ action: "reopenIncognito", url: location.href });
+        });
       }
 
       addSep(menu);
@@ -547,6 +1003,11 @@
       });
 
       menu.classList.add("open");
+    }
+
+    function expiryEquals(a, b) {
+      if (typeof a === "number" && typeof b === "number") return a === b;
+      return String(a) === String(b);
     }
 
     function addItem(container, text, key, onClick) {
@@ -563,6 +1024,29 @@
         el.appendChild(k);
       }
       el.addEventListener("click", onClick);
+      container.appendChild(el);
+    }
+
+    function addCheckItem(container, text, checked, onClick) {
+      const el = document.createElement("div");
+      el.className = "item" + (checked ? " checked" : "");
+      el.setAttribute("role", "menuitemradio");
+      el.setAttribute("aria-checked", checked ? "true" : "false");
+      const label = document.createElement("span");
+      label.textContent = text;
+      el.appendChild(label);
+      const check = document.createElement("span");
+      check.className = "check k";
+      check.textContent = checked ? "✓" : "";
+      el.appendChild(check);
+      el.addEventListener("click", onClick);
+      container.appendChild(el);
+    }
+
+    function addSubLabel(container, text) {
+      const el = document.createElement("div");
+      el.className = "sub";
+      el.textContent = text;
       container.appendChild(el);
     }
 
@@ -596,12 +1080,9 @@
       else openMenu();
     });
 
-    // Close the menu on outside click / hide on Esc.
     document.addEventListener(
       "click",
       (e) => {
-        // Clicks inside our closed shadow root report the host as composedPath[0]
-        // from the page's perspective; anything landing on `host` is ours.
         if (e.composedPath && e.composedPath().includes(host)) return;
         closeMenu();
       },
@@ -611,8 +1092,11 @@
       "keydown",
       (e) => {
         if (e.key !== "Escape") return;
-        // If the address field is focused, its own handler already dealt with
-        // this Esc (blur + restore) and stopped propagation, so we won't see it.
+        // The address field's own handler deals with Esc while focused.
+        if (omniOpen()) {
+          closeOmni();
+          return;
+        }
         if (menuOpen()) {
           closeMenu();
           return;
@@ -622,17 +1106,11 @@
       true
     );
 
-    // -----------------------------------------------------------------------
-    // URL freshness: react to in-page navigation. The interval poll (only while
-    // visible) is the backstop; these fire immediately.
-    // -----------------------------------------------------------------------
     window.addEventListener("popstate", renderUrl);
     window.addEventListener("hashchange", renderUrl);
 
     // -----------------------------------------------------------------------
-    // clickHint — capture anchor clicks and relay ⌘ state to the SW so it can
-    // decide same-lil vs new-lil. We do NOT preventDefault: the browser does
-    // its native thing and the SW reconciles via onCreatedNavigationTarget.
+    // clickHint (unchanged).
     // -----------------------------------------------------------------------
     document.addEventListener(
       "click",
@@ -652,10 +1130,7 @@
     );
 
     // -----------------------------------------------------------------------
-    // Keyboard shortcuts (capture phase).
-    //   ⌘L: reveal bar + focus address field + select all.
-    //   ⌘O: promote to the default browser.
-    // We intercept nothing else.
+    // Keyboard shortcuts (⌘L reveal+focus, ⌘O promote).
     // -----------------------------------------------------------------------
     window.addEventListener(
       "keydown",
@@ -674,12 +1149,23 @@
       true
     );
 
-    // Initial context fetch — label the button once the handshake result lands.
+    // React to scheme changes for solid/glass adaptive tones.
+    if (window.matchMedia) {
+      try {
+        window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyStyle);
+      } catch (_) {
+        /* older browsers */
+      }
+    }
+
+    // Initial context fetch.
     send({ action: "getContext" }).then((resp) => {
       if (resp && resp.context) context = resp.context;
       applyContextLabels();
+      applyStyle();
     });
     applyContextLabels();
+    applyStyle();
     renderUrl();
   }
 

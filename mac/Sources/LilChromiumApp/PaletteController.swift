@@ -58,9 +58,13 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         committedQuery = ""
         selectedIndex = 0
 
-        // Read the anchor fresh at each show() (always current), cache for the
-        // session so per-keystroke reposition doesn't re-hit the config file.
-        currentAnchor = LilConfig.load().paletteAnchor
+        // Read config fresh at each show() (always current), cache for the
+        // session so per-keystroke reposition/row-building doesn't re-hit the
+        // config file. Anchor drives positioning; searchEngine drives the
+        // "Search {name} for …" row.
+        let cfg = LilConfig.load()
+        currentAnchor = cfg.paletteAnchor
+        model.searchEngine = cfg.searchEngine
 
         // Refresh history cache on open (async) then re-render.
         refreshHistory()
@@ -105,8 +109,17 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         panel.isOpaque = false
 
         // Content root: a plain view holding the input row + results stack.
+        // FIXED WIDTH: the root is pinned to exactly `panelWidth` at REQUIRED
+        // priority so nothing inside (a long title, a long URL) can ever widen
+        // the panel. Everything below inherits this width via the stack.
         let root = NSView()
         root.translatesAutoresizingMaskIntoConstraints = false
+        let rootWidth = root.widthAnchor.constraint(equalToConstant: panelWidth)
+        rootWidth.priority = .required
+        rootWidth.isActive = true
+        // Resist any attempt by subviews to compress the root below 620 too.
+        root.setContentHuggingPriority(.required, for: .horizontal)
+        root.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         // --- Input row: a fixed 56pt container. The field is pinned by
         // centerYAnchor (NOT stretched to fill) so its single line of text is
@@ -271,7 +284,13 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
             rowView.onHover = { [weak self] idx in self?.hoverSelect(idx) }
             rowView.onClick = { [weak self] idx in self?.clickRow(idx) }
             stack.addArrangedSubview(rowView)
-            rowView.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+            // Pin each row to the stack width at REQUIRED priority: rows never
+            // dictate width, they inherit the fixed 620 (via stack == root width).
+            // The row's own labels have LOW compression resistance so their text
+            // truncates within this width instead of pushing it wider.
+            let w = rowView.widthAnchor.constraint(equalTo: stack.widthAnchor)
+            w.priority = .required
+            w.isActive = true
         }
     }
 
@@ -310,13 +329,26 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         }
     }
 
-    private func activateSelection() {
+    /// Open the current selection. `incognito` (palette ⌘-Enter) opens the
+    /// selection as an incognito lil (open.incognito:true), passed through to the
+    /// relay open call.
+    private func activateSelection(incognito: Bool = false) {
         guard !currentRows.isEmpty, selectedIndex < currentRows.count else { return }
         let row = currentRows[selectedIndex]
         let urlString = row.actionURL
         let (left, top) = paletteAnchorCoords()
         close()
-        OpenRouter.open(urlString, left: left, top: top)
+        OpenRouter.open(urlString, left: left, top: top, incognito: incognito)
+    }
+
+    /// True when the current AppKit event has Command as its only non-Return
+    /// modifier — used to detect ⌘-Enter, which shares the `insertNewline:`
+    /// selector with a plain Return in the field editor.
+    /// verified: see research (SO 61806458) — distinguish ⌘-Return from Return
+    /// via NSApp.currentEvent.modifierFlags in doCommandBySelector.
+    private func commandHeldOnCurrentEvent() -> Bool {
+        guard let flags = NSApp.currentEvent?.modifierFlags else { return false }
+        return flags.intersection(.deviceIndependentFlagsMask).contains(.command)
     }
 
     /// Chrome-space coordinates anchored to the palette's current position.
@@ -344,7 +376,10 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         switch selector {
         case #selector(NSResponder.insertNewline(_:)):
-            activateSelection()
+            // Plain Return opens normally; ⌘-Return opens as an incognito lil.
+            // Both arrive as insertNewline: — the modifier is read off the
+            // current AppKit event.
+            activateSelection(incognito: commandHeldOnCurrentEvent())
             return true
         case #selector(NSResponder.moveUp(_:)):
             moveSelection(.up)
