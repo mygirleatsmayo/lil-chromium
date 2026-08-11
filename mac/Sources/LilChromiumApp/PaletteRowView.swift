@@ -82,19 +82,28 @@ final class PaletteRowView: NSView {
         addSubview(domainLabel)
         addSubview(hintLabel)
 
-        // Priority ordering for the crowded case:
-        //   title (highest resistance) > domain > hint (lowest)
-        // so when space is tight the HINT truncates/vanishes first, then the
-        // domain, and the title is protected. The hint is only ever shown on the
-        // selected row, and when shown we hide the domain (see configure), so in
-        // practice it's title-vs-hint and the title wins if crowded — matching
-        // "show the hint only when it fits, drop it if crowded".
-        titleLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+        // FIXED-WIDTH DISCIPLINE: the panel is pinned to 620 upstream (root +
+        // per-row width constraints). Every label here has LOW horizontal
+        // compression resistance so its text TRUNCATES within the imposed width
+        // rather than pushing the row — and thus the panel — wider. The title
+        // truncates at the tail (see configureLabel), the domain at the head, so
+        // the informative ends stay visible.
+        //
+        // Relative ordering for the crowded case (which label yields first): the
+        // title is the most protected of the three, then the domain, then the
+        // hint. All three stay strictly below .defaultLow so none can ever exceed
+        // the required width constraint and expand the panel.
+        titleLabel.setContentCompressionResistancePriority(.init(rawValue: 200), for: .horizontal)
         titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        domainLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        domainLabel.setContentCompressionResistancePriority(.init(rawValue: 150), for: .horizontal)
         domainLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-        hintLabel.setContentCompressionResistancePriority(.init(rawValue: 240), for: .horizontal)
+        hintLabel.setContentCompressionResistancePriority(.init(rawValue: 120), for: .horizontal)
         hintLabel.lineBreakMode = .byClipping
+
+        // The row itself must accept the width imposed by the controller (equal
+        // to the stack/root width) — never grow to fit its content.
+        setContentHuggingPriority(.defaultLow, for: .horizontal)
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         NSLayoutConstraint.activate([
             background.leadingAnchor.constraint(equalTo: leadingAnchor),

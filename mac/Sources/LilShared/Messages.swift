@@ -18,6 +18,8 @@ public enum MessageType: String, Codable, Sendable {
     case getContext = "get-context"
     case context
     case openExternal = "open-external"
+    // v3: extension -> host, edits sleep.whitelist in config.json.
+    case whitelistOp = "whitelist-op"
 }
 
 /// Minimal envelope: decode just enough to route/dispatch, ignore the rest.
@@ -34,17 +36,49 @@ public struct LilMessage: Codable, Sendable {
 /// app -> extension: open an ephemeral window.
 /// `left`/`top` are the suggested window top-left in Chrome screen coordinates
 /// (top-left origin, points). The app performs the AppKit Y-flip before sending.
+/// `incognito` (v3): true → open an incognito lil (palette ⌘-Enter). Omitted
+/// from the wire when nil — never encoded as an explicit `null`.
 public struct OpenMessage: Codable, Sendable {
     public let type: String
     public let url: String
     public let left: Int
     public let top: Int
+    public let incognito: Bool?
 
-    public init(url: String, left: Int, top: Int) {
+    // Explicit CodingKeys: both init(from:) and encode(to:) are custom, so we
+    // declare the keys rather than depend on synthesis.
+    private enum CodingKeys: String, CodingKey {
+        case type, url, left, top, incognito
+    }
+
+    public init(url: String, left: Int, top: Int, incognito: Bool? = nil) {
         self.type = MessageType.open.rawValue
         self.url = url
         self.left = left
         self.top = top
+        self.incognito = incognito
+    }
+
+    // Tolerate a v1/v2 open that lacks `incognito`.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.type = (try? c.decode(String.self, forKey: .type)) ?? MessageType.open.rawValue
+        self.url = try c.decode(String.self, forKey: .url)
+        self.left = (try? c.decode(Int.self, forKey: .left)) ?? 0
+        self.top = (try? c.decode(Int.self, forKey: .top)) ?? 0
+        // decodeIfPresent -> Bool?; wrap in try? and flatten the Bool?? so a
+        // decode error or a missing/null key both collapse to nil.
+        self.incognito = (try? c.decodeIfPresent(Bool.self, forKey: .incognito)) ?? nil
+    }
+
+    // Encode `incognito` only when present so we never emit `"incognito":null`.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(type, forKey: .type)
+        try c.encode(url, forKey: .url)
+        try c.encode(left, forKey: .left)
+        try c.encode(top, forKey: .top)
+        try c.encodeIfPresent(incognito, forKey: .incognito)
     }
 }
 
@@ -171,6 +205,10 @@ public struct ContextBrowser: Codable, Sendable {
 /// host -> extension: the runtime context reply (matched by `id`). The host
 /// injects its own detected identity (`browser`/`browserName`) and merges the
 /// freshly-read config for the rest.
+///
+/// v3: the context now carries the FULL config objects verbatim from config.json
+/// (`ephemeralDefault`, `sleep`, `searchEngine`, `hoverBar`) alongside the host's
+/// browser identity. Sub-structs are the same Codable types LilConfig uses.
 public struct ContextMessage: Codable, Sendable {
     public let type: String
     public let id: String
@@ -180,6 +218,10 @@ public struct ContextMessage: Codable, Sendable {
     public let defaultBrowserName: String
     public let fallbackBrowser: String
     public let linkBehavior: String
+    public let ephemeralDefault: String
+    public let sleep: SleepConfig
+    public let searchEngine: SearchEngineConfig
+    public let hoverBar: HoverBarConfig
     public let knownBrowsers: [ContextBrowser]
 
     public init(
@@ -190,6 +232,10 @@ public struct ContextMessage: Codable, Sendable {
         defaultBrowserName: String,
         fallbackBrowser: String,
         linkBehavior: String,
+        ephemeralDefault: String,
+        sleep: SleepConfig,
+        searchEngine: SearchEngineConfig,
+        hoverBar: HoverBarConfig,
         knownBrowsers: [ContextBrowser]
     ) {
         self.type = MessageType.context.rawValue
@@ -200,7 +246,35 @@ public struct ContextMessage: Codable, Sendable {
         self.defaultBrowserName = defaultBrowserName
         self.fallbackBrowser = fallbackBrowser
         self.linkBehavior = linkBehavior
+        self.ephemeralDefault = ephemeralDefault
+        self.sleep = sleep
+        self.searchEngine = searchEngine
+        self.hoverBar = hoverBar
         self.knownBrowsers = knownBrowsers
+    }
+}
+
+/// extension -> host (never forwarded): add/remove a domain in
+/// `sleep.whitelist` inside config.json. The host performs an atomic
+/// read-modify-write that preserves every other field (see ConfigMerge).
+public struct WhitelistOpMessage: Codable, Sendable {
+    public let type: String
+    public let op: String       // "add" | "remove"
+    public let domain: String
+
+    public init(op: String, domain: String) {
+        self.type = MessageType.whitelistOp.rawValue
+        self.op = op
+        self.domain = domain
+    }
+
+    // Defensive decode: missing fields degrade to empty strings; the handler
+    // then no-ops on an empty domain or unknown op.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.type = (try? c.decode(String.self, forKey: .type)) ?? MessageType.whitelistOp.rawValue
+        self.op = (try? c.decode(String.self, forKey: .op)) ?? ""
+        self.domain = (try? c.decode(String.self, forKey: .domain)) ?? ""
     }
 }
 
