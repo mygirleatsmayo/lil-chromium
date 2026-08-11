@@ -2,3 +2,9 @@
 mac/.build/
 mac/build/
 *.pem
+
+# ---------------------------------┓
+# lazy git appends below this line ┃
+# ---------------------------------┛
+
+/README.local.md
