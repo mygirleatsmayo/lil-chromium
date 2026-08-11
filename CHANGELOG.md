@@ -1,5 +1,58 @@
 # Changelog
 
+## v0.3 — 2026-08-11
+
+Sign-in popups work. Lils expire, sleep, and search.
+
+### Fixes
+- **Google sign-in works in a lil.** The extension leaves OAuth popups native. It does not re-parent, navigate, or register a window that reports `type === "popup"`, carries no `openerTabId`, or matches the OAuth guard list. `window.opener` and `postMessage` stay intact, so the sign-in flow finishes.
+- **A `target=_blank` link keeps the focus in the lil.** The extension waits for the new tab to settle, then either re-parents it into a new lil or navigates the source lil. It focuses that lil window explicitly. The focus no longer leaks to the main browser window.
+- **MRU focus stack.** The extension tracks lil focus order through `windows.onFocusChanged`. When you close a focused lil, the top of the stack takes the focus. Geometry updates no longer carry a `focused` flag.
+- **The palette keeps a fixed width (620 pt).** A long title truncates at the tail. A URL truncates at the head. The panel does not widen.
+
+### Lifetimes
+- **Set how long a lil lives**: forever, 6 h, 12 h, 24 h, or until you quit the browser. Settings holds the default. The ▾ menu overrides it for one lil.
+- A one-minute alarm sweep closes an hour-based lil when it stays idle past its limit. The content script reports your interactions to reset the idle clock.
+- Restore-on-startup skips a lil with the until-quit lifetime.
+
+### Sleep
+- **Put a lil to sleep to release its memory.** Use the ▾ menu or the page context menu. The extension captures the page, then shows a sleep page: your screenshot, a tint, and the sleeping-lil mascot. Click anywhere to wake the lil. It loads the original URL fresh.
+- **Auto-sleep** puts an idle lil to sleep after the number of minutes you set in Settings.
+- Three guards skip auto-sleep only: the audio guard (the tab plays sound), the form guard (the page holds a dirty form), and the never-sleep whitelist.
+- Edit the whitelist from the page context menu ("Never sleep {domain}"). The host merges the change into `config.json`.
+- Restore reopens a sleeping lil as a sleep page, not a live load.
+- The mascot ships as a data-URI text asset (`extension/assets/sleeping-lil-data.js`), because this repo cannot take a binary push.
+
+### Hover bar
+- **Omnibox.** Type in the address field to get a suggestions dropdown: fuzzy history matches from `chrome.history.search` ranked origin-first, a direct-URL row, and a search row. Arrow keys move the selection. Enter opens it. Esc closes the dropdown first and the bar second.
+- **Reload** and **copy URL** buttons. Copy shows a short "Copied" tick.
+- **Style**: Glass (the v0.2 look) or Solid (opaque, matched to the light or dark title bar). An optional tint recolors either one.
+
+### Incognito lils
+- Open one with **⌘-Enter** in the palette, with "Reopen in incognito lil" in the ▾ menu, or with "Open link in incognito lil" in the link context menu.
+- The extension needs its Allow-in-Incognito toggle. Without it you get a normal lil and a notification that points at the toggle.
+- An incognito lil never enters the restore registry, never sleeps, and never gets captured.
+
+### Send to lil
+- Right-click a page in a normal window and select **Send to lil**. The extension moves the live tab into a lil. The tab does not reload.
+
+### Settings
+- New controls: lifetime default, the sleep section (enable, idle minutes, audio guard, form guard, tint, whitelist editor), search engine (Google, DuckDuckGo, Bing, Kagi, or a custom template), and hover bar style plus tint.
+- The same-lil link behavior now carries a warning: it can break sign-in popups.
+- The window reads `config.json` fresh on open, because the host also writes the whitelist.
+
+### Protocol (v3)
+- `hello` context carries the config objects verbatim from `config.json`, plus the host's browser identity.
+- New message `whitelist-op` (`add`/`remove`): the host merges the domain into `sleep.whitelist`.
+- `open` accepts `incognito`.
+- `ConfigMerge.swift` holds one read-merge-write path for `config.json`, shared by the app and the host. A writer replaces the top-level keys it owns and preserves every unknown key.
+
+### Known limits
+- **Mission Control**: with "Group windows by application" on (System Settings → Desktop & Dock), macOS stacks lils behind the main browser window. No app can override this per window. Use App Exposé (Ctrl+↓) to spread the windows.
+- **Other extensions' popups**: no Chrome API opens another extension's toolbar popup, so a lil offers no extensions menu. A keyboard shortcut from `chrome://extensions/shortcuts` still works in a lil.
+
+---
+
 ## v0.2 — 2026-08-07
 
 Glass palette, hover address bar, multi-browser lils.
