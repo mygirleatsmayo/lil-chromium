@@ -4,15 +4,32 @@ Little Arc-style ephemeral browser for macOS that **isn't a browser**. Each "lil
 
 ## How it works
 
-```
-link click in any app ──▶ LilChromium.app (default browser, menu bar)
-⌘⌥N palette ────────────▶        │ url + mouse position
-                                  ▼ unix socket (~/.lilchromium/relay-<browser>.sock)
-                          lilchromium-host (one per running browser)
-                                  ▼ native messaging
-                          extension ──▶ minimal lil at your cursor
-                                        hover top edge → address bar unfolds
-                                        "Open in Helium" ⌘O ──▶ real tab / tab group / other browser
+```mermaid
+flowchart LR
+    A["link in any app"]:::edge
+    B["⌘⌥N palette"]:::edge
+    C["LilChromium.app<br/>menu-bar agent"]:::core
+
+    subgraph BROWSER["your Chromium browser"]
+        direction LR
+        D["lilchromium-host"]:::core
+        E["extension"]:::core
+        F["a lil"]:::lil
+    end
+
+    G["real tab · tab group<br/>another browser"]:::edge
+
+    A --> C
+    B --> C
+    C -- "url + cursor<br/>unix socket" --> D
+    D -- "native messaging" --> E
+    E --> F
+    F -- "promote ⌘O" --> G
+
+    classDef edge fill:#f4f4f5,stroke:#a1a1aa,color:#27272a
+    classDef core fill:#ede9fe,stroke:#8b5cf6,color:#4c1d95
+    classDef lil fill:#8b5cf6,stroke:#6d28d9,color:#ffffff
+    style BROWSER fill:#fafafa,stroke:#d4d4d8,color:#71717a
 ```
 
 - Links clicked **inside** your browser never touch this; the browser handles its own links.
