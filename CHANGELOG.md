@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.3 — 2026-08-11
+## v0.3 - 2026-08-11
 
 Sign-in popups work. Lils expire, sleep, and search.
 
@@ -53,7 +53,7 @@ Sign-in popups work. Lils expire, sleep, and search.
 
 ---
 
-## v0.2 — 2026-08-07
+## v0.2 - 2026-08-07
 
 Glass palette, hover address bar, multi-browser lils.
 
@@ -90,7 +90,7 @@ Glass palette, hover address bar, multi-browser lils.
 
 ---
 
-## v0.1 — 2026-08-06
+## v0.1 - 2026-08-06
 
 Initial release: the ephemeral-browser architecture, no new browser engine.
 
