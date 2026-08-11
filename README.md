@@ -5,7 +5,7 @@ Little Arc-style ephemeral browser for macOS that **isn't a browser**. Each "lil
 ## How it works
 
 ```mermaid
-flowchart LR
+flowchart TB
     A["link in any app"]:::edge
     B["⌘⌥N palette"]:::edge
     C["LilChromium.app<br/>menu-bar agent"]:::core
