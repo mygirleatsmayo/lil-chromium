@@ -2,7 +2,7 @@
 
 ## v0.3 - 2026-08-11
 
-Sign-in popups work. Lils expire, sleep, and search.
+*Sign-in popups work. Lils sleep, die, and search.*
 
 ### Fixes
 - **Google sign-in works in a lil.** The extension leaves OAuth popups native. It does not re-parent, navigate, or register a window that reports `type === "popup"`, carries no `openerTabId`, or matches the OAuth guard list. `window.opener` and `postMessage` stay intact, so the sign-in flow finishes.
