@@ -17,7 +17,7 @@ flowchart TB
         F["a lil"]:::lil
     end
 
-    G["real tab · tab group<br/>another browser"]:::edge
+    G["real tab • tab group • another browser"]:::edge
 
     A --> C
     B --> C
