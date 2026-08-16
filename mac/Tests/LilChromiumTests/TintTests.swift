@@ -14,6 +14,14 @@ struct TintTests {
             "none", "blue", "purple", "pink", "red", "orange", "yellow", "green",
             "graphite", "custom",
         ])
+        #expect(TintChoice.ordered(offersNoTint: true) == TintChoice.ordered)
+    }
+
+    @Test func lilNapChoicesOmitNoTintAndKeepPresetOrder() {
+        #expect(TintChoice.ordered(offersNoTint: false).map(\.id) == [
+            "blue", "purple", "pink", "red", "orange", "yellow", "green",
+            "graphite", "custom",
+        ])
     }
 
     // MARK: - Hex completion
@@ -123,14 +131,16 @@ struct TintTests {
         #expect(TintValue.committedHex(fromSleep: "purple") == TintPreset.purple.hex)
         #expect(TintValue.committedHex(fromSleep: "gray") == TintPreset.graphite.hex)
         #expect(TintValue.committedHex(fromSleep: "grey") == TintPreset.graphite.hex)
-        #expect(TintValue.committedHex(fromSleep: "") == nil)
         #expect(TintValue.committedHex(fromSleep: "#3311AA") == "#3311aa")
     }
 
-    @Test func sleepNoTintStorageIsEmptyNotDefaultPurple() {
-        #expect(TintValue.sleepStorage(fromCommitted: nil) == "")
-        #expect(TintValue.committedHex(fromSleep: "") == nil)
+    @Test func sleepNilOrEmptyCommitStoresGraphiteHex() {
+        #expect(TintValue.sleepStorage(fromCommitted: nil) == TintPreset.graphite.hex)
+        #expect(TintValue.sleepStorage(fromCommitted: "") == TintPreset.graphite.hex)
+        #expect(TintValue.committedHex(fromSleep: "") == TintPreset.graphite.hex)
+        #expect(TintValue.committedHex(fromSleep: "none") == TintPreset.graphite.hex)
         #expect(TintValue.sleepStorage(fromCommitted: TintPreset.blue.hex) == TintPreset.blue.hex)
+        #expect(TintValue.sleepStorage(fromCommitted: nil).isEmpty == false)
     }
 
     @Test func hoverBarNilIsNoTint() {
@@ -190,14 +200,17 @@ struct TintTests {
         #expect(customDecoded.sleep.tint == "#3311aa")
     }
 
-    @Test func sleepNoTintRoundTripsWithoutBecomingDefaultPurple() throws {
+    @Test func sleepNilCommitRoundTripsAsGraphiteHex() throws {
         var cfg = LilConfig.defaults
         cfg.sleep.tint = TintValue.sleepStorage(fromCommitted: nil)
         let data = try #require(ConfigMerge.mergedJSONData(existing: nil, applying: cfg))
         let decoded = try JSONDecoder().decode(LilConfig.self, from: data)
-        #expect(decoded.sleep.tint == "")
+        #expect(decoded.sleep.tint == TintPreset.graphite.hex)
+        #expect(decoded.sleep.tint != "")
         #expect(decoded.sleep.tint != SleepConfig.defaults.tint)
-        #expect(TintValue.committedHex(fromSleep: decoded.sleep.tint) == nil)
+        #expect(TintValue.committedHex(fromSleep: decoded.sleep.tint) == TintPreset.graphite.hex)
+        let sleep = try #require(try jsonObject(data)["sleep"] as? [String: Any])
+        #expect(sleep["tint"] as? String == TintPreset.graphite.hex)
     }
 
     @Test func legacySleepNamedTokensStillDecode() throws {

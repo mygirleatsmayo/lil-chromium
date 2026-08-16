@@ -1,7 +1,7 @@
 import Foundation
 
-/// One swatch in the shared tint editor, in display order: no tint, the eight
-/// conventional macOS accent colors, then custom.
+/// One swatch in the shared tint editor, in display order: no tint (hoverbar
+/// only), the eight conventional macOS accent colors, then custom.
 enum TintChoice: Hashable, Identifiable {
     case none
     case preset(TintPreset)
@@ -23,8 +23,13 @@ enum TintChoice: Hashable, Identifiable {
         }
     }
 
-    /// Criterion 2: no tint; blue…graphite; custom.
+    /// Hoverbar order: no tint; blue…graphite; custom. Lil Nap omits no-tint
+    /// (`sleep.tint` is never empty; graphite is the neutral chip).
     static let ordered: [TintChoice] = [.none] + TintPreset.allCases.map { .preset($0) } + [.custom]
+
+    static func ordered(offersNoTint: Bool) -> [TintChoice] {
+        offersNoTint ? ordered : ordered.filter { $0 != .none }
+    }
 }
 
 /// macOS accent-color presets, in the conventional picker order.
@@ -83,15 +88,15 @@ enum TintHex {
 /// Maps the editor's optional committed hex onto each config field.
 ///
 /// Hoverbar: PROTOCOL optional `#rrggbb` (nil = no tint, omitted on write).
-/// Lil Nap: PROTOCOL `sleep.tint` is `"gray"|"purple"|#rrggbb`. Named tokens
-/// still *display* as chips; new commits write `#rrggbb`. Empty string is the
-/// explicit no-tint stand-in so a chosen none does not decode as default purple.
+/// Lil Nap: PROTOCOL `sleep.tint` is `"gray"|"purple"|#rrggbb` — never empty.
+/// Named tokens still *display* as chips; new commits write `#rrggbb`. A missing
+/// commit stores graphite, the editor's remaining neutral chip.
 enum TintValue {
     static func committedHex(fromSleep stored: String) -> String? {
         let trimmed = stored.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return nil }
+        if trimmed.isEmpty { return TintPreset.graphite.hex }
         switch trimmed.lowercased() {
-        case "none": return nil
+        case "none": return TintPreset.graphite.hex
         case "purple": return TintPreset.purple.hex
         case "gray", "grey": return TintPreset.graphite.hex
         default: return TintHex.normalize(trimmed) ?? trimmed
@@ -99,7 +104,7 @@ enum TintValue {
     }
 
     static func sleepStorage(fromCommitted hex: String?) -> String {
-        guard let hex else { return "" }
+        guard let hex, !hex.isEmpty else { return TintPreset.graphite.hex }
         return TintHex.normalize(hex) ?? hex
     }
 

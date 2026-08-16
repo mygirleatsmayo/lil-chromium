@@ -310,7 +310,8 @@ struct SettingsRoot: View {
             TintEditor(
                 committed: sleepTintBinding,
                 reloadToken: store.reloadToken,
-                label: "Lil Nap tint"
+                label: "Lil Nap tint",
+                offersNoTint: false
             )
             whitelistEditor
         }
@@ -460,16 +461,22 @@ struct SettingsRoot: View {
                 set: { store.config.sleep.formGuard = $0 })
     }
 
-    /// Optional hex for the shared editor. Named PROTOCOL tokens display as
-    /// chips; a write is skipped when the stored value already shows as that hex
-    /// so opening Settings does not rewrite `"purple"`/`"gray"`.
+    /// Hex for the shared editor. Named PROTOCOL tokens display as chips; a
+    /// write is skipped when the stored value already shows as that hex so
+    /// opening Settings does not rewrite `"purple"`/`"gray"`. Nil (and legacy
+    /// empty storage) commits graphite — Lil Nap has no no-tint choice.
     private var sleepTintBinding: Binding<String?> {
         Binding(
-            get: { TintValue.committedHex(fromSleep: store.config.sleep.tint) },
+            get: {
+                TintValue.committedHex(fromSleep: store.config.sleep.tint)
+                    ?? TintPreset.graphite.hex
+            },
             set: { newHex in
                 let current = TintValue.committedHex(fromSleep: store.config.sleep.tint)
-                guard current != newHex else { return }
-                store.config.sleep.tint = TintValue.sleepStorage(fromCommitted: newHex)
+                    ?? TintPreset.graphite.hex
+                let stored = TintValue.sleepStorage(fromCommitted: newHex)
+                guard current != TintValue.committedHex(fromSleep: stored) else { return }
+                store.config.sleep.tint = stored
             }
         )
     }

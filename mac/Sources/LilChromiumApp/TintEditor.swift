@@ -3,19 +3,31 @@ import SwiftUI
 
 /// One tint control, used for Lil Nap and hoverbar. Chips commit immediately;
 /// the hex field is a draft and only commits a valid completed color.
+/// `offersNoTint` is true for hoverbar; false for Lil Nap (`sleep.tint` always
+/// has a color; graphite stands in when the bound value is nil).
 struct TintEditor: View {
     @Binding var committed: String?
     var reloadToken: Int
     var label: String
+    var offersNoTint: Bool
 
     @State private var model: TintEditorModel
     @ScaledMetric(relativeTo: .body) private var chipSize = 16.0
 
-    init(committed: Binding<String?>, reloadToken: Int, label: String) {
+    init(
+        committed: Binding<String?>,
+        reloadToken: Int,
+        label: String,
+        offersNoTint: Bool = true
+    ) {
         self._committed = committed
         self.reloadToken = reloadToken
         self.label = label
-        _model = State(initialValue: .seeded(from: committed.wrappedValue))
+        self.offersNoTint = offersNoTint
+        let initial = offersNoTint
+            ? committed.wrappedValue
+            : (committed.wrappedValue ?? TintPreset.graphite.hex)
+        _model = State(initialValue: .seeded(from: initial))
     }
 
     var body: some View {
@@ -31,13 +43,14 @@ struct TintEditor: View {
         }
         .accessibilityElement(children: .contain)
         .onChange(of: reloadToken) { _ in
-            model.seed(from: committed)
+            let value = offersNoTint ? committed : (committed ?? TintPreset.graphite.hex)
+            model.seed(from: value)
         }
     }
 
     private var chipRow: some View {
         HStack(spacing: 6) {
-            ForEach(TintChoice.ordered) { choice in
+            ForEach(TintChoice.ordered(offersNoTint: offersNoTint)) { choice in
                 tintControl(for: choice)
             }
         }
