@@ -39,18 +39,6 @@ enum URLIntent {
         return "https://\(text)"
     }
 
-    /// Build a Google search URL for arbitrary query text. Retained as a
-    /// convenience/fallback; the palette now builds search URLs from the config
-    /// search engine via `SearchEngineConfig.searchURL(for:)`.
-    static func googleSearchURL(_ query: String) -> String {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        // urlQueryAllowed keeps this safe; encode spaces as %20 (Google accepts).
-        let encoded = trimmed.addingPercentEncoding(
-            withAllowedCharacters: .urlQueryAllowed
-        ) ?? trimmed
-        return "https://www.google.com/search?q=\(encoded)"
-    }
-
     /// A compact display host for a URL string (drops a leading "www."), for the
     /// search row subtitle. Nil if the string has no parseable host.
     static func hostForDisplay(_ urlString: String) -> String? {
