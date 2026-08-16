@@ -125,11 +125,17 @@ As v1: host queues `open` (max 20 FIFO) while the port is down; `history-query` 
 
 ## App behavior contract (v2 changes)
 
-- Palette: anchor per config (`top-center` default: centered horizontally, panel top at 20% of the primary display's visibleFrame height). Dismiss ONLY on: Esc, ⌘⌥N toggle, X button, or opening a result. NOT on app deactivation (user can visit Raycast/pasteboard and come back). Panel level stays `.floating`, `.nonactivatingPanel`, visible across Spaces.
+- Palette: anchor per config (`top-center` default: centered horizontally, panel top at 20% of the primary display's visibleFrame height). Dismiss ONLY on: Esc, ⌘⌥N toggle, X button, opening a result, or showing Settings (v4 — a floating panel must not cover the normal-level Settings window). NOT on app deactivation (user can visit Raycast/pasteboard and come back). Panel level stays `.floating`, `.nonactivatingPanel`, visible across Spaces.
 - Palette sends `open` anchored near the panel; link clicks anchored at mouse (unchanged).
-- Settings window (Liquid Glass mini window): primary browser picker (installed only), fallback browser, palette position, link behavior (with the "may break sign-in popups" warning on same-lil), ephemerality default, sleep section (enable, minutes, audio guard toggle, form guard toggle, tint, whitelist editor), search engine (presets + custom template), hover bar style (Glass / Solid) + optional tint, launch-at-login. Opens automatically on first run (no config.json). Reads config fresh on open (host may have edited the whitelist).
+- Settings window (Liquid Glass mini window), organized into three sections (v4):
+  - **General** — Primary browser picker (installed only), Fallback browser, palette position, search engine (presets + custom template), launch-at-login.
+  - **Lils** — link behavior (with the "may break sign-in popups" warning on same-lil), ephemerality default, sleep (enable, minutes, audio guard toggle, form guard toggle, tint, whitelist editor).
+  - **Hoverbar** — style (Glass / Solid) + optional tint.
+
+  Singleton: one controller and one window for the life of the process; every entry point reaches it. Opens automatically on first run (no config.json). Reads config fresh and re-scans installed browsers on every open (the host may have edited the whitelist). Showing it activates Lil Chromium only — it never opens or focuses a browser window. **Placement (v4)**: first presentation matches the centered palette geometry (horizontally centered, top edge at 20% of the visibleFrame height) on the display under the pointer; once the user moves it, AppKit frame autosaving under `SettingsWindow` takes over.
 - Palette: fixed width (620) — long titles truncate at the tail, URLs truncate at the head; the panel NEVER widens. Search row uses config `searchEngine`. **⌘-Enter** opens the selection as an incognito lil (`open.incognito:true`).
-- Menu bar: "New Lil ⌘⌥N", "Settings…", "Set as Default Browser…", separator, "Quit".
+- Status item menu: "New Lil ⌘⌥N", "Settings…", "Set as Default Browser…", separator, "Quit".
+- Application menu bar (v4): the app is `LSUIElement`, so macOS never draws this menu — it exists because `NSApplication.sendEvent(_:)` routes ⌘-key events through `NSApp.mainMenu` before the key window's responder chain, which is the only way ⌘, and native text editing work. **App** — About, separator, "Settings… ⌘,", "Set as Default Browser…", separator, "Quit ⌘Q". **Edit** — Undo/Redo, Cut/Copy/Paste/Paste and Match Style/Delete/Select All, all nil-targeted so they resolve against the current field editor (Settings fields and the palette input alike). **Window** — Minimize ⌘M, Zoom, Close ⌘W (`NSApp.windowsMenu` is deliberately unset).
 
 ## Installer contract
 

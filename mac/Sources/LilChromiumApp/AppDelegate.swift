@@ -37,6 +37,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let merged = BrowserCatalog.merged(into: LilConfig.load())
         merged.save()
 
+        // Install the menu bar BEFORE anything can take focus: it is what makes
+        // ⌘, and the standard Edit commands work at all (see MainMenu).
+        NSApp.mainMenu = MainMenu.make(target: self)
+
         setupStatusItem()
         registerHotKey()
 
@@ -105,21 +109,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Menu actions
+    //
+    // The ones the application menu bar also targets are internal rather than
+    // private, so MainMenu can name them.
 
     @objc private func showPalette() {
         palette.show()
     }
 
-    @objc private func showSettings() {
+    @objc func showSettings() {
+        // The palette is a floating panel and would sit on top of Settings, so
+        // dismiss it first: the two surfaces must never compete for focus.
+        palette.close()
         SettingsWindowController.show()
     }
 
-    @objc private func quit() {
+    @objc func quit() {
         GlobalHotKey.shared.unregister()
         NSApp.terminate(nil)
     }
 
-    @objc private func setAsDefaultBrowser() {
+    @objc func setAsDefaultBrowser() {
         // Verified: NSWorkspace.setDefaultApplication(at:toOpenURLsWithScheme:)
         // is async/throws on macOS 12+. Only "http" is needed (setting "https"
         // typically errors); the system shows a confirmation dialog.

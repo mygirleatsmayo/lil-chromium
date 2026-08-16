@@ -4,10 +4,11 @@ import AppKit
 /// background (macOS 26+) and a NSVisualEffectView fallback for macOS 13–25.
 ///
 /// Dismissal policy (v0.2): the panel closes ONLY on Esc, the ⌘⌥N toggle, the X
-/// button, or opening a result — NEVER on resignKey / app deactivation, so the
-/// user can hop to Raycast / a pasteboard manager and come back with the palette
-/// still up. Accordingly this panel has NO windowDidResignKey handler and
-/// `hidesOnDeactivate = false`.
+/// button, opening a result, or Settings being shown (v0.4 — Settings is a
+/// normal-level window and must not compete with a floating panel) — NEVER on
+/// resignKey / app deactivation, so the user can hop to Raycast / a pasteboard
+/// manager and come back with the palette still up. Accordingly this panel has
+/// NO windowDidResignKey handler and `hidesOnDeactivate = false`.
 ///
 /// It CAN become key (so the search field is typeable) without activating the
 /// app, via `.nonactivatingPanel` + `canBecomeKey = true` + orderFrontRegardless.

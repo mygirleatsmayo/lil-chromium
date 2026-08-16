@@ -4,11 +4,19 @@ import ServiceManagement
 import LilShared
 
 /// Liquid-glass mini Settings window (NSWindowController hosting a SwiftUI
-/// Form). Opens on first run (onboarding) and from the menu. Skeleton adapted
-/// from research-v0.2.md §1.
+/// Form). Opens on first run (onboarding), from the status item, and from the
+/// menu bar's ⌘,. Skeleton adapted from research-v0.2.md §1.
+///
+/// Exactly one of these exists for the life of the process: the controller is
+/// never dropped and the window is not released on close, so every entry point
+/// reaches the same window.
 @MainActor
-final class SettingsWindowController: NSWindowController, NSWindowDelegate {
+final class SettingsWindowController: NSWindowController {
     private static var shared: SettingsWindowController?
+
+    /// AppKit stores the frame under "NSWindow Frame <name>" in standard
+    /// defaults once the user moves or resizes the window.
+    private static let frameAutosaveName = "SettingsWindow"
 
     /// The store is held here so we can force a fresh config read every time the
     /// window is (re)shown — the host may have edited config.json (whitelist-op)
@@ -18,10 +26,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// Show (creating if needed) the singleton Settings window. Always re-reads
     /// config.json + re-scans installed browsers so the form reflects current
     /// truth (e.g. a whitelist edited by the extension's context menus).
+    ///
+    /// Activating Lil Chromium is the only focus effect: no NSWorkspace open, no
+    /// relay message, so showing Settings can never create or focus a normal
+    /// browser window.
     static func show() {
-        if shared == nil { shared = SettingsWindowController() }
-        shared?.store.reload()
-        shared?.showWindow(nil)
+        let controller = shared ?? SettingsWindowController()
+        shared = controller
+        controller.store.reload()
+        controller.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -33,20 +46,35 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             defer: false
         )
         super.init(window: window)
-        window.title = "lil-chromium Settings"
+        window.title = "Lil Chromium Settings"
         window.toolbarStyle = .unified
         window.toolbar = NSToolbar() // empty toolbar enables the glass title bar
-        window.setFrameAutosaveName("SettingsWindow")
-        window.center()
-        window.delegate = self
         window.isReleasedWhenClosed = false
         window.contentViewController = NSHostingController(rootView: SettingsRoot(store: store))
+
+        // verified: setFrameUsingName(_:) reads defaults directly and returns
+        // false when nothing is stored, and setFrameAutosaveName(_:) does not
+        // itself write a frame — but every frame change AFTER the name is set
+        // does. So: restore the user's frame if one exists, otherwise do the
+        // first-run placement, and only THEN start autosaving. That ordering is
+        // what keeps our computed first position from masquerading as a frame
+        // the user chose. (Probed on macOS 27, Xcode-beta toolchain.)
+        if !window.setFrameUsingName(Self.frameAutosaveName) {
+            Self.placeNearCenteredPalette(window)
+        }
+        window.setFrameAutosaveName(Self.frameAutosaveName)
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
-    func windowWillClose(_ notification: Notification) {
-        Self.shared = nil
+    /// First presentation: line the window up with where a centered palette
+    /// would appear on the display the user is working on, instead of letting
+    /// AppKit drop it against a screen edge.
+    private static func placeNearCenteredPalette(_ window: NSWindow) {
+        guard let screen = PalettePlacement.activeScreen else { return }
+        window.setFrameOrigin(
+            PalettePlacement.centeredOrigin(forSize: window.frame.size, on: screen)
+        )
     }
 }
 
@@ -61,6 +89,11 @@ final class SettingsStore: ObservableObject {
     /// Persisting is suppressed while `reload()` swaps in a fresh disk copy, so
     /// re-reading the file never immediately writes it straight back.
     private var suppressSave = false
+
+    /// Bumped by every `reload()`. Views observe it to re-seed local editing
+    /// buffers when the singleton window is presented again — `onAppear` only
+    /// fires once for a window that is never torn down.
+    @Published private(set) var reloadToken = 0
 
     @Published var config: LilConfig {
         didSet {
@@ -84,6 +117,7 @@ final class SettingsStore: ObservableObject {
         suppressSave = true
         config = BrowserCatalog.merged(into: LilConfig.load())
         suppressSave = false
+        reloadToken += 1
     }
 
     /// Browsers Launch Services could resolve — the only valid picker choices.
@@ -146,16 +180,13 @@ struct SettingsRoot: View {
     @State private var customSearchTemplate: String = ""
 
     var body: some View {
+        // Three sections, in the order the parent spec fixes them: General
+        // (what Lil Chromium itself does), Lils (what a lil does), Hoverbar
+        // (how a lil's overlay looks).
         Form {
-            browsersSection
-            linksSection
+            generalSection
             lilsSection
-            sleepSection
-            searchSection
-            hoverBarSection
-            Section {
-                Toggle("Launch at Login", isOn: launchAtLoginBinding)
-            }
+            hoverbarSection
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
@@ -165,12 +196,18 @@ struct SettingsRoot: View {
             // Custom field shows the current value when the window opens.
             customSearchTemplate = store.config.searchEngine.template
         }
+        // The window is a long-lived singleton, so onAppear fires once per
+        // process. Re-seed the buffer on each reload — i.e. each time Settings
+        // is presented again with fresh disk truth — and never while typing.
+        .onChange(of: store.reloadToken) { _ in
+            customSearchTemplate = store.config.searchEngine.template
+        }
     }
 
-    // MARK: Browsers
+    // MARK: General
 
-    private var browsersSection: some View {
-        Section("Browsers") {
+    private var generalSection: some View {
+        Section("General") {
             Picker(selection: primaryBrowserBinding) {
                 ForEach(store.installedBrowsers, id: \.slug) { b in
                     Text(b.name).tag(b.slug)
@@ -181,7 +218,7 @@ struct SettingsRoot: View {
                     if store.defaultBrowserMissing {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.yellow)
-                            .help("The selected primary browser isn't installed.")
+                            .help("The selected Primary browser isn't installed.")
                     }
                 }
             }
@@ -196,13 +233,17 @@ struct SettingsRoot: View {
                 Text("Centered near top").tag("top-center")
                 Text("Top right").tag("top-right")
             }
+
+            searchControls
+
+            Toggle("Launch at Login", isOn: launchAtLoginBinding)
         }
     }
 
-    // MARK: Links
+    // MARK: Lils
 
-    private var linksSection: some View {
-        Section("Links") {
+    private var lilsSection: some View {
+        Section("Lils") {
             Picker("New-window links", selection: linkBehaviorBinding) {
                 Text("Open in a new lil (default)").tag("new-lil")
                 Text("Open in the same lil").tag("same-lil")
@@ -215,13 +256,7 @@ struct SettingsRoot: View {
             Text("Hold ⌘ when clicking a link for the other behavior.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-        }
-    }
 
-    // MARK: Lils (ephemerality)
-
-    private var lilsSection: some View {
-        Section("Lils") {
             Picker("Close lils automatically", selection: ephemeralBinding) {
                 Text("Never").tag("never")
                 Text("After 6 hours idle").tag("6h")
@@ -229,33 +264,32 @@ struct SettingsRoot: View {
                 Text("After 24 hours").tag("24h")
                 Text("When browser quits").tag("quit")
             }
+
+            sleepControls
         }
     }
 
-    // MARK: Sleep
+    // MARK: Sleep (inside Lils)
 
-    private var sleepSection: some View {
-        Section {
-            Toggle("Put idle lils to sleep", isOn: sleepEnabledBinding)
+    @ViewBuilder private var sleepControls: some View {
+        Toggle("Put idle lils to sleep", isOn: sleepEnabledBinding)
+        Text("Sleeping frees the page’s memory; click a sleeping lil to wake it.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
-            // Only expose the detail controls when sleep is enabled.
-            if store.config.sleep.enabled {
-                Picker("Sleep after", selection: sleepMinutesBinding) {
-                    Text("15 minutes").tag(15)
-                    Text("30 minutes").tag(30)
-                    Text("60 minutes").tag(60)
-                    Text("120 minutes").tag(120)
-                }
-                Toggle("Don’t sleep lils playing audio", isOn: audioGuardBinding)
-                Toggle("Don’t sleep lils with unsaved form input", isOn: formGuardBinding)
-
-                sleepTintControls
-                whitelistEditor
+        // Only expose the detail controls when sleep is enabled.
+        if store.config.sleep.enabled {
+            Picker("Sleep after", selection: sleepMinutesBinding) {
+                Text("15 minutes").tag(15)
+                Text("30 minutes").tag(30)
+                Text("60 minutes").tag(60)
+                Text("120 minutes").tag(120)
             }
-        } header: {
-            Text("Sleep")
-        } footer: {
-            Text("Sleeping frees the page’s memory; click a sleeping lil to wake it.")
+            Toggle("Don’t sleep lils playing audio", isOn: audioGuardBinding)
+            Toggle("Don’t sleep lils with unsaved form input", isOn: formGuardBinding)
+
+            sleepTintControls
+            whitelistEditor
         }
     }
 
@@ -302,37 +336,35 @@ struct SettingsRoot: View {
         }
     }
 
-    // MARK: Search
+    // MARK: Search (inside General)
 
-    private var searchSection: some View {
-        Section("Search") {
-            Picker("Search engine", selection: searchPresetBinding) {
-                ForEach(searchPresets) { preset in
-                    Text(preset.name).tag(preset.id)
-                }
+    @ViewBuilder private var searchControls: some View {
+        Picker("Search engine", selection: searchPresetBinding) {
+            ForEach(searchPresets) { preset in
+                Text(preset.name).tag(preset.id)
             }
-            if searchPresetBinding.wrappedValue == "custom" {
-                VStack(alignment: .leading, spacing: 4) {
-                    TextField("https://example.com/search?q=%s", text: $customSearchTemplate)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit { commitCustomTemplate() }
-                        .onChange(of: customSearchTemplate) { newValue in
-                            commitCustomTemplate(newValue)
-                        }
-                    if !customSearchTemplate.contains("%s") {
-                        Text("Template must contain %s (replaced by the query).")
-                            .font(.caption)
-                            .foregroundStyle(.red)
+        }
+        if searchPresetBinding.wrappedValue == "custom" {
+            VStack(alignment: .leading, spacing: 4) {
+                TextField("https://example.com/search?q=%s", text: $customSearchTemplate)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { commitCustomTemplate() }
+                    .onChange(of: customSearchTemplate) { newValue in
+                        commitCustomTemplate(newValue)
                     }
+                if !customSearchTemplate.contains("%s") {
+                    Text("Template must contain %s (replaced by the query).")
+                        .font(.caption)
+                        .foregroundStyle(.red)
                 }
             }
         }
     }
 
-    // MARK: Hover bar
+    // MARK: Hoverbar
 
-    private var hoverBarSection: some View {
-        Section("Hover bar") {
+    private var hoverbarSection: some View {
+        Section("Hoverbar") {
             Picker("Style", selection: hoverStyleBinding) {
                 Text("Glass").tag("glass")
                 Text("Solid").tag("solid")
