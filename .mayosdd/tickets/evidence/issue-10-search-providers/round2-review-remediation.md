@@ -1,0 +1,8 @@
+# Remediation review — Issue #10, fix round 1
+
+- **S1** resolved — `const DEFAULT_SEARCH = { name: "Startpage", template: "https://www.startpage.com/sp/search?query=%s" };` (PROTOCOL example is the same Startpage name/template; “Missing file/fields → built-in defaults above” now points at it).
+- **S2** resolved — `` `searchEngine`: `provider` id + `name` + `template` … `provider` is the explicit Settings selection (`google` | `ddg` | `bing` | `kagi` | `startpage` | `custom`) and is never inferred from `template`. … Presets in Settings: Google, DuckDuckGo, Bing, Kagi, Startpage, Custom. ``
+- **Agreement:** `mac/` `SearchEngineConfig.defaults` (Startpage + `provider: "startpage"`), PROTOCOL schema example + `searchEngine` bullet, and `DEFAULT_SEARCH` now share Startpage as the missing-field default. Google that should not remain, by severity: `extension/overlay.js` still stubs `searchEngine` as Google and falls back with `|| "Google"`; PROTOCOL hover-bar prose still says “non-URL input → Google search”; README Settings list still omits Startpage. Chrome product names, the OAuth “Google-auth” note, CHANGELOG history, and fixtures that store Google on purpose are fine.
+- **Test:** `worker.test.js` v1 additive-defaults change is an honest expectation update. `fixtures/config-v1-legacy.json` has no `searchEngine`; the new Startpage literals match native missing-field defaults and PROTOCOL, not a value derived from `DEFAULT_SEARCH`.
+- **New defects (delta only):** none.
+- **needs adjudication:** PROTOCOL now documents `provider` on `searchEngine`; `DEFAULT_SEARCH` and `normalizeContext` still omit it. The ledger did not require the extension fallback object to carry `provider` (palette/hoverbar consume name+template).
