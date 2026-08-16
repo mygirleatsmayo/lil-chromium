@@ -30,6 +30,29 @@ Note the asymmetry — the hoverbar path is correct. It omits the key rather tha
 3. One component reused at two call sites is the shape of this ticket. Splitting it into two similar components fails criterion 1 and may not be proposed as a fix.
 4. The hoverbar no-tint encoding (omitted key) is correct as shipped and is out of scope for the fix.
 
+## Owner decision (2026-08-16) — supersedes settled interpretation 1
+
+Lucas rejected the sentinel. His decision:
+
+> **Lil Nap has no "no tint" choice at all.** Graphite is its neutral option. The hoverbar keeps "no tint" exactly as it ships.
+
+This matches `docs/PROTOCOL.md`, which already makes `sleep.tint` non-nullable (`"gray" | "purple"` or `#rrggbb`) and `hoverBar.tint` nullable. The defect was that the shared editor offered Lil Nap a choice it had nowhere to store, so the fix is native-only — `extension/` and `docs/PROTOCOL.md` were correct as they stood.
+
+Consequence recorded so no later round reverses it: dropping the no-tint chip from the Lil Nap call site is a deliberate, owner-approved deviation from Issue #11 criterion 2.
+
+## Fix rounds
+
+| Commit | What |
+|---|---|
+| `633be7c` | `TintEditor` gained `offersNoTint` (default `true`); Lil Nap passes `false`; `sleepStorage(fromCommitted:)` commits graphite `#8e8e93` instead of `""` |
+| `ef729c2` | N1 — `committedHex(fromSleep:)` returns `nil` for `""`/`"none"`; setter drops its graphite fallback; `TintEditor.writeCommitted()` always assigns |
+
+**N1** (round 3 review `Wv8zBfgv`, high): a config holding `""` or `"none"` showed graphite selected, but the click was skipped, so the unusable value stayed on disk and the extension kept painting purple. Root cause: `committedHex(fromSleep:)` coalesced `""`/`"none"` into graphite hex, so the setter's skip-guard could not tell a valid stored gray from junk that merely displayed as gray. A second skip in `TintEditor.writeCommitted()` meant the click never reached the setter at all — found by the fix round, not named in the brief.
+
+Round 5 review `CTtPNunw`: N1 **resolved**, no new findings. It walked all six starting values and confirmed `"purple"`/`"gray"`/`"grey"` are still never rewritten into hex, and that always-assign does not let the hoverbar write on mere display.
+
+Round 6 final full review: Standards `nkG4ldGs` and Spec `1B2tY1fn`, both **no findings**. All nine criteria met with quoted proof; every reachable `sleep.tint` write confirmed to be a value `docs/PROTOCOL.md` permits.
+
 ## Verdict
 
-Open. Awaiting Lucas's decision on the wire encoding for explicit no-tint.
+**Closed.** Ledger fully resolved after two fix rounds; final full review clean on both axes.
