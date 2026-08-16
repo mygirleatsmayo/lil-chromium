@@ -89,18 +89,32 @@ public struct SleepConfig: Codable, Sendable {
     }
 }
 
-/// Search engine template used by BOTH the palette and the lil hover-bar
-/// omnibox. See PROTOCOL.md `searchEngine`.
-public struct SearchEngineConfig: Codable, Sendable {
+/// Search engine used by BOTH the palette and the lil hover-bar omnibox.
+/// See PROTOCOL.md `searchEngine`. `provider` is the explicit Settings
+/// selection; `name`/`template` are what palette and hoverbar consume.
+public struct SearchEngineConfig: Codable, Equatable, Sendable {
     public var name: String
-    public var template: String   // contains "%s"
+    public var template: String   // contains "%s" when committed
+    /// Explicit Settings selection (`google`, `ddg`, `bing`, `kagi`,
+    /// `startpage`, `custom`). Never inferred from `template`.
+    public var provider: String
+
+    private enum CodingKeys: String, CodingKey {
+        case name, template, provider
+    }
 
     public init(
-        name: String = "Google",
-        template: String = "https://www.google.com/search?q=%s"
+        name: String = SearchProviders.startpage.name,
+        template: String = SearchProviders.startpageTemplate,
+        provider: String? = nil
     ) {
         self.name = name
         self.template = template
+        if let provider, !provider.isEmpty {
+            self.provider = provider
+        } else {
+            self.provider = SearchProviders.idMatching(name: name)
+        }
     }
 
     public static let defaults = SearchEngineConfig()
@@ -110,11 +124,19 @@ public struct SearchEngineConfig: Codable, Sendable {
         let d = SearchEngineConfig.defaults
         self.name = (try? c.decode(String.self, forKey: .name)) ?? d.name
         self.template = (try? c.decode(String.self, forKey: .template)) ?? d.template
+        // Missing `provider` on an existing file: the stored `name` is the
+        // explicit identity. Never recover selection by matching `template`.
+        if let stored = try? c.decode(String.self, forKey: .provider), !stored.isEmpty {
+            self.provider = stored
+        } else {
+            self.provider = SearchProviders.idMatching(name: self.name)
+        }
     }
 
     /// Build a search URL for `query`, percent-encoding the query and
-    /// substituting it for the first `%s`. Falls back to the Google template if
-    /// this one has no `%s`. Used by the palette and (mirrored) the extension.
+    /// substituting it for the first `%s`. Falls back to the default (Startpage)
+    /// template if this one has no `%s`. Used by the palette and (mirrored)
+    /// the extension.
     public func searchURL(for query: String) -> String {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let encoded = trimmed.addingPercentEncoding(
@@ -196,7 +218,7 @@ public struct LilConfig: Codable, Sendable {
     }
 
     /// Built-in defaults (schema v2): helium / chrome / top-center / new-lil /
-    /// never / sleep-off / Google / glass / [].
+    /// never / sleep-off / Startpage / glass / [].
     public static let defaults = LilConfig(
         version: 2,
         defaultBrowser: "helium",
