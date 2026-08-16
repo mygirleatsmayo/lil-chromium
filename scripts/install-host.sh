@@ -12,10 +12,11 @@
 #     APP_PATH  optional path to LilChromium.app (defaults to /Applications).
 #
 # Per docs/PROTOCOL.md installer contract: writes the manifest into every
-# EXISTING browser support dir among the known set (Chrome/Beta/Canary, Helium,
-# Brave, Edge, Arc, Vivaldi, Chromium). A dir is "existing" when its PARENT
-# support directory exists; the NativeMessagingHosts subdir is created as
-# needed. Helium does NOT read Chrome's manifests, so its own dir is required.
+# EXISTING browser support dir in the catalog (each Chromium app / release
+# channel). A dir is "existing" when that support directory exists; the
+# NativeMessagingHosts subdir is created as needed. Missing installations are
+# skipped, not created. Helium does NOT read Chrome's manifests, so its own
+# dir is required. Channels do not share a support directory.
 
 set -euo pipefail
 
@@ -34,16 +35,30 @@ fi
 SUPPORT_BASE="${HOME}/Library/Application Support"
 
 # Browser support directories (relative to ~/Library/Application Support), each
-# gets its own NativeMessagingHosts/<HOST_NAME>.json. Mirrors PROTOCOL.md.
+# gets its own NativeMessagingHosts/<HOST_NAME>.json. Same set and order as
+# BrowserTable.nativeHostSupportDirectories / PROTOCOL.md "Browser slugs".
 BROWSER_DIRS=(
   "Google/Chrome"
   "Google/Chrome Beta"
+  "Google/Chrome Dev"
   "Google/Chrome Canary"
-  "net.imput.helium"
   "BraveSoftware/Brave-Browser"
+  "BraveSoftware/Brave-Browser-Beta"
+  "BraveSoftware/Brave-Browser-Dev"
+  "BraveSoftware/Brave-Browser-Nightly"
   "Microsoft Edge"
-  "Arc/User Data"
+  "Microsoft Edge Beta"
+  "Microsoft Edge Dev"
+  "Microsoft Edge Canary"
   "Vivaldi"
+  "Vivaldi Snapshot"
+  "com.operasoftware.Opera"
+  "com.operasoftware.OperaGX"
+  "com.operasoftware.OperaDeveloper"
+  "net.imput.helium"
+  "Arc/User Data"
+  "Dia/User Data"
+  "ai.perplexity.comet"
   "Chromium"
 )
 
@@ -75,8 +90,7 @@ WROTE_ANY=0
 INSTALLED=()
 for rel in "${BROWSER_DIRS[@]}"; do
   browser_dir="${SUPPORT_BASE}/${rel}"
-  # A browser is "installed / has a profile" when its support dir exists (i.e.
-  # the parent of NativeMessagingHosts). Only write where that parent exists.
+  # Only write where the installation's support directory already exists.
   if [[ -d "${browser_dir}" ]]; then
     write_manifest "${browser_dir}" "${rel}"
     INSTALLED+=("${rel}")

@@ -2,6 +2,7 @@
 mac/.build/
 mac/build/
 *.pem
+node_modules/
 
 # ---------------------------------┓
 # lazy git appends below this line ┃
