@@ -89,18 +89,30 @@ enum TintHex {
 ///
 /// Hoverbar: PROTOCOL optional `#rrggbb` (nil = no tint, omitted on write).
 /// Lil Nap: PROTOCOL `sleep.tint` is `"gray"|"purple"|#rrggbb` — never empty.
-/// Named tokens still *display* as chips; new commits write `#rrggbb`. A missing
-/// commit stores graphite, the editor's remaining neutral chip.
+/// Named tokens still *display* as chips; new commits write `#rrggbb`.
+/// Unusable `""`/`"none"` are not graphite (`committedHex` is nil); Settings
+/// shows graphite and a graphite commit writes `#8e8e93`. A missing commit
+/// stores graphite, the editor's remaining neutral chip.
 enum TintValue {
+    /// PROTOCOL tokens become chips. `""`/`"none"` are unusable, not graphite.
     static func committedHex(fromSleep stored: String) -> String? {
         let trimmed = stored.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return TintPreset.graphite.hex }
         switch trimmed.lowercased() {
-        case "none": return TintPreset.graphite.hex
+        case "", "none": return nil
         case "purple": return TintPreset.purple.hex
         case "gray", "grey": return TintPreset.graphite.hex
         default: return TintHex.normalize(trimmed) ?? trimmed
         }
+    }
+
+    /// Next `sleep.tint` to persist, or nil to leave disk unchanged.
+    /// PROTOCOL tokens that already display as `hex` must not be rewritten.
+    /// Unusable `""`/`"none"` do not skip a graphite commit.
+    static func sleepTintIfChanged(from stored: String, committing hex: String?) -> String? {
+        let current = committedHex(fromSleep: stored)
+        let next = sleepStorage(fromCommitted: hex)
+        guard current != committedHex(fromSleep: next) else { return nil }
+        return next
     }
 
     static func sleepStorage(fromCommitted hex: String?) -> String {

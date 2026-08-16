@@ -145,10 +145,11 @@ struct TintEditor: View {
         )
     }
 
+    /// Always assign. Lil Nap may display graphite for unusable `""`/`"none"`
+    /// while `model.committed` is already that hex; the binding setter decides
+    /// whether disk must change.
     private func writeCommitted() {
-        if committed != model.committed {
-            committed = model.committed
-        }
+        committed = model.committed
     }
 }
 

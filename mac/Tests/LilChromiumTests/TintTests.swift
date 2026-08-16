@@ -137,10 +137,40 @@ struct TintTests {
     @Test func sleepNilOrEmptyCommitStoresGraphiteHex() {
         #expect(TintValue.sleepStorage(fromCommitted: nil) == TintPreset.graphite.hex)
         #expect(TintValue.sleepStorage(fromCommitted: "") == TintPreset.graphite.hex)
-        #expect(TintValue.committedHex(fromSleep: "") == TintPreset.graphite.hex)
-        #expect(TintValue.committedHex(fromSleep: "none") == TintPreset.graphite.hex)
         #expect(TintValue.sleepStorage(fromCommitted: TintPreset.blue.hex) == TintPreset.blue.hex)
         #expect(TintValue.sleepStorage(fromCommitted: nil).isEmpty == false)
+    }
+
+    @Test func unusableSleepTintIsNotCommittedGraphite() {
+        #expect(TintValue.committedHex(fromSleep: "") == nil)
+        #expect(TintValue.committedHex(fromSleep: "none") == nil)
+    }
+
+    /// Binding skip: empty/`"none"` are not graphite, so selecting the
+    /// displayed graphite chip writes `#8e8e93`. `sleepStorage` alone would
+    /// already return that hex; the skip is what used to drop the write.
+    @Test(arguments: ["", "none"])
+    func selectingGraphiteRewritesUnusableSleepTint(onDisk: String) throws {
+        var cfg = LilConfig.defaults
+        cfg.sleep.tint = onDisk
+        let stored = try #require(TintValue.sleepTintIfChanged(
+            from: cfg.sleep.tint, committing: TintPreset.graphite.hex
+        ))
+        cfg.sleep.tint = stored
+        #expect(cfg.sleep.tint == TintPreset.graphite.hex)
+    }
+
+    @Test(arguments: [
+        "gray",
+        "grey",
+        "purple",
+        TintPreset.graphite.hex,
+        "#3311aa",
+    ])
+    func selectingDisplayedSleepChipDoesNotRewriteUsableTint(onDisk: String) {
+        let displayed = TintValue.committedHex(fromSleep: onDisk)
+            ?? TintPreset.graphite.hex
+        #expect(TintValue.sleepTintIfChanged(from: onDisk, committing: displayed) == nil)
     }
 
     @Test func hoverBarNilIsNoTint() {

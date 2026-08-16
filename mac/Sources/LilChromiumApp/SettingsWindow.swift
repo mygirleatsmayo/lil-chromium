@@ -463,8 +463,9 @@ struct SettingsRoot: View {
 
     /// Hex for the shared editor. Named PROTOCOL tokens display as chips; a
     /// write is skipped when the stored value already shows as that hex so
-    /// opening Settings does not rewrite `"purple"`/`"gray"`. Nil (and legacy
-    /// empty storage) commits graphite — Lil Nap has no no-tint choice.
+    /// opening Settings does not rewrite `"purple"`/`"gray"`/`"grey"`. Unusable
+    /// `""`/`"none"` display as graphite via the getter fallback but are not
+    /// that hex, so a graphite click writes `#8e8e93`.
     private var sleepTintBinding: Binding<String?> {
         Binding(
             get: {
@@ -472,10 +473,9 @@ struct SettingsRoot: View {
                     ?? TintPreset.graphite.hex
             },
             set: { newHex in
-                let current = TintValue.committedHex(fromSleep: store.config.sleep.tint)
-                    ?? TintPreset.graphite.hex
-                let stored = TintValue.sleepStorage(fromCommitted: newHex)
-                guard current != TintValue.committedHex(fromSleep: stored) else { return }
+                guard let stored = TintValue.sleepTintIfChanged(
+                    from: store.config.sleep.tint, committing: newHex
+                ) else { return }
                 store.config.sleep.tint = stored
             }
         )
