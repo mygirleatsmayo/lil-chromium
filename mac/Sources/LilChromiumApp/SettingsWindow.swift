@@ -307,21 +307,12 @@ struct SettingsRoot: View {
             Toggle("Don’t sleep lils playing audio", isOn: audioGuardBinding)
             Toggle("Don’t sleep lils with unsaved form input", isOn: formGuardBinding)
 
-            sleepTintControls
+            TintEditor(
+                committed: sleepTintBinding,
+                reloadToken: store.reloadToken,
+                label: "Lil Nap tint"
+            )
             whitelistEditor
-        }
-    }
-
-    /// Tint picker (Purple / Gray / Custom hex). "Custom" reveals a hex field.
-    @ViewBuilder private var sleepTintControls: some View {
-        Picker("Sleep tint", selection: sleepTintKindBinding) {
-            Text("Purple").tag("purple")
-            Text("Gray").tag("gray")
-            Text("Custom").tag("custom")
-        }
-        if sleepTintKindBinding.wrappedValue == "custom" {
-            TextField("#RRGGBB", text: sleepTintHexBinding)
-                .textFieldStyle(.roundedBorder)
         }
     }
 
@@ -388,14 +379,11 @@ struct SettingsRoot: View {
                 Text("Glass").tag("glass")
                 Text("Solid").tag("solid")
             }
-            Picker("Tint", selection: hoverTintKindBinding) {
-                Text("None").tag("none")
-                Text("Custom").tag("custom")
-            }
-            if hoverTintKindBinding.wrappedValue == "custom" {
-                TextField("#RRGGBB", text: hoverTintHexBinding)
-                    .textFieldStyle(.roundedBorder)
-            }
+            TintEditor(
+                committed: hoverTintBinding,
+                reloadToken: store.reloadToken,
+                label: "Tint"
+            )
         }
     }
 
@@ -472,30 +460,18 @@ struct SettingsRoot: View {
                 set: { store.config.sleep.formGuard = $0 })
     }
 
-    /// Maps the stored tint string onto the three-way picker: "purple"/"gray"
-    /// are literal; anything else (a #hex) reads as "custom".
-    private var sleepTintKindBinding: Binding<String> {
+    /// Optional hex for the shared editor. Named PROTOCOL tokens display as
+    /// chips; a write is skipped when the stored value already shows as that hex
+    /// so opening Settings does not rewrite `"purple"`/`"gray"`.
+    private var sleepTintBinding: Binding<String?> {
         Binding(
-            get: {
-                let t = store.config.sleep.tint
-                return (t == "purple" || t == "gray") ? t : "custom"
-            },
-            set: { kind in
-                switch kind {
-                case "purple": store.config.sleep.tint = "purple"
-                case "gray": store.config.sleep.tint = "gray"
-                default:
-                    // Switching to custom: seed with the current value if it's a
-                    // hex, else a sensible default.
-                    let t = store.config.sleep.tint
-                    store.config.sleep.tint = t.hasPrefix("#") ? t : "#7C5CFF"
-                }
+            get: { TintValue.committedHex(fromSleep: store.config.sleep.tint) },
+            set: { newHex in
+                let current = TintValue.committedHex(fromSleep: store.config.sleep.tint)
+                guard current != newHex else { return }
+                store.config.sleep.tint = TintValue.sleepStorage(fromCommitted: newHex)
             }
         )
-    }
-    private var sleepTintHexBinding: Binding<String> {
-        Binding(get: { store.config.sleep.tint },
-                set: { store.config.sleep.tint = $0 })
     }
 
     // Search preset binding: maps the stored template onto a preset id, and on
@@ -527,22 +503,14 @@ struct SettingsRoot: View {
         Binding(get: { store.config.hoverBar.style },
                 set: { store.config.hoverBar.style = $0 })
     }
-    private var hoverTintKindBinding: Binding<String> {
+    private var hoverTintBinding: Binding<String?> {
         Binding(
-            get: { store.config.hoverBar.tint == nil ? "none" : "custom" },
-            set: { kind in
-                if kind == "none" {
-                    store.config.hoverBar.tint = nil
-                } else {
-                    store.config.hoverBar.tint = store.config.hoverBar.tint ?? "#7C5CFF"
-                }
+            get: { TintValue.committedHex(fromHoverBar: store.config.hoverBar.tint) },
+            set: { newHex in
+                let current = TintValue.committedHex(fromHoverBar: store.config.hoverBar.tint)
+                guard current != newHex else { return }
+                store.config.hoverBar.tint = TintValue.hoverBarStorage(fromCommitted: newHex)
             }
-        )
-    }
-    private var hoverTintHexBinding: Binding<String> {
-        Binding(
-            get: { store.config.hoverBar.tint ?? "" },
-            set: { store.config.hoverBar.tint = $0.isEmpty ? nil : $0 }
         )
     }
 }
