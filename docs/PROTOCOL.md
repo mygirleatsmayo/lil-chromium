@@ -69,8 +69,9 @@ Written by the app (Settings window / menu). Read by the app and by each host (f
     "whitelist": []
   },
   "searchEngine": {
-    "name": "Google",
-    "template": "https://www.google.com/search?q=%s"
+    "provider": "startpage",
+    "name": "Startpage",
+    "template": "https://www.startpage.com/sp/search?query=%s"
   },
   "hoverBar": {
     "style": "glass",
@@ -88,7 +89,7 @@ Written by the app (Settings window / menu). Read by the app and by each host (f
 - `linkBehavior` (v3 semantics): governs links that request a new tab/window (`target=_blank` etc.) from a lil. `"new-lil"` (DEFAULT: cascade into a new lil) | `"same-lil"` (collapse into the current lil — settings copy must warn this can break some sign-in popups). Native popup windows (featureful `window.open`, OAuth) are ALWAYS left alone regardless of this setting. ⌘-click flips the behavior per click.
 - `ephemeralDefault`: `"never" | "6h" | "12h" | "24h" | "quit"` — default lifetime for new lils. `"quit"` = excluded from restore-on-startup. Hours = auto-close that long after the lil's last user interaction. Per-lil override lives in the extension registry, set from the hover bar menu.
 - `sleep`: resource saver. `enabled` + `afterMinutes` (idle before auto-sleep), `audioGuard` (skip lils playing audio — toggle, default ON), `formGuard` (skip lils with unsubmitted form input — toggle, default ON), `tint` (`"gray" | "purple"` or `#rrggbb` overlay color), `whitelist` (domains never auto-slept).
-- `searchEngine`: `template` with `%s` placeholder. Used by BOTH the palette and the lil hover-bar omnibox. Presets in Settings: Google, DuckDuckGo, Bing, Kagi, Custom.
+- `searchEngine`: `provider` id + `name` + `template` with `%s` placeholder. `provider` is the explicit Settings selection (`google` | `ddg` | `bing` | `kagi` | `startpage` | `custom`) and is never inferred from `template`. Used by BOTH the palette and the lil hover-bar omnibox. Presets in Settings: Google, DuckDuckGo, Bing, Kagi, Startpage, Custom.
 - `hoverBar`: `style` `"glass"` (v0.2 look) | `"solid"` (adaptive title-bar-like background; glass kept only on the address input). `tint` optional `#rrggbb`, applies to either style.
 - `knownBrowsers`: app scans /Applications + NSWorkspace on launch and on settings-open, writes results. Hosts/extension treat it as read-only truth.
 - Missing file/fields → built-in defaults above. First app launch with no config opens the Settings window (onboarding) and writes it. All writers (app AND host) preserve unknown fields via read-merge-write.
