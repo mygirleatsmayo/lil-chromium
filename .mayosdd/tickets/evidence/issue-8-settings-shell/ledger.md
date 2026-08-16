@@ -35,3 +35,17 @@ Checked directly, not taken on the reviewer's word: `MainMenu.swift:77,80`; miss
 ## Raw reports
 
 `raw/issue-8-round1-standards-TBAKi6uM.md`, `raw/issue-8-round1-spec-nvQGlrPO.md`
+
+## Round 3 — remediation review (`42EX2i5m`)
+
+Rows S2, S3, P1, P2 all confirmed `resolved`. No new defects in the fix delta.
+
+## Round 4 — final full review (`2cvNe-qS` Standards, `DUpmdClu` Spec)
+
+Spec: no findings. Standards: one, amended below.
+
+## Amendment — adjudicated by Lucas 2026-08-16
+
+| ID | Verdict | Location | Finding | Required outcome |
+|---|---|---|---|---|
+| F1 | **fix** | `SettingsWindow.swift:43` `contentRect` 460x560 vs `SettingsRoot` `.frame(width: 440, height: 520)`; `placeNearCenteredPalette` | The origin is computed from `window.frame.size`, which derives from the 460x560 `contentRect`, while the real content is 440x520. The 20% top-edge maths therefore uses a height that does not match the window's final height — the very thing row S3 was meant to fix. | One defined size. Compute the origin from the real content size, or place the window only after the hosting controller has sized it. Remove the now-dead 460x560 literal so a single size exists. |
