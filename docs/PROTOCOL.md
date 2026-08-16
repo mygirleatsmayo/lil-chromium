@@ -15,8 +15,38 @@ Native messaging host name: `com.lilchromium.relay`
 
 ## Browser slugs
 
-`chrome`, `helium`, `brave`, `edge`, `arc`, `vivaldi`, `chromium`, `unknown`.
-The host detects its own browser at startup: `proc_pidpath(getppid())` → substring match on the executable path (helpers' paths contain the browser `.app` path). Bundle ids: chrome `com.google.Chrome`, helium `net.imput.helium`, brave `com.brave.Browser`, edge `com.microsoft.edgemac`, arc `company.thebrowser.Browser`, vivaldi `com.vivaldi.Vivaldi`, chromium `org.chromium.Chromium`.
+Each independently installed Chromium app or release channel is its own routing target (`relay-<slug>.sock`). Sibling channels of one browser product stay separate (Chrome Beta is not Chrome). Browser profiles are not slugs and are not routing targets.
+
+`unknown` is the host-detection fallback when the parent process matches nothing; it is not a catalog entry and has no bundle id.
+
+| slug | display name | bundle id | native-host dir |
+|------|--------------|-----------|-----------------|
+| `chrome` | Google Chrome | `com.google.Chrome` | `Google/Chrome` |
+| `chrome-beta` | Google Chrome Beta | `com.google.Chrome.beta` | `Google/Chrome Beta` |
+| `chrome-dev` | Google Chrome Dev | `com.google.Chrome.dev` | `Google/Chrome Dev` |
+| `chrome-canary` | Google Chrome Canary | `com.google.Chrome.canary` | `Google/Chrome Canary` |
+| `brave` | Brave | `com.brave.Browser` | `BraveSoftware/Brave-Browser` |
+| `brave-beta` | Brave Beta | `com.brave.Browser.beta` | `BraveSoftware/Brave-Browser-Beta` |
+| `brave-dev` | Brave Dev | `com.brave.Browser.dev` | `BraveSoftware/Brave-Browser-Dev` |
+| `brave-nightly` | Brave Nightly | `com.brave.Browser.nightly` | `BraveSoftware/Brave-Browser-Nightly` |
+| `edge` | Microsoft Edge | `com.microsoft.edgemac` | `Microsoft Edge` |
+| `edge-beta` | Microsoft Edge Beta | `com.microsoft.edgemac.Beta` | `Microsoft Edge Beta` |
+| `edge-dev` | Microsoft Edge Dev | `com.microsoft.edgemac.Dev` | `Microsoft Edge Dev` |
+| `edge-canary` | Microsoft Edge Canary | `com.microsoft.edgemac.Canary` | `Microsoft Edge Canary` |
+| `vivaldi` | Vivaldi | `com.vivaldi.Vivaldi` | `Vivaldi` |
+| `vivaldi-snapshot` | Vivaldi Snapshot | `com.vivaldi.Vivaldi.snapshot` | `Vivaldi Snapshot` |
+| `opera` | Opera | `com.operasoftware.Opera` | `com.operasoftware.Opera` |
+| `opera-gx` | Opera GX | `com.operasoftware.OperaGX` | `com.operasoftware.OperaGX` |
+| `opera-developer` | Opera Developer | `com.operasoftware.OperaDeveloper` | `com.operasoftware.OperaDeveloper` |
+| `helium` | Helium | `net.imput.helium` | `net.imput.helium` |
+| `arc` | Arc | `company.thebrowser.Browser` | `Arc/User Data` |
+| `dia` | Dia | `company.thebrowser.dia` | `Dia/User Data` |
+| `comet` | Comet | `ai.perplexity.comet` | `ai.perplexity.comet` |
+| `chromium` | Chromium | `org.chromium.Chromium` | `Chromium` |
+
+The host detects its own browser at startup: `proc_pidpath(getppid())` → longest-first lowercase substring match on the executable path (helpers' paths contain the browser `.app` path). The needle is that `.app/` folder name, so `google chrome beta.app/` cannot match `chrome`. Helium also matches `helium framework` / `helium helper` / `net.imput.helium`.
+
+Native-host dir is relative to `~/Library/Application Support/`. The installer writes `NativeMessagingHosts/com.lilchromium.relay.json` there when that support directory already exists. Channels do not share a support directory.
 
 ## Config file — `~/.lilchromium/config.json`
 
@@ -139,8 +169,7 @@ As v1: host queues `open` (max 20 FIFO) while the port is down; `history-query` 
 
 ## Installer contract
 
-`scripts/install-host.sh` writes the manifest into every existing browser dir among:
-`Google/Chrome`, `Google/Chrome Beta`, `Google/Chrome Canary`, `net.imput.helium`, `BraveSoftware/Brave-Browser`, `Microsoft Edge`, `Arc/User Data`, `Vivaldi`, `Chromium` (each under `~/Library/Application Support/`, + `/NativeMessagingHosts/com.lilchromium.relay.json`). Helium does NOT read Chrome's manifests — its own dir is required.
+`scripts/install-host.sh` writes the manifest into every existing browser dir among the catalog's native-host dirs (see Browser slugs): `Google/Chrome`, `Google/Chrome Beta`, `Google/Chrome Dev`, `Google/Chrome Canary`, `BraveSoftware/Brave-Browser`, `BraveSoftware/Brave-Browser-Beta`, `BraveSoftware/Brave-Browser-Dev`, `BraveSoftware/Brave-Browser-Nightly`, `Microsoft Edge`, `Microsoft Edge Beta`, `Microsoft Edge Dev`, `Microsoft Edge Canary`, `Vivaldi`, `Vivaldi Snapshot`, `com.operasoftware.Opera`, `com.operasoftware.OperaGX`, `com.operasoftware.OperaDeveloper`, `net.imput.helium`, `Arc/User Data`, `Dia/User Data`, `ai.perplexity.comet`, `Chromium` (each under `~/Library/Application Support/`, + `/NativeMessagingHosts/com.lilchromium.relay.json`). A dir is "existing" when that support directory is already present; missing installations are skipped, not created. Helium does NOT read Chrome's manifests — its own dir is required. Channels do not share a support directory.
 
 ## Coordinates / filesystem layout
 

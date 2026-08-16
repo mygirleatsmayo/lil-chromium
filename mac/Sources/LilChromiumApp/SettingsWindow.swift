@@ -137,7 +137,7 @@ final class SettingsStore: ObservableObject {
 
     /// Browsers Launch Services could resolve — the only valid picker choices.
     var installedBrowsers: [KnownBrowser] {
-        config.knownBrowsers.filter { $0.installed }
+        BrowserCatalog.installedChoices(from: config.knownBrowsers)
     }
 
     /// True when the chosen default browser is not currently installed (drives
