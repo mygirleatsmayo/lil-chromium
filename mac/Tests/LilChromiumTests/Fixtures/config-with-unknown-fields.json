@@ -1,0 +1,29 @@
+{
+  "version": 3,
+  "defaultBrowser": "helium",
+  "fallbackBrowser": "chrome",
+  "paletteAnchor": "top-center",
+  "linkBehavior": "new-lil",
+  "ephemeralDefault": "never",
+  "sleep": {
+    "enabled": false,
+    "afterMinutes": 30,
+    "audioGuard": true,
+    "formGuard": true,
+    "tint": "purple",
+    "whitelist": ["Mail.Google.com"],
+    "wakeFeedback": "chime"
+  },
+  "searchEngine": {
+    "name": "Google",
+    "template": "https://www.google.com/search?q=%s"
+  },
+  "hoverBar": {
+    "style": "glass"
+  },
+  "knownBrowsers": [],
+  "lilNap": {
+    "revealZonePx": 24,
+    "restorePriorContext": true
+  }
+}

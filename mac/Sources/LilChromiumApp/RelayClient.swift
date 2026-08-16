@@ -25,23 +25,24 @@ enum RelayClient {
 
     /// The routing order for sockets, per PROTOCOL.md "App routing order":
     /// 1. relay-<defaultBrowser>.sock  2. relay-<fallbackBrowser>.sock
-    /// 3. any other relay-*.sock present (newest mtime first).
-    /// Deduped, preserving order. Reads config fresh each call.
+    /// 3. any other live relay-*.sock (`liveSlugs`, newest mtime first).
+    /// Deduped, preserving order; empty slugs are dropped.
+    static func socketOrder(defaultBrowser: String, fallbackBrowser: String, liveSlugs: [String]) -> [String] {
+        var seen = Set<String>()
+        return ([defaultBrowser, fallbackBrowser] + liveSlugs).filter { slug in
+            !slug.isEmpty && seen.insert(slug).inserted
+        }
+    }
+
+    /// `socketOrder` bound to the live world: config read fresh, sockets scanned.
     private static func routedSockets() -> [(slug: String, path: String)] {
         let cfg = LilConfig.load()
-        var order: [String] = [cfg.defaultBrowser, cfg.fallbackBrowser]
-        // Append every present socket's slug (newest first) for step 3.
-        for entry in LilPaths.allSocketURLs() where !order.contains(entry.slug) {
-            order.append(entry.slug)
-        }
-        // Dedupe while preserving order (default/fallback may coincide).
-        var seen = Set<String>()
-        var result: [(slug: String, path: String)] = []
-        for slug in order where !slug.isEmpty && !seen.contains(slug) {
-            seen.insert(slug)
-            result.append((slug: slug, path: LilPaths.socketPath(forBrowser: slug)))
-        }
-        return result
+        let order = socketOrder(
+            defaultBrowser: cfg.defaultBrowser,
+            fallbackBrowser: cfg.fallbackBrowser,
+            liveSlugs: LilPaths.allSocketURLs().map(\.slug)
+        )
+        return order.map { (slug: $0, path: LilPaths.socketPath(forBrowser: $0)) }
     }
 
     /// Connect to the relay socket at `path` with a millisecond connect timeout.

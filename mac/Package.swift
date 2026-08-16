@@ -20,6 +20,13 @@ let package = Package(
         .executableTarget(
             name: "lilchromium-host",
             dependencies: ["LilShared"]
+        ),
+        // Behavior tests for the contract: config, messages, routing, URL intent,
+        // palette ranking. One target so every suite shares one fixture set.
+        .testTarget(
+            name: "LilChromiumTests",
+            dependencies: ["LilShared", "LilChromiumApp"],
+            resources: [.copy("Fixtures")]
         )
     ]
 )

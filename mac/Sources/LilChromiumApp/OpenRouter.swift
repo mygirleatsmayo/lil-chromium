@@ -98,29 +98,29 @@ enum OpenRouter {
     /// the link is dropped (logged) rather than looping.
     static func fallbackOpenInBrowser(_ urlString: String) {
         guard let url = URL(string: urlString) else { return }
+        openFirstAvailable(url, bundleIds: launchBundleIds(config: .load()), ws: NSWorkspace.shared)
+    }
 
-        let cfg = LilConfig.load()
-        let ws = NSWorkspace.shared
-
-        // Build the ordered candidate bundle-id list.
-        var candidateBundleIds: [String] = []
+    /// The ordered launch candidates for a config snapshot (PROTOCOL.md routing
+    /// steps 4–5): primary browser, fallback browser, then every installed known
+    /// browser. Deduped; slugs with no known bundle id drop out.
+    static func launchBundleIds(config cfg: LilConfig) -> [String] {
+        var candidates: [String] = []
+        func append(_ bundleId: String?) {
+            guard let bid = bundleId, !bid.isEmpty, !candidates.contains(bid) else { return }
+            candidates.append(bid)
+        }
         func appendBundleId(forSlug slug: String) {
             guard !slug.isEmpty else { return }
             // Prefer the config's recorded bundle id; fall back to the table.
-            let bid = cfg.knownBrowsers.first(where: { $0.slug == slug })?.bundleId
-                ?? BrowserTable.bundleId(forSlug: slug)
-            if let bid = bid, !bid.isEmpty, !candidateBundleIds.contains(bid) {
-                candidateBundleIds.append(bid)
-            }
+            append(cfg.knownBrowsers.first(where: { $0.slug == slug })?.bundleId
+                ?? BrowserTable.bundleId(forSlug: slug))
         }
         appendBundleId(forSlug: cfg.defaultBrowser)
         appendBundleId(forSlug: cfg.fallbackBrowser)
         // Then any installed known browser from the config scan.
-        for kb in cfg.knownBrowsers where kb.installed && !candidateBundleIds.contains(kb.bundleId) {
-            candidateBundleIds.append(kb.bundleId)
-        }
-
-        openFirstAvailable(url, bundleIds: candidateBundleIds, ws: ws)
+        for kb in cfg.knownBrowsers where kb.installed { append(kb.bundleId) }
+        return candidates
     }
 
     /// Try each bundle id in order; launch with the first one Launch Services

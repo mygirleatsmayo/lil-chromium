@@ -1,0 +1,15 @@
+{
+  "type": "history-result",
+  "id": "h-1",
+  "items": [
+    {"url": "https://github.com/", "title": "GitHub", "lastVisitTime": 1699990000000, "visitCount": 120, "typedCount": 40},
+    {"url": "https://github.com/mygirleatsmayo/lil-chromium/commit/deadbeef", "title": "Fix gizmo alignment", "lastVisitTime": 1699999000000, "visitCount": 9, "typedCount": 0},
+    {"url": "https://www.example.com/posts?q=sys", "title": "Example posts", "lastVisitTime": 1699998000000, "visitCount": 4, "typedCount": 0},
+    {"url": "https://www.example.com/posts?q=syst", "title": "Example posts", "lastVisitTime": 1699998100000, "visitCount": 5, "typedCount": 0},
+    {"url": "https://www.example.com/posts?q=syste", "title": "Example posts", "lastVisitTime": 1699998200000, "visitCount": 6, "typedCount": 0},
+    {"url": "https://example.com/pricing", "title": "Example pricing", "lastVisitTime": 1699997000000, "visitCount": 7, "typedCount": 1},
+    {"url": "https://example.com/support", "title": "Example support", "lastVisitTime": 1699996000000, "visitCount": 8, "typedCount": 1},
+    {"url": "https://news.ycombinator.com/item?id=42", "title": "Ask HN: browser tooling", "lastVisitTime": 1699995000000, "visitCount": 3, "typedCount": 0},
+    {"url": "https://docs.swift.org/guide"}
+  ]
+}
