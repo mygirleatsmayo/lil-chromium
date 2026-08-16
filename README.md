@@ -77,7 +77,7 @@ The palette closes only on **Esc**, **⌘⌥N**, **X**, or opening a result, so 
 
 ## Settings
 
-Menu bar → **Settings…**: primary browser (button label + promote target + palette history source), fallback browser, palette position (centered near top / top right), new-window link behavior, lil lifetime default, sleep (idle minutes, audio guard, form guard, overlay tint, and the never-sleep whitelist), search engine (Google, DuckDuckGo, Bing, Kagi, or a custom template), hover bar style (Glass or Solid) with an optional tint, and launch at login. Stored at `~/.lilchromium/config.json`.
+Menu bar → **Settings…**: primary browser (button label + promote target + palette history source), fallback browser, palette position (centered near top / top right), new-window link behavior, lil lifetime default, sleep (idle minutes, audio guard, form guard, overlay tint, and the never-sleep whitelist), search engine (Startpage, Google, DuckDuckGo, Bing, Kagi, or a custom template), hover bar style (Glass or Solid) with an optional tint, and launch at login. Stored at `~/.lilchromium/config.json`.
 
 ## Troubleshooting
 

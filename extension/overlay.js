@@ -232,7 +232,7 @@
       linkBehavior: "new-lil",
       ephemeralDefault: "never",
       sleep: { whitelist: [] },
-      searchEngine: { name: "Google", template: "https://www.google.com/search?q=%s" },
+      searchEngine: { name: "Startpage", template: "https://www.startpage.com/sp/search?query=%s" },
       hoverBar: { style: "glass", tint: null },
       knownBrowsers: [],
     };
@@ -791,7 +791,7 @@
     }
 
     function buildSearchRow(query) {
-      const name = (context.searchEngine && context.searchEngine.name) || "Google";
+      const name = (context.searchEngine && context.searchEngine.name) || "Startpage";
       return { type: "search", title: `Search ${name} for “${query}”`, query };
     }
 

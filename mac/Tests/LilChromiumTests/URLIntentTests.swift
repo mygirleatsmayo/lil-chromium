@@ -43,7 +43,7 @@ struct URLIntentTests {
     @Test func searchTemplateSubstitutesTheEncodedQuery() {
         #expect(
             SearchEngineConfig.defaults.searchURL(for: "lil chromium")
-                == "https://www.google.com/search?q=lil%20chromium"
+                == "https://www.startpage.com/sp/search?query=lil%20chromium"
         )
         #expect(
             SearchEngineConfig(name: "Kagi", template: "https://kagi.com/search?q=%s").searchURL(for: "café")
@@ -63,15 +63,16 @@ struct URLIntentTests {
     @Test func searchTemplateTrimsTheQuery() {
         #expect(
             SearchEngineConfig.defaults.searchURL(for: "  swift  ")
-                == "https://www.google.com/search?q=swift"
+                == "https://www.startpage.com/sp/search?query=swift"
         )
     }
 
-    /// A template with no placeholder cannot carry a query — fall back to Google
-    /// rather than opening the bare template.
-    @Test func templateWithoutPlaceholderFallsBackToGoogle() {
+    /// A template with no placeholder cannot carry a query — fall back to the
+    /// default (Startpage) template rather than opening the bare template.
+    @Test func templateWithoutPlaceholderFallsBackToDefault() {
         let broken = SearchEngineConfig(name: "Broken", template: "https://example.com/search")
 
-        #expect(broken.searchURL(for: "swift") == "https://www.google.com/search?q=swift")
+        #expect(broken.searchURL(for: "swift") == "https://www.startpage.com/sp/search?query=swift")
+        #expect(broken.provider == "custom")
     }
 }

@@ -70,7 +70,7 @@ const DEFAULT_SLEEP = {
   tint: "purple",
   whitelist: [],
 };
-const DEFAULT_SEARCH = { name: "Google", template: "https://www.google.com/search?q=%s" };
+const DEFAULT_SEARCH = { name: "Startpage", template: "https://www.startpage.com/sp/search?query=%s" };
 const DEFAULT_HOVERBAR = { style: "glass", tint: null };
 const DEFAULT_CONTEXT = {
   browser: "chrome",
