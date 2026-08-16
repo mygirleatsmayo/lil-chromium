@@ -32,3 +32,14 @@
 ## Raw reports
 
 `raw/issue-3-round1-standards-xAWZHEty.md`, `raw/issue-3-round1-spec-xbP06ufb.md`
+
+## Round 3 — remediation review (`03rtzYFj`)
+
+Ledger rows S1, S2, S4, P2, P3 all confirmed `resolved`. `swift test` 50 pass; clean-`HOME` pass.
+
+## Amendment — adjudicated by Lucas 2026-08-16
+
+| ID | Verdict | Location | Finding | Required outcome |
+|---|---|---|---|---|
+| N1 | **won't-fix — subsumed by N2** | `Fixture.contextData` | Copies every config key onto the synthetic context wire, so `version` and `paletteAnchor` ride along outside `docs/PROTOCOL.md`'s closed context field set. Tests pass because Codable ignores extras. | Fixing N2 removes the composition entirely, so this disappears with it. No separate action. |
+| N2 | **fix** (manager finding) | `Fixture.swift` · `contextData`, deleted `fixtures/message-context.json` | Row S2 deduplicated by deleting the context fixture and composing the wire in Swift. That partly undoes P3: Issue #2 Testing Decision 4 requires fixtures both language suites read, and Issue #4's Node/MV3 suite cannot read a Swift function. | Restore `message-context.json` as a real file under repo-root `fixtures/`, built to `docs/PROTOCOL.md`'s closed context field set. Delete `Fixture.contextData`. S2's no-duplication goal yields to P3's cross-language requirement where the two conflict. |
