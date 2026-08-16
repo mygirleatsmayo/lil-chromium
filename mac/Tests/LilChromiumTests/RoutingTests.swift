@@ -1,4 +1,4 @@
-import XCTest
+import Testing
 @testable import LilChromiumApp
 @testable import LilShared
 
@@ -10,42 +10,42 @@ import XCTest
 ///
 /// Order is decided by pure functions over a config snapshot and a list of live
 /// sockets, so these tests never touch a real socket or the user's config.
-final class RoutingOrderTests: XCTestCase {
+struct RoutingOrderTests {
 
     // MARK: - Steps 1-3: relay sockets
 
-    func testPrimaryThenFallbackThenOtherLiveHosts() {
+    @Test func primaryThenFallbackThenOtherLiveHosts() {
         let order = RelayClient.socketOrder(
             defaultBrowser: "helium",
             fallbackBrowser: "chrome",
             liveSlugs: ["brave", "chrome", "vivaldi"]   // newest mtime first
         )
 
-        XCTAssertEqual(order, ["helium", "chrome", "brave", "vivaldi"])
+        #expect(order == ["helium", "chrome", "brave", "vivaldi"])
     }
 
     /// The primary browser leads even when its socket is not currently live —
     /// the connect attempt is what decides, not the directory listing.
-    func testPrimaryLeadsEvenWithNoLiveSockets() {
-        XCTAssertEqual(
-            RelayClient.socketOrder(defaultBrowser: "helium", fallbackBrowser: "chrome", liveSlugs: []),
-            ["helium", "chrome"]
+    @Test func primaryLeadsEvenWithNoLiveSockets() {
+        #expect(
+            RelayClient.socketOrder(defaultBrowser: "helium", fallbackBrowser: "chrome", liveSlugs: [])
+                == ["helium", "chrome"]
         )
     }
 
     /// One browser is never tried twice, however it appears.
-    func testDuplicateTargetsCollapse() {
-        XCTAssertEqual(
-            RelayClient.socketOrder(defaultBrowser: "brave", fallbackBrowser: "brave", liveSlugs: ["brave"]),
-            ["brave"]
+    @Test func duplicateTargetsCollapse() {
+        #expect(
+            RelayClient.socketOrder(defaultBrowser: "brave", fallbackBrowser: "brave", liveSlugs: ["brave"])
+                == ["brave"]
         )
     }
 
     /// An unset primary or fallback is skipped, not turned into "relay-.sock".
-    func testEmptySlugsAreDropped() {
-        XCTAssertEqual(
-            RelayClient.socketOrder(defaultBrowser: "", fallbackBrowser: "chrome", liveSlugs: ["", "arc"]),
-            ["chrome", "arc"]
+    @Test func emptySlugsAreDropped() {
+        #expect(
+            RelayClient.socketOrder(defaultBrowser: "", fallbackBrowser: "chrome", liveSlugs: ["", "arc"])
+                == ["chrome", "arc"]
         )
     }
 
@@ -53,7 +53,7 @@ final class RoutingOrderTests: XCTestCase {
 
     /// With no relay answering, the app launches browsers in the same preference
     /// order and never bare-opens the URL (it is the system default handler).
-    func testLaunchOrderIsPrimaryFallbackThenInstalled() {
+    @Test func launchOrderIsPrimaryFallbackThenInstalled() {
         var cfg = LilConfig.defaults
         cfg.defaultBrowser = "helium"
         cfg.fallbackBrowser = "chrome"
@@ -63,16 +63,16 @@ final class RoutingOrderTests: XCTestCase {
             KnownBrowser(slug: "chrome", name: "Google Chrome", bundleId: "com.google.Chrome", installed: true),
         ]
 
-        XCTAssertEqual(
-            OpenRouter.launchBundleIds(config: cfg),
-            ["net.imput.helium", "com.google.Chrome", "com.brave.Browser"],
+        #expect(
+            OpenRouter.launchBundleIds(config: cfg)
+                == ["net.imput.helium", "com.google.Chrome", "com.brave.Browser"],
             "primary, fallback, then installed browsers; uninstalled ones are never launched"
         )
     }
 
     /// A browser installation recorded in the config wins over the built-in
     /// table, so a relocated or channel-specific install is still launchable.
-    func testConfigBundleIdBeatsTheBuiltInTable() {
+    @Test func configBundleIdBeatsTheBuiltInTable() {
         var cfg = LilConfig.defaults
         cfg.defaultBrowser = "chrome"
         cfg.fallbackBrowser = ""
@@ -80,17 +80,17 @@ final class RoutingOrderTests: XCTestCase {
             KnownBrowser(slug: "chrome", name: "Chrome Beta", bundleId: "com.google.Chrome.beta", installed: true)
         ]
 
-        XCTAssertEqual(OpenRouter.launchBundleIds(config: cfg), ["com.google.Chrome.beta"])
+        #expect(OpenRouter.launchBundleIds(config: cfg) == ["com.google.Chrome.beta"])
     }
 
     /// An unrecognized slug has no bundle id: it drops out instead of producing
     /// a launch that cannot work.
-    func testUnknownSlugContributesNothing() {
+    @Test func unknownSlugContributesNothing() {
         var cfg = LilConfig.defaults
         cfg.defaultBrowser = "unknown"
         cfg.fallbackBrowser = "netscape"
         cfg.knownBrowsers = []
 
-        XCTAssertEqual(OpenRouter.launchBundleIds(config: cfg), [])
+        #expect(OpenRouter.launchBundleIds(config: cfg) == [])
     }
 }

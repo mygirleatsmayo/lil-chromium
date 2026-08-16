@@ -12,7 +12,7 @@
     "formGuard": true,
     "tint": "purple",
     "whitelist": ["Mail.Google.com"],
-    "wakeFeedback": "chime"
+    "unknownNestedProbe": "chime"
   },
   "searchEngine": {
     "name": "Google",
@@ -22,8 +22,8 @@
     "style": "glass"
   },
   "knownBrowsers": [],
-  "lilNap": {
-    "revealZonePx": 24,
-    "restorePriorContext": true
+  "unknownSectionProbe": {
+    "someNumber": 24,
+    "someFlag": true
   }
 }

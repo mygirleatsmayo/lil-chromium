@@ -1,159 +1,178 @@
-import XCTest
+import Foundation
+import Testing
 @testable import LilShared
 
 /// Wire behavior for the app <-> host <-> extension messages in
 /// docs/PROTOCOL.md: what an older component may send, and exactly what bytes
 /// this component puts back on the wire.
-final class MessageTests: XCTestCase {
+struct MessageTests {
 
     // MARK: - open
 
     /// v0.3 compatibility: an `open` written before incognito lils existed still
     /// decodes, and means "not incognito".
-    func testLegacyOpenDecodesWithoutIncognito() throws {
+    @Test func legacyOpenDecodesWithoutIncognito() throws {
         let msg = try Fixture.decode(OpenMessage.self, from: "message-open-legacy")
 
-        XCTAssertEqual(msg.type, "open")
-        XCTAssertEqual(msg.url, "https://example.com/docs")
-        XCTAssertEqual(msg.left, 120)
-        XCTAssertEqual(msg.top, 80)
-        XCTAssertNil(msg.incognito)
+        #expect(msg.type == "open")
+        #expect(msg.url == "https://example.com/docs")
+        #expect(msg.left == 120)
+        #expect(msg.top == 80)
+        #expect(msg.incognito == nil)
     }
 
     /// A normal lil carries no `incognito` key at all — the extension must not
     /// have to distinguish `false` from `null`.
-    func testNormalOpenOmitsIncognitoOnTheWire() throws {
+    @Test func normalOpenOmitsIncognitoOnTheWire() throws {
         let encoded = try LilCodec.encode(OpenMessage(url: "https://example.com", left: 1, top: 2))
         let out = try jsonObject(encoded)
 
-        XCTAssertEqual(out.keys.sorted(), ["left", "top", "type", "url"])
+        #expect(out.keys.sorted() == ["left", "top", "type", "url"])
     }
 
     /// Palette ⌘-Enter: the incognito flag reaches the extension.
-    func testIncognitoOpenCarriesTheFlag() throws {
+    @Test func incognitoOpenCarriesTheFlag() throws {
         let encoded = try LilCodec.encode(OpenMessage(url: "https://example.com", left: 1, top: 2, incognito: true))
-        XCTAssertEqual(try jsonObject(encoded)["incognito"] as? Bool, true)
+        let out = try jsonObject(encoded)
+        #expect(out["incognito"] as? Bool == true)
     }
 
     // MARK: - ping / pong
 
     /// v0.3 compatibility: a pong from a host that predates per-browser sockets
     /// reports an unknown browser rather than failing the decode.
-    func testLegacyPongDefaultsToUnknownBrowser() throws {
+    @Test func legacyPongDefaultsToUnknownBrowser() throws {
         let pong = try Fixture.decode(PongMessage.self, from: "message-pong-legacy")
 
-        XCTAssertEqual(pong.id, "7f1c")
-        XCTAssertTrue(pong.extensionConnected)
-        XCTAssertEqual(pong.browser, "unknown")
+        #expect(pong.id == "7f1c")
+        #expect(pong.extensionConnected)
+        #expect(pong.browser == "unknown")
     }
 
     // MARK: - context
 
     /// The context reply carries the full config objects verbatim plus the host's
-    /// own identity, so the extension needs no second read of config.json.
-    func testContextCarriesConfigObjectsAndHostIdentity() throws {
-        let ctx = try Fixture.decode(ContextMessage.self, from: "message-context")
+    /// own identity, so the extension needs no second read of config.json. The
+    /// wire bytes are composed from the config fixture (see Fixture.contextData)
+    /// so the config sections are expressed in exactly one fixture.
+    @Test func contextCarriesConfigObjectsAndHostIdentity() throws {
+        let cfg = try Fixture.decode(LilConfig.self, from: "config-v2-complete")
+        let wire = try Fixture.contextData(browser: "brave", browserName: "Brave")
+        let ctx = try Fixture.decode(ContextMessage.self, from: wire)
 
         // Host identity is the host's, not the config's.
-        XCTAssertEqual(ctx.browser, "brave")
-        XCTAssertEqual(ctx.browserName, "Brave")
+        #expect(ctx.browser == "brave")
+        #expect(ctx.browserName == "Brave")
+        #expect(ctx.browser != ctx.defaultBrowser)
         // Routing targets come from the config.
-        XCTAssertEqual(ctx.defaultBrowser, "helium")
-        XCTAssertEqual(ctx.defaultBrowserName, "Helium")
-        XCTAssertEqual(ctx.fallbackBrowser, "chrome")
-        // Config sections arrive whole.
-        XCTAssertEqual(ctx.ephemeralDefault, "6h")
-        XCTAssertEqual(ctx.sleep.afterMinutes, 45)
-        XCTAssertFalse(ctx.sleep.formGuard)
-        XCTAssertEqual(ctx.searchEngine.template, "https://kagi.com/search?q=%s")
-        XCTAssertEqual(ctx.hoverBar.style, "solid")
-        XCTAssertEqual(ctx.hoverBar.tint, "#112233")
-        // Browsers are the trimmed context shape: no bundle ids.
-        XCTAssertEqual(ctx.knownBrowsers.map(\.slug), ["helium", "brave"])
+        #expect(ctx.defaultBrowser == cfg.defaultBrowser)
+        #expect(ctx.defaultBrowserName == "Helium")
+        #expect(ctx.fallbackBrowser == cfg.fallbackBrowser)
+        #expect(ctx.linkBehavior == cfg.linkBehavior)
+        // Config sections arrive whole, verbatim from config.json.
+        #expect(ctx.ephemeralDefault == cfg.ephemeralDefault)
+        #expect(ctx.sleep.afterMinutes == cfg.sleep.afterMinutes)
+        #expect(ctx.sleep.formGuard == cfg.sleep.formGuard)
+        #expect(ctx.sleep.tint == cfg.sleep.tint)
+        #expect(ctx.sleep.whitelist == cfg.sleep.whitelist)
+        #expect(ctx.searchEngine.name == cfg.searchEngine.name)
+        #expect(ctx.searchEngine.template == cfg.searchEngine.template)
+        #expect(ctx.hoverBar.style == cfg.hoverBar.style)
+        #expect(ctx.hoverBar.tint == cfg.hoverBar.tint)
+        // Browsers are the trimmed context shape: the config's list, no bundle ids.
+        #expect(ctx.knownBrowsers.map(\.slug) == cfg.knownBrowsers.map(\.slug))
+        #expect(ctx.knownBrowsers.map(\.name) == cfg.knownBrowsers.map(\.name))
+        #expect(ctx.knownBrowsers.map(\.installed) == cfg.knownBrowsers.map(\.installed))
+        let wireText = try #require(String(data: wire, encoding: .utf8))
+        #expect(wireText.contains("bundleId") == false, "context wires never carry bundle ids")
     }
 
     /// A context built from a config round-trips unchanged through the wire.
-    func testContextRoundTripsThroughEncoding() throws {
-        let original = try Fixture.decode(ContextMessage.self, from: "message-context")
+    @Test func contextRoundTripsThroughEncoding() throws {
+        let original = try Fixture.decode(ContextMessage.self, from: Fixture.contextData())
         let reloaded = try LilCodec.decode(ContextMessage.self, from: LilCodec.encode(original))
 
-        XCTAssertEqual(reloaded.browser, original.browser)
-        XCTAssertEqual(reloaded.sleep.whitelist, original.sleep.whitelist)
-        XCTAssertEqual(reloaded.searchEngine.name, original.searchEngine.name)
-        XCTAssertEqual(reloaded.hoverBar.tint, original.hoverBar.tint)
-        XCTAssertEqual(reloaded.knownBrowsers.map(\.name), original.knownBrowsers.map(\.name))
+        #expect(reloaded.browser == original.browser)
+        #expect(reloaded.sleep.whitelist == original.sleep.whitelist)
+        #expect(reloaded.searchEngine.name == original.searchEngine.name)
+        #expect(reloaded.hoverBar.tint == original.hoverBar.tint)
+        #expect(reloaded.knownBrowsers.map(\.name) == original.knownBrowsers.map(\.name))
     }
 
     // MARK: - history-result
 
     /// Chrome omits fields on some rows; one odd row must never fail the batch.
-    func testHistoryResultToleratesSparseRows() throws {
+    @Test func historyResultToleratesSparseRows() throws {
         let result = try Fixture.decode(HistoryResultMessage.self, from: "message-history-result")
 
-        XCTAssertEqual(result.id, "h-1")
-        let sparse = try XCTUnwrap(result.items.first { $0.url == "https://docs.swift.org/guide" })
-        XCTAssertEqual(sparse.title, "")
-        XCTAssertEqual(sparse.visitCount, 0)
-        XCTAssertEqual(sparse.typedCount, 0)
-        XCTAssertEqual(sparse.lastVisitTime, 0)
+        #expect(result.id == "h-1")
+        let sparse = try #require(result.items.first { $0.url == "https://docs.swift.org/guide" })
+        #expect(sparse.title == "")
+        #expect(sparse.visitCount == 0)
+        #expect(sparse.typedCount == 0)
+        #expect(sparse.lastVisitTime == 0)
     }
 
     // MARK: - host-only messages
 
     /// The host validates rather than trusts: a malformed edit degrades to empty
     /// fields, which its handler drops.
-    func testWhitelistOpDecodesDefensively() throws {
+    @Test func whitelistOpDecodesDefensively() throws {
         let msg = try LilCodec.decode(WhitelistOpMessage.self, from: Data(#"{"type":"whitelist-op"}"#.utf8))
 
-        XCTAssertEqual(msg.op, "")
-        XCTAssertEqual(msg.domain, "")
+        #expect(msg.op == "")
+        #expect(msg.domain == "")
     }
 
-    func testOpenExternalDecodesDefensively() throws {
+    @Test func openExternalDecodesDefensively() throws {
         let msg = try LilCodec.decode(OpenExternalMessage.self, from: Data(#"{"type":"open-external"}"#.utf8))
 
-        XCTAssertEqual(msg.browser, "")
-        XCTAssertEqual(msg.url, "")
+        #expect(msg.browser == "")
+        #expect(msg.url == "")
     }
 
     /// Dispatch only needs `type` and `id`; unknown fields never break routing.
-    func testEnvelopeDecodesAnyMessageForDispatch() throws {
-        let envelope = try Fixture.decode(LilMessage.self, from: "message-context")
+    @Test func envelopeDecodesAnyMessageForDispatch() throws {
+        let envelope = try Fixture.decode(LilMessage.self, from: Fixture.contextData())
 
-        XCTAssertEqual(envelope.type, "context")
-        XCTAssertEqual(envelope.id, "ctx-1")
+        #expect(envelope.type == "context")
+        #expect(envelope.id == "ctx-1")
     }
 
     // MARK: - Line framing
 
     /// The app <-> host transport is one compact JSON object per line.
-    func testEncodedLineIsCompactAndNewlineTerminated() throws {
+    @Test func encodedLineIsCompactAndNewlineTerminated() throws {
         let line = try LilCodec.encodeLine(PingMessage(id: "abc"))
-        let text = try XCTUnwrap(String(data: line, encoding: .utf8))
+        let text = try #require(String(data: line, encoding: .utf8))
 
-        XCTAssertEqual(text, "{\"id\":\"abc\",\"type\":\"ping\"}\n", "sorted keys, no padding, single trailing newline")
+        #expect(text == "{\"id\":\"abc\",\"type\":\"ping\"}\n", "sorted keys, no padding, single trailing newline")
     }
 
-    func testDecodeLineToleratesTheTrailingNewline() throws {
+    @Test func decodeLineToleratesTheTrailingNewline() throws {
         let framed = try LilCodec.encodeLine(PingMessage(id: "abc"))
-        XCTAssertEqual(try LilCodec.decodeLine(PingMessage.self, from: framed).id, "abc")
+        let terminated = try LilCodec.decodeLine(PingMessage.self, from: framed)
+        #expect(terminated.id == "abc")
 
         var bare = framed
         bare.removeLast()
-        XCTAssertEqual(try LilCodec.decodeLine(PingMessage.self, from: bare).id, "abc")
+        let unterminated = try LilCodec.decodeLine(PingMessage.self, from: bare)
+        #expect(unterminated.id == "abc")
     }
 
     /// A socket read can split a line anywhere; the buffer only yields complete
     /// lines and keeps the remainder for the next read.
-    func testLineBufferReassemblesSplitReads() throws {
+    @Test func lineBufferReassemblesSplitReads() throws {
         let buffer = LineBuffer()
 
-        XCTAssertEqual(buffer.append(Data(#"{"type":"pi"#.utf8)).count, 0)
+        #expect(buffer.append(Data(#"{"type":"pi"#.utf8)).count == 0)
         let lines = buffer.append(Data("ng\",\"id\":\"a\"}\n{\"type\":\"ping\",\"id\":\"b\"}\n{\"partial\":".utf8))
 
-        XCTAssertEqual(lines.count, 2)
-        XCTAssertEqual(try LilCodec.decodeLine(PingMessage.self, from: lines[0]).id, "a")
-        XCTAssertEqual(try LilCodec.decodeLine(PingMessage.self, from: lines[1]).id, "b")
-        XCTAssertEqual(String(data: buffer.pending, encoding: .utf8), "{\"partial\":")
+        #expect(lines.count == 2)
+        let first = try LilCodec.decodeLine(PingMessage.self, from: lines[0])
+        let second = try LilCodec.decodeLine(PingMessage.self, from: lines[1])
+        #expect(first.id == "a")
+        #expect(second.id == "b")
+        #expect(String(data: buffer.pending, encoding: .utf8) == "{\"partial\":")
     }
 }
