@@ -3,6 +3,13 @@ import SwiftUI
 import ServiceManagement
 import LilShared
 
+/// Single Settings size. The window is not resizable; the NSWindow contentRect
+/// and SettingsRoot's frame both use this, so first-placement origin is computed
+/// from the pane's real size rather than a leftover contentRect.
+private enum SettingsPaneSize {
+    static let size = CGSize(width: 440, height: 520)
+}
+
 /// Liquid-glass mini Settings window (NSWindowController hosting a SwiftUI
 /// Form). Opens on first run (onboarding), from the status item, and from the
 /// menu bar's ⌘,. Skeleton adapted from research-v0.2.md §1.
@@ -42,7 +49,7 @@ final class SettingsWindowController: NSWindowController {
 
     private init() {
         let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: CGSize(width: 460, height: 560)),
+            contentRect: NSRect(origin: .zero, size: SettingsPaneSize.size),
             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -53,6 +60,10 @@ final class SettingsWindowController: NSWindowController {
         window.toolbar = NSToolbar() // empty toolbar enables the glass title bar
         window.isReleasedWhenClosed = false
         window.contentViewController = NSHostingController(rootView: SettingsRoot(store: store))
+        // Apply the pane size after the hosting controller is attached so
+        // window.frame.size (used by first-placement) matches SettingsRoot,
+        // not a leftover contentRect. Window behavior was not observed.
+        window.setContentSize(SettingsPaneSize.size)
 
         // verified: setFrameUsingName(_:) reads defaults directly and returns
         // false when nothing is stored, and setFrameAutosaveName(_:) does not
@@ -197,7 +208,8 @@ struct SettingsRoot: View {
         // Fixed size, not a minimum: the window styleMask has no .resizable and
         // NSHostingController otherwise sizes to fit content, which would make
         // the first-placement top edge drift off the 20% rule as sections grow.
-        .frame(width: 440, height: 520)
+        // Same size as the NSWindow contentRect / setContentSize above.
+        .frame(width: SettingsPaneSize.size.width, height: SettingsPaneSize.size.height)
         .onAppear {
             // Seed the custom-template buffer from whatever is stored so the
             // Custom field shows the current value when the window opens.
