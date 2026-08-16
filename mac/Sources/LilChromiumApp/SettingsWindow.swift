@@ -15,8 +15,10 @@ final class SettingsWindowController: NSWindowController {
     private static var shared: SettingsWindowController?
 
     /// AppKit stores the frame under "NSWindow Frame <name>" in standard
-    /// defaults once the user moves or resizes the window.
-    private static let frameAutosaveName = "SettingsWindow"
+    /// defaults once the user moves or resizes the window. The name was changed
+    /// from v0.3's "SettingsWindow": that key already holds a stored frame for
+    /// existing users, which would suppress the first-placement code below.
+    private static let frameAutosaveName = "LilChromiumSettings"
 
     /// The store is held here so we can force a fresh config read every time the
     /// window is (re)shown — the host may have edited config.json (whitelist-op)
@@ -56,9 +58,10 @@ final class SettingsWindowController: NSWindowController {
         // false when nothing is stored, and setFrameAutosaveName(_:) does not
         // itself write a frame — but every frame change AFTER the name is set
         // does. So: restore the user's frame if one exists, otherwise do the
-        // first-run placement, and only THEN start autosaving. That ordering is
-        // what keeps our computed first position from masquerading as a frame
-        // the user chose. (Probed on macOS 27, Xcode-beta toolchain.)
+        // first-run placement, and only THEN start autosaving. This only
+        // guarantees first placement under an autosave name nothing has ever
+        // written to; v0.3 stored a frame under "SettingsWindow", hence the
+        // new name above. (Probed on macOS 27, Xcode-beta toolchain.)
         if !window.setFrameUsingName(Self.frameAutosaveName) {
             Self.placeNearCenteredPalette(window)
         }
@@ -68,10 +71,11 @@ final class SettingsWindowController: NSWindowController {
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
     /// First presentation: line the window up with where a centered palette
-    /// would appear on the display the user is working on, instead of letting
-    /// AppKit drop it against a screen edge.
+    /// would appear, instead of letting AppKit drop it against a screen edge.
+    /// Uses the palette's own screen source (OpenRouter.primaryScreen) so both
+    /// surfaces land on the same display.
     private static func placeNearCenteredPalette(_ window: NSWindow) {
-        guard let screen = PalettePlacement.activeScreen else { return }
+        guard let screen = OpenRouter.primaryScreen ?? NSScreen.main else { return }
         window.setFrameOrigin(
             PalettePlacement.centeredOrigin(forSize: window.frame.size, on: screen)
         )
@@ -190,7 +194,10 @@ struct SettingsRoot: View {
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
-        .frame(minWidth: 440, minHeight: 520)
+        // Fixed size, not a minimum: the window styleMask has no .resizable and
+        // NSHostingController otherwise sizes to fit content, which would make
+        // the first-placement top edge drift off the 20% rule as sections grow.
+        .frame(width: 440, height: 520)
         .onAppear {
             // Seed the custom-template buffer from whatever is stored so the
             // Custom field shows the current value when the window opens.

@@ -5,6 +5,7 @@ import LilShared
 /// glass panel is created lazily and shown/hidden on demand.
 ///
 /// Entry points `show()` / `toggle()` are called by AppDelegate — keep them.
+@MainActor
 final class PaletteController: NSObject, NSTextFieldDelegate {
 
     private let model = PaletteModel()
