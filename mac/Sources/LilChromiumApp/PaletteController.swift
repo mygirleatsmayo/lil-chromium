@@ -5,6 +5,7 @@ import LilShared
 /// glass panel is created lazily and shown/hidden on demand.
 ///
 /// Entry points `show()` / `toggle()` are called by AppDelegate — keep them.
+@MainActor
 final class PaletteController: NSObject, NSTextFieldDelegate {
 
     private let model = PaletteModel()
@@ -80,7 +81,8 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     }
 
     /// Close the palette. The ONLY paths that call this: Esc, ⌘⌥N toggle, the X
-    /// button, and opening a result. No resignKey / deactivation path exists.
+    /// button, opening a result, and showing Settings. No resignKey /
+    /// deactivation path exists.
     func close() {
         panel?.orderOut(nil)
     }
@@ -217,25 +219,22 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     ///     panel TOP edge at visibleFrame.maxY − 0.20 × visibleFrame.height.
     ///   top-right: 24pt insets from the top-right of the visibleFrame.
     private func positionPanel() {
-        guard let panel = panel else { return }
-        let screen = OpenRouter.primaryScreen ?? NSScreen.main
-        guard let vf = screen?.visibleFrame else { return }
+        guard let panel = panel,
+              let screen = OpenRouter.primaryScreen ?? NSScreen.main else { return }
+        let vf = screen.visibleFrame
 
-        let height = currentPanelHeight()
-        panel.setContentSize(NSSize(width: panelWidth, height: height))
+        let size = NSSize(width: panelWidth, height: currentPanelHeight())
+        panel.setContentSize(size)
 
-        let x: CGFloat
-        let topEdgeY: CGFloat   // AppKit Y of the panel's TOP edge
         if currentAnchor == "top-right" {
-            x = vf.maxX - panelWidth - 24
-            topEdgeY = vf.maxY - 24
+            // AppKit origin is bottom-left, so origin.y = topEdge − height.
+            panel.setFrameOrigin(NSPoint(x: vf.maxX - panelWidth - 24,
+                                         y: vf.maxY - 24 - size.height))
         } else {
-            // "top-center" (default and any unknown value).
-            x = vf.minX + (vf.width - panelWidth) / 2
-            topEdgeY = vf.maxY - 0.20 * vf.height
+            // "top-center" (default and any unknown value). Settings reuses this
+            // same geometry for its first presentation.
+            panel.setFrameOrigin(PalettePlacement.centeredOrigin(forSize: size, on: screen))
         }
-        // AppKit origin is bottom-left, so origin.y = topEdge − height.
-        panel.setFrameOrigin(NSPoint(x: x, y: topEdgeY - height))
     }
 
     private func currentPanelHeight() -> CGFloat {
