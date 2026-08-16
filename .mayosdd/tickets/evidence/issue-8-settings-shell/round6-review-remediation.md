@@ -1,0 +1,6 @@
+- S2 resolved — delta has no `PalettePlacement.swift` hunk; `@MainActor` untouched.
+- S3 resolved — `static let size = CGSize(width: 440, height: 520)` (one defined size; clamp not reintroduced).
+- P1 resolved — delta has no autosave hunk; `frameAutosaveName = "LilChromiumSettings"` untouched.
+- P2 resolved — delta has no screen-source hunk; `OpenRouter.primaryScreen` untouched.
+- F1 resolved — `contentRect: NSRect(origin: .zero, size: SettingsPaneSize.size)` and `window.setContentSize(SettingsPaneSize.size)` after `NSHostingController`; `.frame(width: SettingsPaneSize.size.width, height: SettingsPaneSize.size.height)`; 460×560 removed.
+- No new findings (N1…).
