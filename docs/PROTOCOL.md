@@ -69,8 +69,9 @@ Written by the app (Settings window / menu). Read by the app and by each host (f
     "whitelist": []
   },
   "searchEngine": {
-    "name": "Google",
-    "template": "https://www.google.com/search?q=%s"
+    "provider": "startpage",
+    "name": "Startpage",
+    "template": "https://www.startpage.com/sp/search?query=%s"
   },
   "hoverBar": {
     "style": "glass",
@@ -88,7 +89,7 @@ Written by the app (Settings window / menu). Read by the app and by each host (f
 - `linkBehavior` (v3 semantics): governs links that request a new tab/window (`target=_blank` etc.) from a lil. `"new-lil"` (DEFAULT: cascade into a new lil) | `"same-lil"` (collapse into the current lil — settings copy must warn this can break some sign-in popups). Native popup windows (featureful `window.open`, OAuth) are ALWAYS left alone regardless of this setting. ⌘-click flips the behavior per click.
 - `ephemeralDefault`: `"never" | "6h" | "12h" | "24h" | "quit"` — default lifetime for new lils. `"quit"` = excluded from restore-on-startup. Hours = auto-close that long after the lil's last user interaction. Per-lil override lives in the extension registry, set from the hover bar menu.
 - `sleep`: resource saver. `enabled` + `afterMinutes` (idle before auto-sleep), `audioGuard` (skip lils playing audio — toggle, default ON), `formGuard` (skip lils with unsubmitted form input — toggle, default ON), `tint` (`"gray" | "purple"` or `#rrggbb` overlay color), `whitelist` (domains never auto-slept).
-- `searchEngine`: `template` with `%s` placeholder. Used by BOTH the palette and the lil hover-bar omnibox. Presets in Settings: Google, DuckDuckGo, Bing, Kagi, Custom.
+- `searchEngine`: `provider` id + `name` + `template` with `%s` placeholder. `provider` is the explicit Settings selection (`google` | `ddg` | `bing` | `kagi` | `startpage` | `custom`) and is never inferred from `template`. Used by BOTH the palette and the lil hover-bar omnibox. Presets in Settings: Google, DuckDuckGo, Bing, Kagi, Startpage, Custom.
 - `hoverBar`: `style` `"glass"` (v0.2 look) | `"solid"` (adaptive title-bar-like background; glass kept only on the address input). `tint` optional `#rrggbb`, applies to either style.
 - `knownBrowsers`: app scans /Applications + NSWorkspace on launch and on settings-open, writes results. Hosts/extension treat it as read-only truth.
 - Missing file/fields → built-in defaults above. First app launch with no config opens the Settings window (onboarding) and writes it. All writers (app AND host) preserve unknown fields via read-merge-write.
@@ -138,7 +139,7 @@ As v1: host queues `open` (max 20 FIFO) while the port is down; `history-query` 
 ## Extension behavior contract (v2 changes)
 
 - **Naming**: user-facing copy says "lil"/"lils" (e.g. "Open in a new lil").
-- **Hover-reveal top bar** replaces the always-visible pill. Hidden by default (nothing covers page UI). Reveal when cursor is within 24px of the viewport top (~80ms intent delay) or on ⌘L; hide 300ms after the cursor leaves unless the address field is focused or a menu is open; Esc hides. Bar (closed shadow DOM, slides down, glass-look CSS backdrop-blur, adapts to `prefers-color-scheme`): [back button] [editable address field, centered — shows current URL compactly, full URL + select-all on focus, Enter navigates via SW `tabs.update` (add https:// when missing; non-URL input → Google search)] [**Open in {defaultBrowserName}** ⌘O] [⌄ caret menu].
+- **Hover-reveal top bar** replaces the always-visible pill. Hidden by default (nothing covers page UI). Reveal when cursor is within 24px of the viewport top (~80ms intent delay) or on ⌘L; hide 300ms after the cursor leaves unless the address field is focused or a menu is open; Esc hides. Bar (closed shadow DOM, slides down, glass-look CSS backdrop-blur, adapts to `prefers-color-scheme`): [back button] [editable address field, centered — shows current URL compactly, full URL + select-all on focus, Enter navigates via SW `tabs.update` (add https:// when missing; non-URL input → search via config `searchEngine.template`)] [**Open in {defaultBrowserName}** ⌘O] [⌄ caret menu].
 - **Caret menu**: promote to default browser; "Open in {host browser} tab" when host ≠ default; tab groups of the host browser (`tabGroups.query`); other installed browsers ("Open in {name}…" → `open-external`); "Close lil".
 - **Promote semantics**: if `defaultBrowser == ` the browser the lil lives in → v1 no-reload move (`tabs.move` → `windows.create({tabId})` fallback) + optional group. Else → `open-external` to the default browser + close the lil (state not preservable across browsers — accepted).
 - **⌘O** (content-script capture + `promote-tab` command backstop) = promote to default browser. **⌘L** = reveal + focus address bar.

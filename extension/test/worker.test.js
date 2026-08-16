@@ -100,8 +100,8 @@ test("v1 config fixture yields the same additive defaults as the native suite", 
   assert.equal(context.sleep.formGuard, true);
   assert.equal(context.sleep.tint, "purple");
   assert.equal(context.sleep.whitelist.length, 0);
-  assert.equal(context.searchEngine.name, "Google");
-  assert.equal(context.searchEngine.template, "https://www.google.com/search?q=%s");
+  assert.equal(context.searchEngine.name, "Startpage");
+  assert.equal(context.searchEngine.template, "https://www.startpage.com/sp/search?query=%s");
   assert.equal(context.hoverBar.style, "glass");
   assert.equal(context.hoverBar.tint, null);
 });

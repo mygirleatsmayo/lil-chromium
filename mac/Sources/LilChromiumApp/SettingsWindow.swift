@@ -164,25 +164,6 @@ final class SettingsStore: ObservableObject {
     }
 }
 
-// MARK: - Search-engine presets
-
-/// The built-in search presets offered in Settings. A template of "" marks the
-/// "Custom" sentinel (the user then supplies their own template).
-private struct SearchPreset: Identifiable {
-    let id: String        // stable tag
-    let name: String
-    let template: String  // "" => Custom
-    var isCustom: Bool { template.isEmpty }
-}
-
-private let searchPresets: [SearchPreset] = [
-    SearchPreset(id: "google", name: "Google", template: "https://www.google.com/search?q=%s"),
-    SearchPreset(id: "ddg", name: "DuckDuckGo", template: "https://duckduckgo.com/?q=%s"),
-    SearchPreset(id: "bing", name: "Bing", template: "https://www.bing.com/search?q=%s"),
-    SearchPreset(id: "kagi", name: "Kagi", template: "https://kagi.com/search?q=%s"),
-    SearchPreset(id: "custom", name: "Custom", template: ""),
-]
-
 // MARK: - SwiftUI pane
 
 struct SettingsRoot: View {
@@ -190,9 +171,6 @@ struct SettingsRoot: View {
 
     // Local editing state for the sleep whitelist add field.
     @State private var newWhitelistDomain: String = ""
-    // Local editing buffer for a custom search template; validated (must contain
-    // %s) before it is written back to config.
-    @State private var customSearchTemplate: String = ""
 
     var body: some View {
         // Three sections, in the order the parent spec fixes them: General
@@ -210,17 +188,6 @@ struct SettingsRoot: View {
         // the first-placement top edge drift off the 20% rule as sections grow.
         // Same size as the NSWindow contentRect / setContentSize above.
         .frame(width: SettingsPaneSize.size.width, height: SettingsPaneSize.size.height)
-        .onAppear {
-            // Seed the custom-template buffer from whatever is stored so the
-            // Custom field shows the current value when the window opens.
-            customSearchTemplate = store.config.searchEngine.template
-        }
-        // The window is a long-lived singleton, so onAppear fires once per
-        // process. Re-seed the buffer on each reload — i.e. each time Settings
-        // is presented again with fresh disk truth — and never while typing.
-        .onChange(of: store.reloadToken) { _ in
-            customSearchTemplate = store.config.searchEngine.template
-        }
     }
 
     // MARK: General
@@ -253,7 +220,7 @@ struct SettingsRoot: View {
                 Text("Top right").tag("top-right")
             }
 
-            searchControls
+            SettingsSearchControls(store: store)
 
             Toggle("Launch at Login", isOn: launchAtLoginBinding)
         }
@@ -347,31 +314,6 @@ struct SettingsRoot: View {
         }
     }
 
-    // MARK: Search (inside General)
-
-    @ViewBuilder private var searchControls: some View {
-        Picker("Search engine", selection: searchPresetBinding) {
-            ForEach(searchPresets) { preset in
-                Text(preset.name).tag(preset.id)
-            }
-        }
-        if searchPresetBinding.wrappedValue == "custom" {
-            VStack(alignment: .leading, spacing: 4) {
-                TextField("https://example.com/search?q=%s", text: $customSearchTemplate)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { commitCustomTemplate() }
-                    .onChange(of: customSearchTemplate) { newValue in
-                        commitCustomTemplate(newValue)
-                    }
-                if !customSearchTemplate.contains("%s") {
-                    Text("Template must contain %s (replaced by the query).")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-            }
-        }
-    }
-
     // MARK: Hoverbar
 
     private var hoverbarSection: some View {
@@ -402,18 +344,6 @@ struct SettingsRoot: View {
 
     private func removeWhitelistDomain(_ domain: String) {
         store.config.sleep.whitelist.removeAll { $0 == domain }
-    }
-
-    // MARK: - Search template commit (validated)
-
-    /// Write the custom template back to config only when it contains "%s".
-    private func commitCustomTemplate(_ value: String? = nil) {
-        let tmpl = (value ?? customSearchTemplate).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard tmpl.contains("%s") else { return }  // invalid — keep last good value
-        if store.config.searchEngine.template != tmpl {
-            store.config.searchEngine.template = tmpl
-            store.config.searchEngine.name = "Custom"
-        }
     }
 
     // MARK: - Bindings (route through store.config so didSet -> save())
@@ -481,30 +411,6 @@ struct SettingsRoot: View {
         )
     }
 
-    // Search preset binding: maps the stored template onto a preset id, and on
-    // set copies the preset's template into config (Custom keeps the current
-    // template and lets the TextField drive it).
-    private var searchPresetBinding: Binding<String> {
-        Binding(
-            get: {
-                let tmpl = store.config.searchEngine.template
-                return searchPresets.first(where: { $0.template == tmpl })?.id ?? "custom"
-            },
-            set: { id in
-                guard let preset = searchPresets.first(where: { $0.id == id }) else { return }
-                if preset.isCustom {
-                    // Leave the template as-is; the Custom field takes over.
-                    store.config.searchEngine.name = "Custom"
-                    customSearchTemplate = store.config.searchEngine.template
-                } else {
-                    store.config.searchEngine.name = preset.name
-                    store.config.searchEngine.template = preset.template
-                    customSearchTemplate = preset.template
-                }
-            }
-        )
-    }
-
     // Hover-bar bindings.
     private var hoverStyleBinding: Binding<String> {
         Binding(get: { store.config.hoverBar.style },
@@ -519,5 +425,67 @@ struct SettingsRoot: View {
                 store.config.hoverBar.tint = TintValue.hoverBarStorage(fromCommitted: newHex)
             }
         )
+    }
+}
+
+// MARK: - Search (inside General)
+
+/// Provider picker + Custom draft. Selection is the stored `provider` id, not a
+/// template match. The draft lives in this view so a reload of sleep/whitelist
+/// cannot overwrite text the user is still typing. Paste uses the standard
+/// field editor via MainMenu's nil-targeted Edit menu — no custom paste path.
+private struct SettingsSearchControls: View {
+    @ObservedObject var store: SettingsStore
+    @State private var editor: SearchEngineEditor
+
+    init(store: SettingsStore) {
+        self.store = store
+        _editor = State(initialValue: SearchEngineEditor(config: store.config.searchEngine))
+    }
+
+    var body: some View {
+        Picker("Search engine", selection: providerBinding) {
+            ForEach(SearchProviders.all) { preset in
+                Text(preset.name).tag(preset.id)
+            }
+        }
+        if editor.showsCustomField {
+            VStack(alignment: .leading, spacing: 4) {
+                TextField("https://example.com/search?q=%s", text: draftBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { persistIfNeeded() }
+                if editor.showsInvalidDraftExplanation {
+                    Text("Template must contain %s (replaced by the query).")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+        }
+    }
+
+    private var providerBinding: Binding<String> {
+        Binding(
+            get: { editor.selectedProviderID },
+            set: { id in
+                editor.selectProvider(id)
+                persistIfNeeded()
+            }
+        )
+    }
+
+    private var draftBinding: Binding<String> {
+        Binding(
+            get: { editor.customDraft },
+            set: { text in
+                editor.updateCustomDraft(text)
+                persistIfNeeded()
+            }
+        )
+    }
+
+    private func persistIfNeeded() {
+        if store.config.searchEngine != editor.config {
+            store.config.searchEngine = editor.config
+        }
     }
 }

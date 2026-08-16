@@ -6,7 +6,7 @@ struct PaletteRow {
     enum Kind {
         case history     // a page or origin match (favicon)
         case openURL     // "Open <url>" — input parses as a URL (globe/arrow)
-        case search      // "Search Google for '<query>'" (magnifier)
+        case search      // "Search {engine} for '<query>'" (magnifier)
     }
 
     let kind: Kind
@@ -32,7 +32,8 @@ final class PaletteModel {
 
     /// The search engine used to build the "Search {name} for …" row and its
     /// action URL. Cached per palette open (set by the controller in show()) so
-    /// per-keystroke row building doesn't re-read config.json. Defaults to Google.
+    /// per-keystroke row building doesn't re-read config.json. Defaults to
+    /// Startpage.
     var searchEngine: SearchEngineConfig = .defaults
 
     /// Replace the cached snapshot and rebuild the index off the main thread's
@@ -55,7 +56,7 @@ final class PaletteModel {
     ///
     /// Order (non-URL query):
     ///   1. top hit (best host-prefix origin or best page)
-    ///   2. "Search Google for '<query>'"
+    ///   2. "Search {engine} for '<query>'"
     ///   3. remaining history matches (filling to the cap)
     /// When the input parses as a URL: an "Open <url>" row REPLACES position 1.
     /// Empty query: top-8 by frecency, no search row.

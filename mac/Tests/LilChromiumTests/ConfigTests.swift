@@ -18,7 +18,8 @@ struct ConfigDecodingTests {
         #expect(cfg.paletteAnchor == "top-right")
         #expect(cfg.linkBehavior == "same-lil")
 
-        // Absent from the legacy file: documented defaults.
+        // Absent from the legacy file: documented defaults. searchEngine is
+        // Startpage (issue #10); every other missing field follows PROTOCOL.md.
         #expect(cfg.fallbackBrowser == "chrome")
         #expect(cfg.ephemeralDefault == "never")
         #expect(cfg.sleep.enabled == false)
@@ -27,8 +28,9 @@ struct ConfigDecodingTests {
         #expect(cfg.sleep.formGuard)
         #expect(cfg.sleep.tint == "purple")
         #expect(cfg.sleep.whitelist == [])
-        #expect(cfg.searchEngine.name == "Google")
-        #expect(cfg.searchEngine.template == "https://www.google.com/search?q=%s")
+        #expect(cfg.searchEngine.name == "Startpage")
+        #expect(cfg.searchEngine.provider == "startpage")
+        #expect(cfg.searchEngine.template == "https://www.startpage.com/sp/search?query=%s")
         #expect(cfg.hoverBar.style == "glass")
         #expect(cfg.hoverBar.tint == nil)
         #expect(cfg.knownBrowsers.count == 0)
@@ -49,6 +51,8 @@ struct ConfigDecodingTests {
         #expect(cfg.sleep.tint == "#3311aa")
         #expect(cfg.sleep.whitelist == ["mail.google.com"])
         #expect(cfg.searchEngine.name == "Kagi")
+        #expect(cfg.searchEngine.provider == "kagi")
+        #expect(cfg.searchEngine.template == "https://kagi.com/search?q=%s")
         #expect(cfg.hoverBar.style == "solid")
         #expect(cfg.hoverBar.tint == "#112233")
         #expect(cfg.knownBrowsers.map(\.slug) == ["helium", "chrome", "vivaldi"])
