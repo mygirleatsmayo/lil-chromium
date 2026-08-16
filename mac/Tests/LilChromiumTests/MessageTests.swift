@@ -52,44 +52,49 @@ struct MessageTests {
     // MARK: - context
 
     /// The context reply carries the full config objects verbatim plus the host's
-    /// own identity, so the extension needs no second read of config.json. The
-    /// wire bytes are composed from the config fixture (see Fixture.contextData)
-    /// so the config sections are expressed in exactly one fixture.
+    /// own identity, so the extension needs no second read of config.json.
+    /// `fixtures/message-context.json` is the shared wire meaning (Issue #2
+    /// Testing Decision 4); its keys are docs/PROTOCOL.md's closed context set.
     @Test func contextCarriesConfigObjectsAndHostIdentity() throws {
-        let cfg = try Fixture.decode(LilConfig.self, from: "config-v2-complete")
-        let wire = try Fixture.contextData(browser: "brave", browserName: "Brave")
-        let ctx = try Fixture.decode(ContextMessage.self, from: wire)
+        let bytes = try Fixture.data("message-context")
+        let wire = try jsonObject(bytes)
+        let ctx = try Fixture.decode(ContextMessage.self, from: "message-context")
+
+        #expect(wire.keys.sorted() == [
+            "browser", "browserName", "defaultBrowser", "defaultBrowserName",
+            "ephemeralDefault", "fallbackBrowser", "hoverBar", "id",
+            "knownBrowsers", "linkBehavior", "searchEngine", "sleep", "type",
+        ])
 
         // Host identity is the host's, not the config's.
         #expect(ctx.browser == "brave")
         #expect(ctx.browserName == "Brave")
         #expect(ctx.browser != ctx.defaultBrowser)
         // Routing targets come from the config.
-        #expect(ctx.defaultBrowser == cfg.defaultBrowser)
+        #expect(ctx.defaultBrowser == "helium")
         #expect(ctx.defaultBrowserName == "Helium")
-        #expect(ctx.fallbackBrowser == cfg.fallbackBrowser)
-        #expect(ctx.linkBehavior == cfg.linkBehavior)
-        // Config sections arrive whole, verbatim from config.json.
-        #expect(ctx.ephemeralDefault == cfg.ephemeralDefault)
-        #expect(ctx.sleep.afterMinutes == cfg.sleep.afterMinutes)
-        #expect(ctx.sleep.formGuard == cfg.sleep.formGuard)
-        #expect(ctx.sleep.tint == cfg.sleep.tint)
-        #expect(ctx.sleep.whitelist == cfg.sleep.whitelist)
-        #expect(ctx.searchEngine.name == cfg.searchEngine.name)
-        #expect(ctx.searchEngine.template == cfg.searchEngine.template)
-        #expect(ctx.hoverBar.style == cfg.hoverBar.style)
-        #expect(ctx.hoverBar.tint == cfg.hoverBar.tint)
-        // Browsers are the trimmed context shape: the config's list, no bundle ids.
-        #expect(ctx.knownBrowsers.map(\.slug) == cfg.knownBrowsers.map(\.slug))
-        #expect(ctx.knownBrowsers.map(\.name) == cfg.knownBrowsers.map(\.name))
-        #expect(ctx.knownBrowsers.map(\.installed) == cfg.knownBrowsers.map(\.installed))
-        let wireText = try #require(String(data: wire, encoding: .utf8))
+        #expect(ctx.fallbackBrowser == "chrome")
+        #expect(ctx.linkBehavior == "new-lil")
+        // Config sections arrive whole.
+        #expect(ctx.ephemeralDefault == "6h")
+        #expect(ctx.sleep.afterMinutes == 45)
+        #expect(ctx.sleep.formGuard == false)
+        #expect(ctx.sleep.tint == "#3311aa")
+        #expect(ctx.sleep.whitelist == ["mail.google.com"])
+        #expect(ctx.searchEngine.name == "Kagi")
+        #expect(ctx.searchEngine.template == "https://kagi.com/search?q=%s")
+        #expect(ctx.hoverBar.style == "solid")
+        #expect(ctx.hoverBar.tint == "#112233")
+        // Browsers are the trimmed context shape: no bundle ids.
+        #expect(ctx.knownBrowsers.map(\.slug) == ["helium", "brave"])
+        #expect(ctx.knownBrowsers.map(\.name) == ["Helium", "Brave"])
+        let wireText = try #require(String(data: bytes, encoding: .utf8))
         #expect(wireText.contains("bundleId") == false, "context wires never carry bundle ids")
     }
 
     /// A context built from a config round-trips unchanged through the wire.
     @Test func contextRoundTripsThroughEncoding() throws {
-        let original = try Fixture.decode(ContextMessage.self, from: Fixture.contextData())
+        let original = try Fixture.decode(ContextMessage.self, from: "message-context")
         let reloaded = try LilCodec.decode(ContextMessage.self, from: LilCodec.encode(original))
 
         #expect(reloaded.browser == original.browser)
@@ -133,7 +138,7 @@ struct MessageTests {
 
     /// Dispatch only needs `type` and `id`; unknown fields never break routing.
     @Test func envelopeDecodesAnyMessageForDispatch() throws {
-        let envelope = try Fixture.decode(LilMessage.self, from: Fixture.contextData())
+        let envelope = try Fixture.decode(LilMessage.self, from: "message-context")
 
         #expect(envelope.type == "context")
         #expect(envelope.id == "ctx-1")

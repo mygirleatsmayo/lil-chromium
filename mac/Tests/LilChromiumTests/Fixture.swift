@@ -39,29 +39,6 @@ enum Fixture {
     static func decode<T: Decodable>(_ type: T.Type, from name: String) throws -> T {
         try JSONDecoder().decode(type, from: data(name))
     }
-
-    /// Decode fixture `bytes` as `type`.
-    static func decode<T: Decodable>(_ type: T.Type, from bytes: Data) throws -> T {
-        try JSONDecoder().decode(type, from: bytes)
-    }
-
-    /// Wire bytes of a `context` reply, composed per docs/PROTOCOL.md: the
-    /// full config objects verbatim (the `config-v2-complete` fixture) plus
-    /// the replying host's own identity, with `knownBrowsers` trimmed to the
-    /// context shape (no `bundleId`). The config sections live in exactly one
-    /// fixture; the context meaning is this composition, stated once here.
-    static func contextData(id: String = "ctx-1", browser: String = "brave", browserName: String = "Brave") throws -> Data {
-        var wire = try jsonObject(data("config-v2-complete"))
-        let browsers = (wire["knownBrowsers"] as? [[String: Any]]) ?? []
-        wire["type"] = "context"
-        wire["id"] = id
-        wire["browser"] = browser
-        wire["browserName"] = browserName
-        // The host names the default browser from the config's knownBrowsers.
-        wire["defaultBrowserName"] = browsers.first { $0["slug"] as? String == wire["defaultBrowser"] as? String }?["name"]
-        wire["knownBrowsers"] = browsers.map { $0.filter { $0.key != "bundleId" } }
-        return try JSONSerialization.data(withJSONObject: wire, options: [.sortedKeys])
-    }
 }
 
 /// Parse arbitrary JSON bytes into a dictionary, for asserting on encoded output.
