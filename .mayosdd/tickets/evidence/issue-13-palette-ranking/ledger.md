@@ -42,3 +42,25 @@ Final. No later round may fail these.
 ## Round 1 outcome
 
 5 fixes owed: SP1, SP2, SP4 (behavior + tests), J1, J2 (naming + dedupe). SP3 closed as won't-fix by owner decision.
+
+---
+
+## Round 1 remediation review — `t7NWZmSZ`
+
+All six fix items (SP1, SP2, SP4, J1, J2, D1) reported resolved with quoted evidence. SP3 correctly still unfixed per D2. No regressions, no new High/Medium defects.
+
+## NA1 — adjudicated (owner: Lucas, this session)
+
+**Finding.** After SP1, `PaletteModel.autocompleteHost(for:)` (`:48`) still derives the inline type-ahead host from its own tier-ordered `Ranking.rank(limit: 1)` call, while `rows(for:)` (`:99`) promotes by frecency. The two can name different hosts: for `hub`, ghost text completes hubspot.com while row 1 and Enter both go to github.com.
+
+**Verdict: fix, in this ticket.** Ghost text that advertises a site Enter does not open is a user-visible defect, and SP1 made the divergence reachable. Owner instruction: keep it simple — reuse the promotion decision `rows(for:)` already makes; no second ranking pass, no new abstraction.
+
+**Scope fence.** Only the promoted case changes. When nothing is promoted, existing host-prefix type-ahead behavior is unchanged. URL-like input keeps `autocompleteHost: nil`.
+
+## Settled interpretation 7
+
+**Ghost text and the Enter target must never disagree.** Whenever a row is promoted above Search, the inline type-ahead names that same host.
+
+## Round 2 outcome
+
+1 fix owed: NA1.
