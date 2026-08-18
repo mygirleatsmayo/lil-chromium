@@ -312,6 +312,162 @@ test("new-window target from a lil is re-parented into a cascaded lil", async ()
   assert.equal(cascaded.tabs.some((t) => t.id === spawned.id), true);
 });
 
+// ---------------------------------------------------------------------------
+// Lifecycle entry paths (issue #5). Every create / adopt / restore path and the
+// registry + focus effects it is required to produce.
+// ---------------------------------------------------------------------------
+
+test("restart restoration reopens parked lils unfocused, skips quit-expiry ones, and re-registers them", async () => {
+  const parked = {
+    41: {
+      url: "https://keep.example/",
+      bounds: { left: 120, top: 90, width: 900, height: 700 },
+      expiry: 6,
+      lastInteraction: 1,
+    },
+    42: {
+      url: "https://gone.example/",
+      bounds: { left: 200, top: 150, width: 900, height: 700 },
+      expiry: "quit",
+      lastInteraction: 1,
+    },
+    43: {
+      url: "https://napping.example/",
+      bounds: { left: 300, top: 250, width: 900, height: 700 },
+      expiry: "never",
+      lastInteraction: 1,
+      slept: true,
+      sleepCaptureKey: "43-1",
+      originalUrl: "https://napping.example/",
+    },
+  };
+  const env = await boot({ storage: { ephemeralWindows: parked } });
+  await env.startup();
+
+  const wins = env.windows();
+  assert.equal(wins.length, 2, "quit-expiry lils are not restored");
+  assert.equal(
+    wins.every((w) => w.type === "popup" && w.focused === false),
+    true,
+    "restoration never steals focus"
+  );
+  assert.equal(
+    journalHas(env, "windows.update", (e) => e.update.focused === true),
+    false,
+    "restoration issues no explicit focus"
+  );
+
+  const kept = wins.find((w) => w.tabs[0].url === "https://keep.example/");
+  assert.equal(kept.left, 120);
+  assert.equal(kept.top, 90);
+  assert.equal(kept.width, 900);
+
+  const napping = wins.find((w) => w.tabs[0].url !== "https://keep.example/");
+  assert.match(napping.tabs[0].url, /\/sleep\.html\?/, "a napping lil reopens on its sleep page");
+
+  const registry = env.registry();
+  assert.equal(Object.keys(registry).length, 2);
+  assert.equal(registry["41"], undefined, "restored lils are re-keyed by their new window ids");
+  assert.equal(registry[String(kept.id)].url, "https://keep.example/");
+  assert.equal(registry[String(kept.id)].expiry, 6);
+  assert.equal(registry[String(napping.id)].url, "https://napping.example/", "a napping lil records its real url");
+  assert.equal(registry[String(napping.id)].slept, true);
+  assert.equal(registry[String(napping.id)].sleepCaptureKey, "43-1");
+});
+
+test("an incognito lil is focused, in-memory only, and never restored", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver({ type: "open", url: "https://private.example/", incognito: true, left: 10, top: 10 });
+  await env.deliver({ type: "open", url: "https://normal.example/", left: 60, top: 60 });
+
+  const secret = env.windows().find((w) => w.incognito);
+  assert.ok(secret, "incognito open creates an incognito lil");
+  assert.equal(secret.type, "popup");
+  assert.ok(journalHas(env, "windows.update", (e) => e.windowId === secret.id && e.update.focused === true));
+
+  const seen = await env.message({ action: "isEphemeral" }, sender(secret));
+  assert.equal(seen.ephemeral, true, "it is a lil without a registry entry");
+  assert.equal(seen.incognito, true);
+
+  const registry = env.registry();
+  assert.equal(registry[String(secret.id)], undefined, "incognito lils are never persisted");
+  assert.equal(Object.keys(registry).length, 1, "only the persistent lil is registered");
+
+  // Restart: the restored set is exactly what the persistent registry held.
+  const restarted = await boot({ storage: { ephemeralWindows: registry } });
+  await restarted.startup();
+  assert.deepEqual(
+    restarted.windows().map((w) => w.tabs[0].url),
+    ["https://normal.example/"]
+  );
+});
+
+test("without incognito access the incognito path falls back to a normal lil and hints why", async () => {
+  const env = await boot({ incognitoAllowed: false });
+  await env.deliver(fixture("message-context"));
+  await env.deliver({ type: "open", url: "https://private.example/", incognito: true, left: 10, top: 10 });
+
+  const wins = env.windows();
+  assert.equal(wins.length, 1);
+  assert.equal(wins[0].incognito, false);
+  assert.ok(env.registry()[String(wins[0].id)], "the fallback lil is a normal, registered lil");
+  assert.ok(journalHas(env, "tabs.sendMessage", (e) => e.message.action === "incognitoHint"));
+  const pending = await env.message({ action: "pendingIncognitoHint" }, sender(wins[0]));
+  assert.equal(pending.hint, true);
+});
+
+test("a failed lil creation registers nothing", async () => {
+  // Fresh-lil path: the window never opens.
+  const blocked = await boot({ rejectWindowCreate: (opts) => opts.type === "popup" });
+  await blocked.deliver(fixture("message-context"));
+  await blocked.deliver(fixture("message-open-legacy"));
+  assert.equal(blocked.windows().length, 0);
+  assert.deepEqual(Object.keys(blocked.registry()), [], "no registry entry for a lil that never opened");
+
+  // Adopt path: the tab being adopted is already gone.
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.installed();
+  const normal = await env.chrome.windows.create({ url: "https://mail.example/", type: "normal" });
+  await env.clickMenu("send-to-lil", { id: 4242, windowId: normal.id, url: "https://mail.example/" });
+  assert.equal(env.windows().some((w) => w.type === "popup"), false);
+  assert.deepEqual(Object.keys(env.registry()), [], "no registry entry for an adoption that failed");
+});
+
+test("a failed incognito creation falls back to exactly one registered normal lil", async () => {
+  const env = await boot({ rejectWindowCreate: (opts) => !!opts.incognito });
+  await env.deliver(fixture("message-context"));
+  await env.deliver({ type: "open", url: "https://private.example/", incognito: true, left: 10, top: 10 });
+
+  const wins = env.windows();
+  assert.equal(wins.length, 1);
+  assert.equal(wins[0].incognito, false);
+  assert.deepEqual(Object.keys(env.registry()), [String(wins[0].id)]);
+  assert.ok(journalHas(env, "tabs.sendMessage", (e) => e.message.action === "incognitoHint"));
+});
+
+test("geometry maintenance never requests focus", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver({ type: "open", url: "https://a.example/", left: 10, top: 10 });
+  const lil = env.windows()[0];
+  const other = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+
+  const before = env.journal().length;
+  await env.chrome.windows.update(lil.id, { left: 40, top: 50, width: 800, height: 600 });
+  await env.flush();
+
+  const after = env.journal().slice(before);
+  assert.equal(
+    after.some((e) => e.op === "windows.update" && e.update && e.update.focused === true),
+    false,
+    "a bounds change must not raise the lil"
+  );
+  assert.equal(env.windows().find((w) => w.id === other.id).focused, true, "focus stays where the user left it");
+  assert.equal(env.registry()[String(lil.id)].bounds.width, 800, "the bounds are still recorded");
+});
+
 test("suite runs without a live profile or the repo as cwd", async () => {
   const originalCwd = process.cwd();
   const originalHome = process.env.HOME;
