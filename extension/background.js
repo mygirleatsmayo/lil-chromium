@@ -358,7 +358,7 @@ async function handlePortMessage(msg) {
       if (msg.incognito) {
         await openIncognitoLil(msg.url, msg.left, msg.top);
       } else {
-        await openLittleWindow(msg.url, msg.left, msg.top);
+        await openLil({ url: msg.url, left: msg.left, top: msg.top });
       }
     } else if (msg.type === "history-query") {
       await answerHistoryQuery(msg);
@@ -519,82 +519,104 @@ async function clampBounds(left, top, width, height) {
 }
 
 // ===========================================================================
-// LITTLE WINDOW CREATION
+// LIL LIFECYCLE — the one boundary every lil is born through.
+//
+// Creation, placement, focus, and registration are a single policy here, so the
+// five entry paths (app-requested open, incognito open, cascaded tab, Send to
+// lil, restart restoration) differ only in the spec they hand in. Nothing is
+// registered until Chromium confirms a window id, so a failure at any step
+// cannot leave a registry entry for a window that does not exist.
 // ===========================================================================
 
-async function openLittleWindow(url, left, top) {
-  if (typeof url !== "string" || !url) {
-    log("openLittleWindow: missing url");
+const incognitoLils = new Set(); // window ids of live incognito lils
+
+/**
+ * Open one lil and bring it into the lifecycle. Returns the created window, or
+ * null if creation failed.
+ *
+ * spec:
+ *   url          URL for a fresh lil. Omit when adopting an existing tab.
+ *   tabId        Existing tab to adopt into the new lil.
+ *   left, top    Desired top-left before clamping; undefined centers the lil.
+ *   size         {width, height}; defaults to the remembered last user size.
+ *   focus        Ask for focus after create (default true). Also drives the MRU.
+ *   incognito    In-memory-only lil: never registered, never restored.
+ *   record       URL to store in the registry. Defaults to `url`, then the
+ *                adopted tab's URL — restoration uses it so a slept lil records
+ *                its real URL rather than its sleep-page URL.
+ *   registration Registry fields layered over the defaults (expiry seeded from
+ *                the host's ephemeralDefault, lastInteraction stamped now).
+ */
+async function openLil(spec) {
+  const adopting = spec.tabId !== undefined;
+  if (!adopting && (typeof spec.url !== "string" || !spec.url)) {
+    log("openLil: missing url");
     return null;
   }
-  const ctx = await getContext();
-  const size = await getLastSize();
-  const bounds = await clampBounds(left, top, size.width, size.height);
 
-  const createOpts = { url, type: "popup", focused: true, width: bounds.width, height: bounds.height };
-  if (bounds.left !== undefined) createOpts.left = bounds.left;
-  if (bounds.top !== undefined) createOpts.top = bounds.top;
+  const size = spec.size || (await getLastSize());
+  const bounds = await clampBounds(spec.left, spec.top, size.width, size.height);
+  const focus = spec.focus !== false;
 
-  const win = await safe(chrome.windows.create(createOpts), "windows.create little");
+  const opts = { type: "popup", focused: focus, width: bounds.width, height: bounds.height };
+  if (adopting) opts.tabId = spec.tabId;
+  else opts.url = spec.url;
+  if (spec.incognito) opts.incognito = true;
+  if (bounds.left !== undefined) opts.left = bounds.left;
+  if (bounds.top !== undefined) opts.top = bounds.top;
+
+  const win = await safe(chrome.windows.create(opts), "windows.create lil");
   if (!win || win.id === undefined) return null;
 
-  // Explicit refocus (create({focused:true}) unreliable when not frontmost).
-  await focusWindow(win.id);
-  mruTouch(win.id);
+  if (focus) {
+    // Explicit refocus (create({focused:true}) unreliable when not frontmost).
+    await focusWindow(win.id);
+    mruTouch(win.id);
+  }
 
+  // Incognito lils live in memory only: never persisted, never restored.
+  if (spec.incognito) {
+    incognitoLils.add(win.id);
+    return win;
+  }
+
+  const ctx = await getContext();
   await registerWindow(
     win.id,
-    url,
+    spec.record || spec.url || (win.tabs && win.tabs[0] && win.tabs[0].url) || "",
     { left: win.left, top: win.top, width: win.width, height: win.height },
-    { expiry: ctx.ephemeralDefault, lastInteraction: Date.now() }
+    Object.assign({ expiry: ctx.ephemeralDefault, lastInteraction: Date.now() }, spec.registration)
   );
   return win;
+}
+
+// Top-left for a lil cascaded off `windowId`. `fallback` is used per axis when
+// the source window has no position — undefined lets clampBounds center instead.
+async function cascadeOrigin(windowId, fallback) {
+  const src = await safe(chrome.windows.get(windowId), "windows.get cascade origin");
+  const offset = (v) => (typeof v === "number" ? v + CASCADE_OFFSET : fallback);
+  return { left: offset(src && src.left), top: offset(src && src.top) };
 }
 
 // ===========================================================================
 // INCOGNITO LILS (v3).
 //
-// In-memory only: never persisted to the restore registry, never slept/captured.
 // Gated on isAllowedIncognitoAccess(); if off, fall back to a NORMAL lil and
 // tell the content overlay to show a hint toast pointing at the toggle.
 // ===========================================================================
 
-const incognitoLils = new Set(); // window ids of live incognito lils
-
 async function openIncognitoLil(url, left, top) {
   if (typeof url !== "string" || !url) return null;
-  const allowed = await safe(chrome.extension.isAllowedIncognitoAccess(), "isAllowedIncognitoAccess");
-  if (!allowed) {
-    // Fall back to a normal lil and ask its overlay to surface the toggle hint.
-    const win = await openLittleWindow(url, left, top);
-    if (win && win.id !== undefined) queueIncognitoHint(win.id);
+  // A normal lil whose overlay surfaces the incognito-toggle hint.
+  const fallback = async () => {
+    const win = await openLil({ url, left, top });
+    if (win) queueIncognitoHint(win.id);
     return win;
-  }
-
-  const size = await getLastSize();
-  const bounds = await clampBounds(left, top, size.width, size.height);
-  const opts = {
-    url,
-    type: "popup",
-    incognito: true,
-    focused: true,
-    width: bounds.width,
-    height: bounds.height,
   };
-  if (bounds.left !== undefined) opts.left = bounds.left;
-  if (bounds.top !== undefined) opts.top = bounds.top;
-
-  const win = await safe(chrome.windows.create(opts), "windows.create incognito");
-  if (!win || win.id === undefined) {
-    // lastError (toggle raced off, etc.) → normal fallback.
-    const fb = await openLittleWindow(url, left, top);
-    if (fb && fb.id !== undefined) queueIncognitoHint(fb.id);
-    return fb;
-  }
-  await focusWindow(win.id);
-  mruTouch(win.id);
-  incognitoLils.add(win.id);
-  return win;
+  const allowed = await safe(chrome.extension.isAllowedIncognitoAccess(), "isAllowedIncognitoAccess");
+  if (!allowed) return fallback();
+  // A failed create means the toggle raced off (or worse) → normal fallback.
+  return (await openLil({ url, left, top, incognito: true })) || fallback();
 }
 
 // When we fall back to a normal lil in place of an incognito one, the overlay
@@ -638,39 +660,25 @@ async function restoreWindows() {
     if (entry.expiry === "quit") continue; // excluded from restore
 
     const b = entry.bounds || {};
-    const clamped = await clampBounds(
-      b.left,
-      b.top,
-      b.width || DEFAULT_SIZE.width,
-      b.height || DEFAULT_SIZE.height
-    );
-
     // Slept lils reopen straight to their sleep page (screenshot still in IDB).
-    let openUrl = entry.url;
-    if (entry.slept && entry.sleepCaptureKey && entry.originalUrl) {
-      openUrl = sleepPageUrl(entry.sleepCaptureKey, entry.originalUrl);
-    }
+    const slept = entry.slept && entry.sleepCaptureKey && entry.originalUrl;
 
-    const opts = { url: openUrl, type: "popup", focused: false, width: clamped.width, height: clamped.height };
-    if (clamped.left !== undefined) opts.left = clamped.left;
-    if (clamped.top !== undefined) opts.top = clamped.top;
-
-    const win = await safe(chrome.windows.create(opts), "windows.create restore");
-    if (win && win.id !== undefined) {
-      await registerWindow(
-        win.id,
-        entry.url,
-        { left: win.left, top: win.top, width: win.width, height: win.height },
-        {
-          expiry: normalizeExpiry(entry.expiry, "never"),
-          lastInteraction: Date.now(),
-          slept: !!entry.slept,
-          sleepCaptureKey: entry.sleepCaptureKey,
-          originalUrl: entry.originalUrl,
-        }
-      );
-      restored += 1;
-    }
+    const win = await openLil({
+      url: slept ? sleepPageUrl(entry.sleepCaptureKey, entry.originalUrl) : entry.url,
+      record: entry.url,
+      left: b.left,
+      top: b.top,
+      size: { width: b.width || DEFAULT_SIZE.width, height: b.height || DEFAULT_SIZE.height },
+      focus: false, // restoration must never steal focus from the user
+      registration: {
+        expiry: normalizeExpiry(entry.expiry, "never"),
+        lastInteraction: Date.now(),
+        slept: !!entry.slept,
+        sleepCaptureKey: entry.sleepCaptureKey,
+        originalUrl: entry.originalUrl,
+      },
+    });
+    if (win) restored += 1;
   }
   log("restored", restored, "little window(s)");
 }
@@ -776,33 +784,11 @@ function matchesOAuthGuard(url) {
   return false;
 }
 
-// Cascade an existing tab into its own offset popup lil. Registers + focuses it.
+// Cascade an existing tab into its own offset popup lil. A source window with
+// no position cascades off the origin, so the lil still lands offset.
 async function cascadeTabToLil(tabId, srcWindowId, fallbackUrl) {
-  const ctx = await getContext();
-  const srcWin = await safe(chrome.windows.get(srcWindowId), "windows.get source");
-  const baseLeft = srcWin && typeof srcWin.left === "number" ? srcWin.left : 0;
-  const baseTop = srcWin && typeof srcWin.top === "number" ? srcWin.top : 0;
-  const size = await getLastSize();
-
-  const clamped = await clampBounds(baseLeft + CASCADE_OFFSET, baseTop + CASCADE_OFFSET, size.width, size.height);
-
-  const opts = { tabId, type: "popup", focused: true, width: clamped.width, height: clamped.height };
-  if (clamped.left !== undefined) opts.left = clamped.left;
-  if (clamped.top !== undefined) opts.top = clamped.top;
-
-  const win = await safe(chrome.windows.create(opts), "windows.create cascade");
-  if (win && win.id !== undefined) {
-    await focusWindow(win.id); // explicit — create({focused:true}) unreliable
-    mruTouch(win.id);
-    const url = fallbackUrl || (win.tabs && win.tabs[0] && win.tabs[0].url) || "";
-    await registerWindow(
-      win.id,
-      url || "",
-      { left: win.left, top: win.top, width: win.width, height: win.height },
-      { expiry: ctx.ephemeralDefault, lastInteraction: Date.now() }
-    );
-  }
-  return win;
+  const { left, top } = await cascadeOrigin(srcWindowId, CASCADE_OFFSET);
+  return openLil({ tabId, record: fallbackUrl, left, top });
 }
 
 chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
@@ -1583,9 +1569,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           // Caret-menu "Reopen in incognito lil": open same URL incognito, close current.
           const url = msg.url || (sender && sender.tab ? sender.tab.url : "");
           if (senderWindowId !== undefined) {
-            const srcWin = await safe(chrome.windows.get(senderWindowId), "windows.get reopen");
-            const left = srcWin && typeof srcWin.left === "number" ? srcWin.left + CASCADE_OFFSET : undefined;
-            const top = srcWin && typeof srcWin.top === "number" ? srcWin.top + CASCADE_OFFSET : undefined;
+            const { left, top } = await cascadeOrigin(senderWindowId);
             await openIncognitoLil(url, left, top);
             mruRemove(senderWindowId);
             await deregisterWindow(senderWindowId);
@@ -1715,29 +1699,8 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 
 // Re-parent the current NORMAL-window tab into a new lil (Send to lil).
 async function sendTabToLil(tabId, srcWindowId) {
-  const ctx = await getContext();
-  const srcWin = await safe(chrome.windows.get(srcWindowId), "windows.get sendtolil");
-  const baseLeft = srcWin && typeof srcWin.left === "number" ? srcWin.left + CASCADE_OFFSET : undefined;
-  const baseTop = srcWin && typeof srcWin.top === "number" ? srcWin.top + CASCADE_OFFSET : undefined;
-  const size = await getLastSize();
-  const clamped = await clampBounds(baseLeft, baseTop, size.width, size.height);
-
-  const opts = { tabId, type: "popup", focused: true, width: clamped.width, height: clamped.height };
-  if (clamped.left !== undefined) opts.left = clamped.left;
-  if (clamped.top !== undefined) opts.top = clamped.top;
-
-  const win = await safe(chrome.windows.create(opts), "windows.create sendtolil");
-  if (win && win.id !== undefined) {
-    await focusWindow(win.id);
-    mruTouch(win.id);
-    const url = (win.tabs && win.tabs[0] && win.tabs[0].url) || "";
-    await registerWindow(
-      win.id,
-      url,
-      { left: win.left, top: win.top, width: win.width, height: win.height },
-      { expiry: ctx.ephemeralDefault, lastInteraction: Date.now() }
-    );
-  }
+  const { left, top } = await cascadeOrigin(srcWindowId);
+  return openLil({ tabId, left, top });
 }
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
@@ -1754,9 +1717,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         return;
       case CTX_INCOGNITO_LIL:
         if (isLil && info.linkUrl) {
-          const srcWin = await safe(chrome.windows.get(tab.windowId), "windows.get ctx incognito");
-          const left = srcWin && typeof srcWin.left === "number" ? srcWin.left + CASCADE_OFFSET : undefined;
-          const top = srcWin && typeof srcWin.top === "number" ? srcWin.top + CASCADE_OFFSET : undefined;
+          const { left, top } = await cascadeOrigin(tab.windowId);
           await openIncognitoLil(info.linkUrl, left, top);
         }
         return;
