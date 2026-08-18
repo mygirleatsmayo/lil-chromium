@@ -250,8 +250,9 @@ function consumeClickHint(url) {
 // Maintained via windows.onFocusChanged (ignoring WINDOW_ID_NONE). Keeps BOTH
 // lil and normal windows so, when a focused lil closes, we can return focus to
 // whatever the user was truly on last. Memory-only; rebuilt as the user clicks
-// around. Every lil create is followed by an explicit focusWindow() because
-// create({focused:true}) is unreliable on macOS (research §Focus).
+// around. Focused lil creates are followed by an explicit focusWindow() because
+// create({focused:true}) is unreliable on macOS (research §Focus); unfocused
+// creates (restoreWindows) skip it.
 // ===========================================================================
 
 const mruStack = []; // window ids, most-recent-first
@@ -283,7 +284,7 @@ async function mruTopAlive(excludeId) {
   return null;
 }
 
-// Explicit focus. Always used after windows.create for a lil.
+// Explicit focus. Used after windows.create when a lil is asked to take focus.
 async function focusWindow(windowId) {
   if (typeof windowId !== "number") return;
   await safe(chrome.windows.update(windowId, { focused: true }), "windows.update focus");
@@ -541,7 +542,7 @@ const incognitoLils = new Set(); // window ids of live incognito lils
  *   size         {width, height}; defaults to the remembered last user size.
  *   focus        Ask for focus after create (default true). Also drives the MRU.
  *   incognito    In-memory-only lil: never registered, never restored.
- *   record       URL to store in the registry. Defaults to `url`, then the
+ *   recordUrl    URL to store in the registry. Defaults to `url`, then the
  *                adopted tab's URL — restoration uses it so a slept lil records
  *                its real URL rather than its sleep-page URL.
  *   registration Registry fields layered over the defaults (expiry seeded from
@@ -583,18 +584,19 @@ async function openLil(spec) {
   const ctx = await getContext();
   await registerWindow(
     win.id,
-    spec.record || spec.url || (win.tabs && win.tabs[0] && win.tabs[0].url) || "",
+    spec.recordUrl || spec.url || (win.tabs && win.tabs[0] && win.tabs[0].url) || "",
     { left: win.left, top: win.top, width: win.width, height: win.height },
     Object.assign({ expiry: ctx.ephemeralDefault, lastInteraction: Date.now() }, spec.registration)
   );
   return win;
 }
 
-// Top-left for a lil cascaded off `windowId`. `fallback` is used per axis when
-// the source window has no position — undefined lets clampBounds center instead.
-async function cascadeOrigin(windowId, fallback) {
+// Top-left for a lil cascaded off `windowId`. `unpositionedCoord` is used per
+// axis when the source window has no position — undefined lets clampBounds
+// center instead.
+async function cascadeOrigin(windowId, unpositionedCoord) {
   const src = await safe(chrome.windows.get(windowId), "windows.get cascade origin");
-  const offset = (v) => (typeof v === "number" ? v + CASCADE_OFFSET : fallback);
+  const offset = (v) => (typeof v === "number" ? v + CASCADE_OFFSET : unpositionedCoord);
   return { left: offset(src && src.left), top: offset(src && src.top) };
 }
 
@@ -665,7 +667,7 @@ async function restoreWindows() {
 
     const win = await openLil({
       url: slept ? sleepPageUrl(entry.sleepCaptureKey, entry.originalUrl) : entry.url,
-      record: entry.url,
+      recordUrl: entry.url,
       left: b.left,
       top: b.top,
       size: { width: b.width || DEFAULT_SIZE.width, height: b.height || DEFAULT_SIZE.height },
@@ -784,11 +786,11 @@ function matchesOAuthGuard(url) {
   return false;
 }
 
-// Cascade an existing tab into its own offset popup lil. A source window with
+// Cascade an existing tab into its own offset lil. A source window with
 // no position cascades off the origin, so the lil still lands offset.
 async function cascadeTabToLil(tabId, srcWindowId, fallbackUrl) {
   const { left, top } = await cascadeOrigin(srcWindowId, CASCADE_OFFSET);
-  return openLil({ tabId, record: fallbackUrl, left, top });
+  return openLil({ tabId, recordUrl: fallbackUrl, left, top });
 }
 
 chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {

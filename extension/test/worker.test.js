@@ -382,7 +382,7 @@ test("an incognito lil is focused, in-memory only, and never restored", async ()
   await env.deliver({ type: "open", url: "https://normal.example/", left: 60, top: 60 });
 
   const secret = env.windows().find((w) => w.incognito);
-  assert.ok(secret, "incognito open creates an incognito popup");
+  assert.ok(secret, "incognito open creates an incognito lil");
   assert.equal(secret.type, "popup");
   assert.ok(journalHas(env, "windows.update", (e) => e.windowId === secret.id && e.update.focused === true));
 
