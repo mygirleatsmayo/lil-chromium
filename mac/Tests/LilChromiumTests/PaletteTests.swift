@@ -99,3 +99,261 @@ struct PaletteRowsTests {
         #expect(model.autocompleteHost(for: "quarterly budget review") == nil)
     }
 }
+
+/// Row ORDER around the Search action (issue #13).
+///
+/// The rule under test: for non-empty, non-URL text, only a contiguous literal
+/// match inside the distinctive label of a history entry's registrable domain
+/// may sit above Search. Public suffixes (e.g. `com`) never promote.
+/// Every assertion names rows and action URLs in order — never a score.
+struct PaletteOrderingTests {
+
+    /// A fixed clock; every fixture visit is expressed as an age against it.
+    private let nowMs: Double = 1_700_000_000_000
+
+    /// One history entry. Defaults describe an ordinary, recently visited page.
+    private func visit(
+        _ url: String,
+        title: String = "",
+        visits: Int = 5,
+        typed: Int = 0,
+        daysAgo: Double = 1
+    ) -> HistoryItem {
+        HistoryItem(
+            url: url,
+            title: title,
+            lastVisitTime: nowMs - daysAgo * 86_400_000,
+            visitCount: visits,
+            typedCount: typed
+        )
+    }
+
+    /// A palette model over exactly `items`, searching with the Startpage default.
+    private func model(_ items: HistoryItem...) -> PaletteModel {
+        model(items)
+    }
+
+    private func model(_ items: [HistoryItem]) -> PaletteModel {
+        let model = PaletteModel()
+        model.setIndex(Ranking.buildIndex(items: items, nowMs: nowMs))
+        model.searchEngine = .defaults
+        return model
+    }
+
+    // MARK: - Above Search: literal registrable-domain matches
+
+    /// "git" prefixes the registrable domain github.com, so the site leads.
+    @Test func registrableDomainPrefixLeadsSearch() {
+        let rows = model(visit("https://github.com/", title: "GitHub")).rows(for: "git")
+
+        #expect(rows.map(\.kind) == [.history, .search])
+        #expect(rows[0].actionURL == "https://github.com")
+    }
+
+    /// "hub" sits inside github.com — an interior match is as eligible as a prefix.
+    @Test func registrableDomainInteriorMatchLeadsSearch() {
+        let rows = model(visit("https://github.com/", title: "GitHub")).rows(for: "hub")
+
+        #expect(rows.map(\.kind) == [.history, .search])
+        #expect(rows[0].actionURL == "https://github.com")
+    }
+
+    // MARK: - Below Search: everything else
+
+    /// "news" matches only the subdomain of news.ycombinator.com, so Search leads.
+    @Test func subdomainOnlyMatchStaysBelowSearch() {
+        let rows = model(
+            visit("https://news.ycombinator.com/", title: "Hacker News")
+        ).rows(for: "news")
+
+        #expect(rows.map(\.kind) == [.search, .history])
+        #expect(rows[1].actionURL == "https://news.ycombinator.com")
+    }
+
+    /// A title word is not a domain, so "gizmo" searches first.
+    @Test func titleOnlyMatchStaysBelowSearch() {
+        let rows = model(
+            visit("https://github.com/", title: "GitHub", visits: 50),
+            visit("https://github.com/acme/app/commit/1", title: "Fix gizmo alignment")
+        ).rows(for: "gizmo")
+
+        #expect(rows.map(\.kind) == [.search, .history])
+        #expect(rows[1].actionURL == "https://github.com/acme/app/commit/1")
+    }
+
+    /// A path segment is not a domain either.
+    @Test func pathOnlyMatchStaysBelowSearch() {
+        let rows = model(
+            visit("https://example.com/", title: "Example", visits: 50),
+            visit("https://example.com/pricing", title: "Plans")
+        ).rows(for: "pricing")
+
+        #expect(rows.map(\.kind) == [.search, .history])
+        #expect(rows[1].actionURL == "https://example.com/pricing")
+    }
+
+    /// Nor is a query string.
+    @Test func queryStringOnlyMatchStaysBelowSearch() {
+        let rows = model(visit("https://example.com/s?q=telescope", title: "Results")).rows(for: "telescope")
+
+        #expect(rows.map(\.kind) == [.search, .history])
+        #expect(rows[1].actionURL == "https://example.com/s?q=telescope")
+    }
+
+    /// Text that appears only in an unrelated part of the URL stays below Search.
+    @Test func unrelatedURLTextStaysBelowSearch() {
+        let rows = model(visit("https://example.com/blog/https-primer", title: "HTTPS")).rows(for: "https-primer")
+
+        #expect(rows.map(\.kind) == [.search, .history])
+    }
+
+    /// Novel text nothing matches leaves Search alone at the top.
+    @Test func unmatchedTextLeadsWithSearch() {
+        let rows = model(visit("https://github.com/", title: "GitHub")).rows(for: "quarterly review")
+
+        #expect(rows.map(\.kind) == [.search])
+    }
+
+    // MARK: - Fuzzy matches
+
+    /// Approximate matches stay available, but a subsequence scattered across a
+    /// title cannot outrank a dense one — the gap penalty is what separates them.
+    /// Both sit below Search because neither touches a registrable domain.
+    @Test func denseFuzzyMatchOutranksAScatteredOne() {
+        let rows = model(
+            visit("https://example.com/", title: "Example", visits: 50),
+            visit("https://example.com/2", title: "Sunny Weather Update Info"),
+            visit("https://example.com/1", title: "SwiftUI Basics")
+        ).rows(for: "swui")
+
+        #expect(rows.map(\.kind) == [.search, .history, .history])
+        #expect(rows[1].actionURL == "https://example.com/1", "dense subsequence ranks higher")
+        #expect(rows[2].actionURL == "https://example.com/2", "every match lands on a word boundary, but the gaps are large")
+    }
+
+    // MARK: - Competing eligible domains
+
+    /// Two domains both contain "exa"; the more frecent one takes the row above
+    /// Search and the other falls in below it.
+    @Test func frecencyBreaksTiesBetweenEligibleDomains() {
+        let rows = model(
+            visit("https://examples.org/", title: "Examples", visits: 2, typed: 0),
+            visit("https://example.com/", title: "Example", visits: 90, typed: 30)
+        ).rows(for: "exa")
+
+        #expect(rows.map(\.kind) == [.history, .search, .history])
+        #expect(rows[0].actionURL == "https://example.com")
+        #expect(rows[2].actionURL == "https://examples.org")
+    }
+
+    /// SP1: both domains are eligible, but one is a prefix match (higher tier)
+    /// and the other is a more-frecent interior match. Frecency, not tier,
+    /// chooses the row above Search.
+    @Test func frecencyNotTierChoosesAmongEligibleDomains() {
+        let rows = model(
+            visit("https://hubspot.com/", title: "HubSpot", visits: 20),
+            visit("https://github.com/", title: "GitHub", visits: 90, typed: 30)
+        ).rows(for: "hub")
+
+        #expect(rows.map(\.kind) == [.history, .search, .history])
+        #expect(rows[0].actionURL == "https://github.com")
+        #expect(rows[2].actionURL == "https://hubspot.com")
+    }
+
+    /// NA1: the promoted row (github.com, more frecent) and the inline
+    /// type-ahead host must be the same site. HubSpot is the higher-tier
+    /// prefix; it stays below Search and must not become the ghost text.
+    @Test func promotedRowAndTypeAheadNameTheSameHost() {
+        let palette = model(
+            visit("https://hubspot.com/", title: "HubSpot", visits: 20),
+            visit("https://github.com/", title: "GitHub", visits: 90, typed: 30)
+        )
+        let rows = palette.rows(for: "hub")
+
+        #expect(rows.map(\.kind) == [.history, .search, .history])
+        #expect(rows[0].actionURL == "https://github.com")
+        #expect(rows[2].actionURL == "https://hubspot.com")
+        #expect(rows[0].host == "github.com")
+        #expect(palette.autocompleteHost(for: "hub") == rows[0].host)
+    }
+
+    /// SP2: seven ineligible host-prefix rows would fill the old rank budget
+    /// and drop the eligible interior match, so Search would lead. Eligibility
+    /// is resolved first; github.com stays above Search.
+    @Test func eligibleMatchIsNotEvictedByIneligiblePrefixRows() {
+        let ineligible = ["alpha", "beta", "gamma", "delta", "echo", "foxtrot", "golf"].map {
+            visit("https://hub.\($0).com/", title: $0, visits: 90, typed: 30)
+        }
+        let rows = model(
+            ineligible + [visit("https://github.com/", title: "GitHub", visits: 5)]
+        ).rows(for: "hub")
+
+        #expect(rows[0].kind == .history)
+        #expect(rows[0].actionURL == "https://github.com")
+        #expect(rows[1].kind == .search)
+    }
+
+    // MARK: - Distinctive label only (no TLD matching)
+
+    /// D1: `com` is the public suffix, not the distinctive label, so it cannot
+    /// promote every `.com` site above Search.
+    @Test func bareTLDQueryFallsToSearch() {
+        let rows = model(
+            visit("https://github.com/", title: "GitHub", visits: 90, typed: 30),
+            visit("https://example.com/", title: "Example", visits: 50)
+        ).rows(for: "com")
+
+        #expect(rows[0].kind == .search)
+        #expect(rows.contains { $0.actionURL == "https://github.com" })
+        #expect(rows.contains { $0.actionURL == "https://example.com" })
+    }
+
+    /// D1: the distinctive label still promotes, including under a country-code
+    /// public suffix.
+    @Test func registrableLabelMatchStillPromotes() {
+        let rows = model(
+            visit("https://shop.example.co.uk/", title: "Shop")
+        ).rows(for: "example")
+
+        #expect(rows.map(\.kind) == [.history, .search])
+        #expect(rows[0].actionURL == "https://shop.example.co.uk")
+    }
+
+    // MARK: - Duplicates and per-host limits
+
+    /// Pages that tie on every ranking signal still produce ONE fixed order:
+    /// `www.` is not a second site, and the per-host cap keeps the same three
+    /// rows whichever order the browser reported history in.
+    @Test func duplicatesAndPerHostCapDoNotDependOnHistoryOrder() {
+        let history = [
+            visit("https://example.com/a", title: "Alpha"),
+            visit("https://www.example.com/a", title: "Alpha"),
+            visit("https://example.com/b", title: "Bravo"),
+            visit("https://example.com/c", title: "Charlie"),
+            visit("https://example.com/d", title: "Delta"),
+        ]
+
+        let forward = model(history).rows(for: "example").map(\.actionURL)
+        let reversed = model(history.reversed()).rows(for: "example").map(\.actionURL)
+
+        #expect(forward == reversed, "row order is a function of history content, not its arrival order")
+        #expect(forward == [
+            "https://example.com",
+            "https://www.startpage.com/sp/search?query=example",
+            "https://example.com/a",
+            "https://example.com/b",
+        ])
+    }
+
+    // MARK: - URL-like input
+
+    /// URL-ish text keeps Open first and Search immediately after it, even when
+    /// history holds a literal domain match for the same site.
+    @Test func urlInputKeepsOpenThenSearchAhead() {
+        let rows = model(visit("https://example.com/", title: "Example", visits: 90, typed: 30))
+            .rows(for: "example.com/pricing")
+
+        #expect(rows.prefix(2).map(\.kind) == [.openURL, .search])
+        #expect(rows[0].actionURL == "https://example.com/pricing")
+    }
+}

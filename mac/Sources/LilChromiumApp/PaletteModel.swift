@@ -42,10 +42,16 @@ final class PaletteModel {
         self.index = index
     }
 
-    /// The top-hit host for the current query, if a host prefixes it — used to
-    /// drive inline type-ahead autocomplete. Returns the host (sans "www.") of
-    /// the highest-scoring host-prefix origin, else nil.
+    /// The host offered for inline type-ahead. When a history row sits above
+    /// Search, that is the host Enter opens — ghost text must name it too.
+    /// Otherwise the highest-scoring host-prefix origin, else nil.
     func autocompleteHost(for query: String) -> String? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty, !URLIntent.looksLikeURL(trimmed) {
+            if let top = rows(for: query).first, top.kind == .history {
+                return top.host
+            }
+        }
         let ranked = Ranking.rank(query: query, index: index, limit: 1)
         guard let first = ranked.first,
               let host = first.autocompleteHostValue else { return nil }
@@ -54,11 +60,16 @@ final class PaletteModel {
 
     /// Compute the rows to display for `query`.
     ///
-    /// Order (non-URL query):
-    ///   1. top hit (best host-prefix origin or best page)
+    /// Ordering (Issue #13) — non-URL text behaves like search unless history
+    /// holds a literal match in a registrable domain's distinctive label:
+    ///   1. the best history match whose REGISTRABLE-DOMAIN LABEL literally
+    ///      contains the query, if there is one (prefix or interior; never a
+    ///      public suffix, subdomain, title, path, query string, or fuzzy-only
+    ///      match). Among eligible domains, frecency decides — not match tier.
     ///   2. "Search {engine} for '<query>'"
-    ///   3. remaining history matches (filling to the cap)
-    /// When the input parses as a URL: an "Open <url>" row REPLACES position 1.
+    ///   3. every remaining history match, best-first
+    /// URL-like input instead leads with "Open <url>" and puts Search directly
+    /// after it, so navigation is never mistaken for search.
     /// Empty query: top-8 by frecency, no search row.
     func rows(for query: String) -> [PaletteRow] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -71,12 +82,14 @@ final class PaletteModel {
         var rows: [PaletteRow] = []
         let looksURL = URLIntent.looksLikeURL(trimmed)
 
-        // Budget: reserve one slot for the search row and (if URL) the open row.
-        var budget = maxRows
-        if !trimmed.isEmpty { budget -= 1 }   // search row
-        budget = max(0, budget)
-
-        let matches = Ranking.rank(query: trimmed, index: index, limit: budget)
+        // Rank the full candidate set before spending the display budget, so an
+        // eligible registrable-label match cannot be evicted by ineligible
+        // higher-tier rows that would otherwise fill `maxRows`.
+        var matches = Ranking.rank(
+            query: trimmed,
+            index: index,
+            limit: max(maxRows, index.pages.count + index.origins.count)
+        )
 
         if looksURL {
             // Position 1 is the explicit "Open <url>" row (per contract).
@@ -89,20 +102,31 @@ final class PaletteModel {
                 host: Ranking.hostAndPath(normalized)?.host,
                 autocompleteHost: nil
             ))
-            // Then the search row, then history.
-            rows.append(searchRow(trimmed))
-            for m in matches { rows.append(historyRow(m)) }
-        } else {
-            // Position 1 = top hit (first ranked match), position 2 = search,
-            // then the remaining matches.
-            if let top = matches.first {
-                rows.append(historyRow(top))
-            }
-            rows.append(searchRow(trimmed))
-            for m in matches.dropFirst() { rows.append(historyRow(m)) }
+        } else if let promoted = bestEligibleIndex(in: matches) {
+            rows.append(historyRow(matches.remove(at: promoted)))
         }
 
+        rows.append(searchRow(trimmed))
+        rows.append(contentsOf: matches.map(historyRow))
+
         return Array(rows.prefix(maxRows))
+    }
+
+    /// Among eligible registrable-label matches, frecency is the tie-breaker
+    /// (criterion 6). Match-tier `score` is ignored here; `isBefore` only
+    /// breaks equal-frecency ties so the pick stays a total order.
+    private func bestEligibleIndex(in matches: [Ranking.RankedResult]) -> Int? {
+        var best: Int?
+        for (i, r) in matches.enumerated() where r.matchesRegistrableLabel {
+            guard let b = best else { best = i; continue }
+            let cur = matches[b]
+            if r.frecency != cur.frecency {
+                if r.frecency > cur.frecency { best = i }
+            } else if Ranking.isBefore(r, cur) {
+                best = i
+            }
+        }
+        return best
     }
 
     // MARK: - Row builders
