@@ -124,6 +124,10 @@ export async function boot(options = {}) {
       await state.events.runtime.onInstalled.fire({ reason: "install" });
       await flush();
     },
+    async startup() {
+      await state.events.runtime.onStartup.fire();
+      await flush();
+    },
     async alarm(name = "lil-sweep") {
       await state.events.alarms.onAlarm.fire({ name });
       await flush();

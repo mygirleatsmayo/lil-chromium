@@ -63,6 +63,8 @@ export function createChrome(options = {}) {
   const tabGroups = [...(options.tabGroups || [])];
   const displays = options.displays ? [...options.displays] : [DEFAULT_DISPLAY];
   let incognitoAllowed = options.incognitoAllowed !== false;
+  // Fault injection: predicate over windows.create options; true ⇒ the call rejects.
+  const rejectWindowCreate = options.rejectWindowCreate || (() => false);
   let lastError = undefined;
   let nextWindowId = 1;
   let nextTabId = 1;
@@ -129,6 +131,7 @@ export function createChrome(options = {}) {
   }
 
   async function createWindow(opts = {}) {
+    if (rejectWindowCreate(opts)) return Promise.reject(new Error("windows.create failed"));
     if (typeof opts.tabId === "number" && !tabs.has(opts.tabId)) {
       return rejectMissing("tab", opts.tabId);
     }
