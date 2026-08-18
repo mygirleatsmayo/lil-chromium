@@ -129,6 +129,10 @@ struct PaletteOrderingTests {
 
     /// A palette model over exactly `items`, searching with the Startpage default.
     private func model(_ items: HistoryItem...) -> PaletteModel {
+        model(items)
+    }
+
+    private func model(_ items: [HistoryItem]) -> PaletteModel {
         let model = PaletteModel()
         model.setIndex(Ranking.buildIndex(items: items, nowMs: nowMs))
         model.searchEngine = .defaults
@@ -209,6 +213,23 @@ struct PaletteOrderingTests {
         #expect(rows.map(\.kind) == [.search])
     }
 
+    // MARK: - Fuzzy matches
+
+    /// Approximate matches stay available, but a subsequence scattered across a
+    /// title cannot outrank a dense one — the gap penalty is what separates them.
+    /// Both sit below Search because neither touches a registrable domain.
+    @Test func denseFuzzyMatchOutranksAScatteredOne() {
+        let rows = model(
+            visit("https://example.com/", title: "Example", visits: 50),
+            visit("https://example.com/2", title: "Sunny Weather Update Info"),
+            visit("https://example.com/1", title: "SwiftUI Basics")
+        ).rows(for: "swui")
+
+        #expect(rows.map(\.kind) == [.search, .history, .history])
+        #expect(rows[1].actionURL == "https://example.com/1", "dense subsequence ranks higher")
+        #expect(rows[2].actionURL == "https://example.com/2", "every match lands on a word boundary, but the gaps are large")
+    }
+
     // MARK: - Competing eligible domains
 
     /// Two domains both contain "exa"; the more frecent one takes the row above
@@ -222,6 +243,32 @@ struct PaletteOrderingTests {
         #expect(rows.map(\.kind) == [.history, .search, .history])
         #expect(rows[0].actionURL == "https://example.com")
         #expect(rows[2].actionURL == "https://examples.org")
+    }
+
+    // MARK: - Duplicates and per-host limits
+
+    /// Pages that tie on every ranking signal still produce ONE fixed order:
+    /// `www.` is not a second site, and the per-host cap keeps the same three
+    /// rows whichever order the browser reported history in.
+    @Test func duplicatesAndPerHostCapDoNotDependOnHistoryOrder() {
+        let history = [
+            visit("https://example.com/a", title: "Alpha"),
+            visit("https://www.example.com/a", title: "Alpha"),
+            visit("https://example.com/b", title: "Bravo"),
+            visit("https://example.com/c", title: "Charlie"),
+            visit("https://example.com/d", title: "Delta"),
+        ]
+
+        let forward = model(history).rows(for: "example").map(\.actionURL)
+        let reversed = model(history.reversed()).rows(for: "example").map(\.actionURL)
+
+        #expect(forward == reversed, "row order is a function of history content, not its arrival order")
+        #expect(forward == [
+            "https://example.com",
+            "https://www.startpage.com/sp/search?query=example",
+            "https://example.com/a",
+            "https://example.com/b",
+        ])
     }
 
     // MARK: - URL-like input
