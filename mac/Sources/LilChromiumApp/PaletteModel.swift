@@ -42,10 +42,16 @@ final class PaletteModel {
         self.index = index
     }
 
-    /// The top-hit host for the current query, if a host prefixes it — used to
-    /// drive inline type-ahead autocomplete. Returns the host (sans "www.") of
-    /// the highest-scoring host-prefix origin, else nil.
+    /// The host offered for inline type-ahead. When a history row sits above
+    /// Search, that is the host Enter opens — ghost text must name it too.
+    /// Otherwise the highest-scoring host-prefix origin, else nil.
     func autocompleteHost(for query: String) -> String? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty, !URLIntent.looksLikeURL(trimmed) {
+            if let top = rows(for: query).first, top.kind == .history {
+                return top.host
+            }
+        }
         let ranked = Ranking.rank(query: query, index: index, limit: 1)
         guard let first = ranked.first,
               let host = first.autocompleteHostValue else { return nil }

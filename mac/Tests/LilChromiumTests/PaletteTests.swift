@@ -260,6 +260,23 @@ struct PaletteOrderingTests {
         #expect(rows[2].actionURL == "https://hubspot.com")
     }
 
+    /// NA1: the promoted row (github.com, more frecent) and the inline
+    /// type-ahead host must be the same site. HubSpot is the higher-tier
+    /// prefix; it stays below Search and must not become the ghost text.
+    @Test func promotedRowAndTypeAheadNameTheSameHost() {
+        let palette = model(
+            visit("https://hubspot.com/", title: "HubSpot", visits: 20),
+            visit("https://github.com/", title: "GitHub", visits: 90, typed: 30)
+        )
+        let rows = palette.rows(for: "hub")
+
+        #expect(rows.map(\.kind) == [.history, .search, .history])
+        #expect(rows[0].actionURL == "https://github.com")
+        #expect(rows[2].actionURL == "https://hubspot.com")
+        #expect(rows[0].host == "github.com")
+        #expect(palette.autocompleteHost(for: "hub") == rows[0].host)
+    }
+
     /// SP2: seven ineligible host-prefix rows would fill the old rank budget
     /// and drop the eligible interior match, so Search would lead. Eligibility
     /// is resolved first; github.com stays above Search.
