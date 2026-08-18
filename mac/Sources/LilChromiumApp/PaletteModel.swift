@@ -54,11 +54,15 @@ final class PaletteModel {
 
     /// Compute the rows to display for `query`.
     ///
-    /// Order (non-URL query):
-    ///   1. top hit (best host-prefix origin or best page)
+    /// Ordering (Issue #13) — non-URL text behaves like search unless history
+    /// holds a literal match in a registrable domain:
+    ///   1. the best history match whose REGISTRABLE DOMAIN literally contains
+    ///      the query, if there is one (prefix or interior; never a subdomain,
+    ///      title, path, query string, or fuzzy-only match)
     ///   2. "Search {engine} for '<query>'"
-    ///   3. remaining history matches (filling to the cap)
-    /// When the input parses as a URL: an "Open <url>" row REPLACES position 1.
+    ///   3. every remaining history match, best-first
+    /// URL-like input instead leads with "Open <url>" and puts Search directly
+    /// after it, so navigation is never mistaken for search.
     /// Empty query: top-8 by frecency, no search row.
     func rows(for query: String) -> [PaletteRow] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -76,7 +80,7 @@ final class PaletteModel {
         if !trimmed.isEmpty { budget -= 1 }   // search row
         budget = max(0, budget)
 
-        let matches = Ranking.rank(query: trimmed, index: index, limit: budget)
+        var matches = Ranking.rank(query: trimmed, index: index, limit: budget)
 
         if looksURL {
             // Position 1 is the explicit "Open <url>" row (per contract).
@@ -89,18 +93,15 @@ final class PaletteModel {
                 host: Ranking.hostAndPath(normalized)?.host,
                 autocompleteHost: nil
             ))
-            // Then the search row, then history.
-            rows.append(searchRow(trimmed))
-            for m in matches { rows.append(historyRow(m)) }
-        } else {
-            // Position 1 = top hit (first ranked match), position 2 = search,
-            // then the remaining matches.
-            if let top = matches.first {
-                rows.append(historyRow(top))
-            }
-            rows.append(searchRow(trimmed))
-            for m in matches.dropFirst() { rows.append(historyRow(m)) }
+        } else if let promoted = matches.firstIndex(where: \.matchesDomain) {
+            // The one thing allowed above Search: a literal registrable-domain
+            // match. Competing eligible domains are already frecency-ordered,
+            // so the first one is the best one.
+            rows.append(historyRow(matches.remove(at: promoted)))
         }
+
+        rows.append(searchRow(trimmed))
+        rows.append(contentsOf: matches.map(historyRow))
 
         return Array(rows.prefix(maxRows))
     }

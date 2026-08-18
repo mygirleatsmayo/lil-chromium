@@ -17,9 +17,16 @@ import LilShared
 ///      contains ≫ dense fuzzy subsequence. Scattered subsequences score low and
 ///      a no-tier item is excluded entirely (we never show garbage).
 ///
+/// v0.4 adds the ordering gate the palette needs (Issue #13): a result also
+/// reports whether the query appears LITERALLY and CONTIGUOUSLY inside its
+/// registrable domain. `PaletteModel` promotes only such a result above the
+/// Search row; tiers still order everything below it.
+///
 /// All functions are pure and testable: `rank(query:index:)` takes a prebuilt
 /// `HistoryIndex` (so lowercasing/parsing happens once per snapshot, not per
-/// keystroke) and returns ordered `RankedResult`s.
+/// keystroke) and returns ordered `RankedResult`s. The ordering is a TOTAL
+/// order, so the same history produces the same rows regardless of the order
+/// the browser reported it in.
 enum Ranking {
 
     // MARK: - Match tiers
@@ -41,6 +48,7 @@ enum Ranking {
     struct IndexedPage {
         let item: HistoryItem
         let host: String        // lowercased, "www." stripped
+        let domain: String      // registrable domain of `host`
         let path: String        // lowercased path (no query/fragment)
         let lowerTitle: String
         let lowerURL: String
@@ -50,6 +58,7 @@ enum Ranking {
     /// An aggregated origin: one entry per host, summing its pages' signal.
     struct Origin {
         let host: String              // lowercased, "www." stripped
+        let domain: String            // registrable domain of `host`
         let displayTitle: String      // e.g. "GitHub" or best root page title
         let url: String               // https://<host>
         let visitCount: Int
@@ -74,6 +83,9 @@ enum Ranking {
         let host: String
         let score: Double
         let isOrigin: Bool
+        /// The query occurs literally and contiguously inside this result's
+        /// registrable domain — the ONLY thing that may outrank Search.
+        let matchesDomain: Bool
     }
 
     // MARK: - Frecency / recency
@@ -121,6 +133,7 @@ enum Ranking {
             let page = IndexedPage(
                 item: item,
                 host: host,
+                domain: registrableDomain(host),
                 path: path,
                 lowerTitle: item.title.lowercased(),
                 lowerURL: item.url.lowercased(),
@@ -129,7 +142,11 @@ enum Ranking {
 
             let key = host + "\u{1}" + path   // unlikely-collision separator
             if let existing = bestByKey[key] {
-                if page.frecency > existing.frecency { bestByKey[key] = page }
+                // Ties break on the URL so the surviving page never depends on
+                // the order the browser reported history in.
+                let wins = page.frecency > existing.frecency
+                    || (page.frecency == existing.frecency && page.lowerURL < existing.lowerURL)
+                if wins { bestByKey[key] = page }
             } else {
                 bestByKey[key] = page
             }
@@ -144,7 +161,9 @@ enum Ranking {
             let isRoot = (path.isEmpty || path == "/")
             let rootBias = isRoot ? 1_000_000.0 : 0.0
             let titleScore = fr + rootBias
-            if !item.title.isEmpty && titleScore > acc.bestRootScore {
+            let betterTitle = titleScore > acc.bestRootScore
+                || (titleScore == acc.bestRootScore && item.title < acc.bestRootTitle)
+            if !item.title.isEmpty && betterTitle {
                 acc.bestRootScore = titleScore
                 acc.bestRootTitle = item.title
             }
@@ -159,6 +178,7 @@ enum Ranking {
             let display = acc.bestRootTitle.isEmpty ? capitalizedHost(host) : acc.bestRootTitle
             return Origin(
                 host: host,
+                domain: registrableDomain(host),
                 displayTitle: display,
                 url: "https://\(host)",
                 visitCount: acc.visit,
@@ -199,7 +219,8 @@ enum Ranking {
                 url: origin.url,
                 host: origin.host,
                 score: tier * (origin.frecency + 0.1),
-                isOrigin: true
+                isOrigin: true,
+                matchesDomain: origin.domain.contains(query)
             ))
         }
 
@@ -214,16 +235,12 @@ enum Ranking {
                 url: page.item.url,
                 host: page.host,
                 score: tier * (page.frecency + 0.1),
-                isOrigin: false
+                isOrigin: false,
+                matchesDomain: page.domain.contains(query)
             ))
         }
 
-        // Sort best-first. On score ties, prefer origins (cleaner rows).
-        scored.sort { a, b in
-            if a.score != b.score { return a.score > b.score }
-            if a.isOrigin != b.isOrigin { return a.isOrigin }
-            return a.title.count < b.title.count
-        }
+        scored.sort(by: isBefore)
 
         // Dedupe identical URLs an origin+page can both produce (origin
         // "https://github.com" vs a page for the bare root). Keep first (best).
@@ -240,9 +257,9 @@ enum Ranking {
         for origin in index.origins {
             results.append(RankedResult(title: origin.displayTitle, url: origin.url,
                                         host: origin.host, score: origin.frecency,
-                                        isOrigin: true))
+                                        isOrigin: true, matchesDomain: false))
         }
-        results.sort { $0.score > $1.score }
+        results.sort(by: isBefore)
         results = dedupeByURL(results)
         return capPerHost(results, perHost: 2, limit: limit)
     }
@@ -344,6 +361,19 @@ enum Ranking {
         return 10.0 + density * (MatchTier.fuzzyMax.rawValue - 10.0)
     }
 
+    // MARK: - Ordering
+
+    /// Best-first TOTAL order: score, then origins before pages, then the
+    /// shorter title, then the URL. The last step is what makes the row order a
+    /// function of the history CONTENT alone — never of dictionary iteration or
+    /// the order the browser reported visits in.
+    static func isBefore(_ a: RankedResult, _ b: RankedResult) -> Bool {
+        if a.score != b.score { return a.score > b.score }
+        if a.isOrigin != b.isOrigin { return a.isOrigin }
+        if a.title.count != b.title.count { return a.title.count < b.title.count }
+        return a.url < b.url
+    }
+
     // MARK: - Post-processing
 
     private static func dedupeByURL(_ results: [RankedResult]) -> [RankedResult] {
@@ -382,6 +412,25 @@ enum Ranking {
         var path = comps.path.lowercased()
         if path.count > 1 && path.hasSuffix("/") { path = String(path.dropLast()) }
         return (host, path)
+    }
+
+    /// Second-level labels that are part of a public suffix under a two-letter
+    /// country code ("co.uk", "com.au", "ac.nz"), so that "example" — not "co" —
+    /// is the registrable label of `shop.example.co.uk`.
+    private static let publicSecondLevelLabels: Set<String> =
+        ["co", "com", "net", "org", "ac", "edu", "gov", "ne", "or"]
+
+    /// The registrable domain of a host: its public suffix plus one label.
+    /// `news.ycombinator.com` → `ycombinator.com`, `shop.example.co.uk` →
+    /// `example.co.uk`. Best effort without shipping a Public Suffix List: the
+    /// last two labels, extended to three under a two-letter country code whose
+    /// second-level label is a public one.
+    static func registrableDomain(_ host: String) -> String {
+        let labels = host.split(separator: ".")
+        guard labels.count > 2 else { return host }
+        let isCountrySuffix = labels[labels.count - 1].count == 2
+            && publicSecondLevelLabels.contains(String(labels[labels.count - 2]))
+        return labels.suffix(isCountrySuffix ? 3 : 2).joined(separator: ".")
     }
 
     /// Collapse trivial URL differences for dedupe (scheme, www, trailing slash).
