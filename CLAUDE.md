@@ -1,0 +1,1 @@
+/Users/mygirleatsmayo/projects/lil-chromium/AGENTS.md
