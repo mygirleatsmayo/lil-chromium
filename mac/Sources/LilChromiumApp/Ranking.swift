@@ -316,10 +316,14 @@ enum Ranking {
         return true
     }
 
-    /// Density-weighted fuzzy subsequence score in the range (0, ~100].
-    /// Scattered matches (few consecutive runs, no word-boundary starts) score
-    /// LOW; a tight consecutive match scores near `fuzzyMax`. Returns nil if the
-    /// query is not a subsequence of the text at all.
+    /// Density-weighted fuzzy subsequence score in the range (10, `fuzzyMax`].
+    /// Returns nil if the query is not a subsequence of the text at all.
+    ///
+    /// Quality is dominated by a real GAP penalty: the matched characters'
+    /// density over the span they cover. A subsequence scattered across a long
+    /// title has a large span and therefore a low density, so it can never reach
+    /// `fuzzyMax` however many of its characters happen to land on word
+    /// boundaries — boundaries only refine the ordering within a density.
     static func fuzzyDensity(query: String, text: String) -> Double? {
         if query.isEmpty { return 0 }
         let q = Array(query)
@@ -327,38 +331,28 @@ enum Ranking {
         if t.isEmpty { return nil }
 
         var qi = 0
-        var raw = 0.0
-        var prevMatchIndex = -2
-        var consecutiveRun = 0
+        var firstMatchIndex = -1
+        var lastMatchIndex = -1
+        var boundaryHits = 0.0
         var ti = 0
         while ti < t.count && qi < q.count {
             if t[ti] == q[qi] {
-                raw += 1.0
-                if ti == prevMatchIndex + 1 {
-                    consecutiveRun += 1
-                    raw += Double(consecutiveRun) * 1.5   // reward runs strongly
-                } else {
-                    consecutiveRun = 0
-                }
-                if ti == 0 || isBoundary(t[ti - 1]) {
-                    raw += 2.0                              // word-boundary bonus
-                }
-                prevMatchIndex = ti
+                if firstMatchIndex < 0 { firstMatchIndex = ti }
+                lastMatchIndex = ti
+                if ti == 0 || isBoundary(t[ti - 1]) { boundaryHits += 1 }
                 qi += 1
             }
             ti += 1
         }
         if qi < q.count { return nil } // query not fully consumed → no match
 
-        // Normalize into (10, fuzzyMax]. A perfectly consecutive, boundary-aligned
-        // match of length n has raw ≈ n·(1 + boundary/run bonuses); a scattered
-        // match has raw ≈ n. Divide by an "ideal dense" estimate to get density.
         let n = Double(q.count)
-        let idealDense = n + (n - 1) * 1.5 + 2.0   // fully consecutive + one boundary
-        let density = min(1.0, raw / max(1.0, idealDense))
-        // Map density 0→~10, 1→fuzzyMax so even a weak subsequence ranks below
+        let span = Double(lastMatchIndex - firstMatchIndex + 1)
+        let density = n / max(n, span)      // 1.0 only for a contiguous match
+        let quality = density * (0.8 + 0.2 * (boundaryHits / n))
+        // Map quality 0→~10, 1→fuzzyMax so even a weak subsequence ranks below
         // every "contains" match (tier 150) but is still shown if nothing better.
-        return 10.0 + density * (MatchTier.fuzzyMax.rawValue - 10.0)
+        return 10.0 + quality * (MatchTier.fuzzyMax.rawValue - 10.0)
     }
 
     // MARK: - Ordering
