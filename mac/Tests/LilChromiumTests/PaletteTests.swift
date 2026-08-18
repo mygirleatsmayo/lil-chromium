@@ -103,7 +103,8 @@ struct PaletteRowsTests {
 /// Row ORDER around the Search action (issue #13).
 ///
 /// The rule under test: for non-empty, non-URL text, only a contiguous literal
-/// match inside a history entry's registrable domain may sit above Search.
+/// match inside the distinctive label of a history entry's registrable domain
+/// may sit above Search. Public suffixes (e.g. `com`) never promote.
 /// Every assertion names rows and action URLs in order — never a score.
 struct PaletteOrderingTests {
 
@@ -243,6 +244,62 @@ struct PaletteOrderingTests {
         #expect(rows.map(\.kind) == [.history, .search, .history])
         #expect(rows[0].actionURL == "https://example.com")
         #expect(rows[2].actionURL == "https://examples.org")
+    }
+
+    /// SP1: both domains are eligible, but one is a prefix match (higher tier)
+    /// and the other is a more-frecent interior match. Frecency, not tier,
+    /// chooses the row above Search.
+    @Test func frecencyNotTierChoosesAmongEligibleDomains() {
+        let rows = model(
+            visit("https://hubspot.com/", title: "HubSpot", visits: 20),
+            visit("https://github.com/", title: "GitHub", visits: 90, typed: 30)
+        ).rows(for: "hub")
+
+        #expect(rows.map(\.kind) == [.history, .search, .history])
+        #expect(rows[0].actionURL == "https://github.com")
+        #expect(rows[2].actionURL == "https://hubspot.com")
+    }
+
+    /// SP2: seven ineligible host-prefix rows would fill the old rank budget
+    /// and drop the eligible interior match, so Search would lead. Eligibility
+    /// is resolved first; github.com stays above Search.
+    @Test func eligibleMatchIsNotEvictedByIneligiblePrefixRows() {
+        let ineligible = ["alpha", "beta", "gamma", "delta", "echo", "foxtrot", "golf"].map {
+            visit("https://hub.\($0).com/", title: $0, visits: 90, typed: 30)
+        }
+        let rows = model(
+            ineligible + [visit("https://github.com/", title: "GitHub", visits: 5)]
+        ).rows(for: "hub")
+
+        #expect(rows[0].kind == .history)
+        #expect(rows[0].actionURL == "https://github.com")
+        #expect(rows[1].kind == .search)
+    }
+
+    // MARK: - Distinctive label only (no TLD matching)
+
+    /// D1: `com` is the public suffix, not the distinctive label, so it cannot
+    /// promote every `.com` site above Search.
+    @Test func bareTLDQueryFallsToSearch() {
+        let rows = model(
+            visit("https://github.com/", title: "GitHub", visits: 90, typed: 30),
+            visit("https://example.com/", title: "Example", visits: 50)
+        ).rows(for: "com")
+
+        #expect(rows[0].kind == .search)
+        #expect(rows.contains { $0.actionURL == "https://github.com" })
+        #expect(rows.contains { $0.actionURL == "https://example.com" })
+    }
+
+    /// D1: the distinctive label still promotes, including under a country-code
+    /// public suffix.
+    @Test func registrableLabelMatchStillPromotes() {
+        let rows = model(
+            visit("https://shop.example.co.uk/", title: "Shop")
+        ).rows(for: "example")
+
+        #expect(rows.map(\.kind) == [.history, .search])
+        #expect(rows[0].actionURL == "https://shop.example.co.uk")
     }
 
     // MARK: - Duplicates and per-host limits

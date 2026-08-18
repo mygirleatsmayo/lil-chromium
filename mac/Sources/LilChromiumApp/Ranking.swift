@@ -18,9 +18,11 @@ import LilShared
 ///      a no-tier item is excluded entirely (we never show garbage).
 ///
 /// v0.4 adds the ordering gate the palette needs (Issue #13): a result also
-/// reports whether the query appears LITERALLY and CONTIGUOUSLY inside its
-/// registrable domain. `PaletteModel` promotes only such a result above the
-/// Search row; tiers still order everything below it.
+/// reports whether the query appears LITERALLY and CONTIGUOUSLY inside the
+/// distinctive label of its registrable domain — never the public suffix.
+/// `PaletteModel` promotes only such a result above the Search row; among
+/// eligible candidates, frecency (not match tier) decides; tiers still order
+/// everything below Search.
 ///
 /// All functions are pure and testable: `rank(query:index:)` takes a prebuilt
 /// `HistoryIndex` (so lowercasing/parsing happens once per snapshot, not per
@@ -47,8 +49,8 @@ enum Ranking {
     /// A history page with its lowercased fields precomputed once per snapshot.
     struct IndexedPage {
         let item: HistoryItem
-        let host: String        // lowercased, "www." stripped
-        let domain: String      // registrable domain of `host`
+        let host: String               // lowercased, "www." stripped
+        let registrableDomain: String  // public suffix + one label of `host`
         let path: String        // lowercased path (no query/fragment)
         let lowerTitle: String
         let lowerURL: String
@@ -57,8 +59,8 @@ enum Ranking {
 
     /// An aggregated origin: one entry per host, summing its pages' signal.
     struct Origin {
-        let host: String              // lowercased, "www." stripped
-        let domain: String            // registrable domain of `host`
+        let host: String               // lowercased, "www." stripped
+        let registrableDomain: String  // public suffix + one label of `host`
         let displayTitle: String      // e.g. "GitHub" or best root page title
         let url: String               // https://<host>
         let visitCount: Int
@@ -83,9 +85,12 @@ enum Ranking {
         let host: String
         let score: Double
         let isOrigin: Bool
+        /// Raw frecency (not multiplied by match tier). Promotion among eligible
+        /// registrable-label matches uses this, not `score`.
+        let frecency: Double
         /// The query occurs literally and contiguously inside this result's
-        /// registrable domain — the ONLY thing that may outrank Search.
-        let matchesDomain: Bool
+        /// registrable-domain label — the ONLY thing that may outrank Search.
+        let matchesRegistrableLabel: Bool
     }
 
     // MARK: - Frecency / recency
@@ -133,7 +138,7 @@ enum Ranking {
             let page = IndexedPage(
                 item: item,
                 host: host,
-                domain: registrableDomain(host),
+                registrableDomain: registrableDomain(host),
                 path: path,
                 lowerTitle: item.title.lowercased(),
                 lowerURL: item.url.lowercased(),
@@ -178,7 +183,7 @@ enum Ranking {
             let display = acc.bestRootTitle.isEmpty ? capitalizedHost(host) : acc.bestRootTitle
             return Origin(
                 host: host,
-                domain: registrableDomain(host),
+                registrableDomain: registrableDomain(host),
                 displayTitle: display,
                 url: "https://\(host)",
                 visitCount: acc.visit,
@@ -220,7 +225,8 @@ enum Ranking {
                 host: origin.host,
                 score: tier * (origin.frecency + 0.1),
                 isOrigin: true,
-                matchesDomain: origin.domain.contains(query)
+                frecency: origin.frecency,
+                matchesRegistrableLabel: queryMatchesRegistrableLabel(query, in: origin.registrableDomain)
             ))
         }
 
@@ -236,7 +242,8 @@ enum Ranking {
                 host: page.host,
                 score: tier * (page.frecency + 0.1),
                 isOrigin: false,
-                matchesDomain: page.domain.contains(query)
+                frecency: page.frecency,
+                matchesRegistrableLabel: queryMatchesRegistrableLabel(query, in: page.registrableDomain)
             ))
         }
 
@@ -257,7 +264,8 @@ enum Ranking {
         for origin in index.origins {
             results.append(RankedResult(title: origin.displayTitle, url: origin.url,
                                         host: origin.host, score: origin.frecency,
-                                        isOrigin: true, matchesDomain: false))
+                                        isOrigin: true, frecency: origin.frecency,
+                                        matchesRegistrableLabel: false))
         }
         results.sort(by: isBefore)
         results = dedupeByURL(results)
@@ -414,11 +422,34 @@ enum Ranking {
     private static let publicSecondLevelLabels: Set<String> =
         ["co", "com", "net", "org", "ac", "edu", "gov", "ne", "or"]
 
+    /// True when `query` is a contiguous literal substring of the registrable
+    /// domain's distinctive label (the first label), never of the public suffix.
+    /// `git`/`hub` match `github.com`; `com` does not; `example` matches
+    /// `example.co.uk`.
+    static func queryMatchesRegistrableLabel(_ query: String, in registrableDomain: String) -> Bool {
+        guard !query.isEmpty else { return false }
+        return registrableLabel(registrableDomain).contains(query)
+    }
+
+    /// Distinctive label of an already-computed registrable domain: everything
+    /// before the first dot. `github.com` → `github`, `example.co.uk` → `example`.
+    private static func registrableLabel(_ registrableDomain: String) -> String {
+        if let dot = registrableDomain.firstIndex(of: ".") {
+            return String(registrableDomain[..<dot])
+        }
+        return registrableDomain
+    }
+
     /// The registrable domain of a host: its public suffix plus one label.
     /// `news.ycombinator.com` → `ycombinator.com`, `shop.example.co.uk` →
     /// `example.co.uk`. Best effort without shipping a Public Suffix List: the
     /// last two labels, extended to three under a two-letter country code whose
     /// second-level label is a public one.
+    ///
+    /// v0.4 accepts this approximation. Multi-label public suffixes that are
+    /// not a country-code pair (`github.io`, `herokuapp.com`, `appspot.com`)
+    /// are treated as registrable, so `user.github.io` is not eligible for the
+    /// query `user`. Do not bundle a PSL here.
     static func registrableDomain(_ host: String) -> String {
         let labels = host.split(separator: ".")
         guard labels.count > 2 else { return host }

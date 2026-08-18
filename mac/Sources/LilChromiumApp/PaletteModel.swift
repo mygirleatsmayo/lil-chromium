@@ -55,10 +55,11 @@ final class PaletteModel {
     /// Compute the rows to display for `query`.
     ///
     /// Ordering (Issue #13) — non-URL text behaves like search unless history
-    /// holds a literal match in a registrable domain:
-    ///   1. the best history match whose REGISTRABLE DOMAIN literally contains
-    ///      the query, if there is one (prefix or interior; never a subdomain,
-    ///      title, path, query string, or fuzzy-only match)
+    /// holds a literal match in a registrable domain's distinctive label:
+    ///   1. the best history match whose REGISTRABLE-DOMAIN LABEL literally
+    ///      contains the query, if there is one (prefix or interior; never a
+    ///      public suffix, subdomain, title, path, query string, or fuzzy-only
+    ///      match). Among eligible domains, frecency decides — not match tier.
     ///   2. "Search {engine} for '<query>'"
     ///   3. every remaining history match, best-first
     /// URL-like input instead leads with "Open <url>" and puts Search directly
@@ -75,12 +76,14 @@ final class PaletteModel {
         var rows: [PaletteRow] = []
         let looksURL = URLIntent.looksLikeURL(trimmed)
 
-        // Budget: reserve one slot for the search row and (if URL) the open row.
-        var budget = maxRows
-        if !trimmed.isEmpty { budget -= 1 }   // search row
-        budget = max(0, budget)
-
-        var matches = Ranking.rank(query: trimmed, index: index, limit: budget)
+        // Rank the full candidate set before spending the display budget, so an
+        // eligible registrable-label match cannot be evicted by ineligible
+        // higher-tier rows that would otherwise fill `maxRows`.
+        var matches = Ranking.rank(
+            query: trimmed,
+            index: index,
+            limit: max(maxRows, index.pages.count + index.origins.count)
+        )
 
         if looksURL {
             // Position 1 is the explicit "Open <url>" row (per contract).
@@ -93,10 +96,7 @@ final class PaletteModel {
                 host: Ranking.hostAndPath(normalized)?.host,
                 autocompleteHost: nil
             ))
-        } else if let promoted = matches.firstIndex(where: \.matchesDomain) {
-            // The one thing allowed above Search: a literal registrable-domain
-            // match. Competing eligible domains are already frecency-ordered,
-            // so the first one is the best one.
+        } else if let promoted = bestEligibleIndex(in: matches) {
             rows.append(historyRow(matches.remove(at: promoted)))
         }
 
@@ -104,6 +104,23 @@ final class PaletteModel {
         rows.append(contentsOf: matches.map(historyRow))
 
         return Array(rows.prefix(maxRows))
+    }
+
+    /// Among eligible registrable-label matches, frecency is the tie-breaker
+    /// (criterion 6). Match-tier `score` is ignored here; `isBefore` only
+    /// breaks equal-frecency ties so the pick stays a total order.
+    private func bestEligibleIndex(in matches: [Ranking.RankedResult]) -> Int? {
+        var best: Int?
+        for (i, r) in matches.enumerated() where r.matchesRegistrableLabel {
+            guard let b = best else { best = i; continue }
+            let cur = matches[b]
+            if r.frecency != cur.frecency {
+                if r.frecency > cur.frecency { best = i }
+            } else if Ranking.isBefore(r, cur) {
+                best = i
+            }
+        }
+        return best
     }
 
     // MARK: - Row builders
