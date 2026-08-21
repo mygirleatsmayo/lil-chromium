@@ -19,3 +19,14 @@ No findings. Contract lockstep, AppKit isolation, Swift Testing style, terminolo
 ## Round 1 outcome
 
 One small Spec fix is owed. No owner adjudication is required before remediation.
+
+## Final full review round 1
+
+Reports: `REVIEW-FINAL-STANDARDS.md`, `REVIEW-FINAL-SPEC.md` (this directory).
+
+| ID | Axis | Location | Verdict | Settled interpretation |
+|---|---|---|---|---|
+| S1 | Standards | `docs/PROTOCOL.md` still says the Settings row matches query prefixes | **fix** | Update the contract sentence to the already-settled P1 behavior: only the complete case-insensitive words `settings` and `preferences` match. Production and tests are already correct. |
+| P2 | Spec | Same stale `docs/PROTOCOL.md` prefix sentence | **fix through S1** | Duplicate of S1; no additional product behavior change is owed. |
+
+Final round 1 found contract drift only. One documentation-only fix is owed before repeating the remediation review and final full review.
