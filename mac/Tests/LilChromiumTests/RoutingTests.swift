@@ -3,7 +3,7 @@ import Testing
 @testable import LilShared
 
 /// The app's routing order from docs/PROTOCOL.md, "App routing order":
-///   1. relay-<defaultBrowser>.sock
+///   1. relay-<primaryBrowser>.sock
 ///   2. relay-<fallbackBrowser>.sock
 ///   3. any other relay-*.sock present (newest mtime first)
 ///   4./5. launch the primary browser, then the fallback, then any installed one.
@@ -16,7 +16,7 @@ struct RoutingOrderTests {
 
     @Test func primaryThenFallbackThenOtherLiveHosts() {
         let order = RelayClient.socketOrder(
-            defaultBrowser: "helium",
+            primaryBrowser: "helium",
             fallbackBrowser: "chrome",
             liveSlugs: ["brave", "chrome", "vivaldi"]   // newest mtime first
         )
@@ -28,7 +28,7 @@ struct RoutingOrderTests {
     /// the connect attempt is what decides, not the directory listing.
     @Test func primaryLeadsEvenWithNoLiveSockets() {
         #expect(
-            RelayClient.socketOrder(defaultBrowser: "helium", fallbackBrowser: "chrome", liveSlugs: [])
+            RelayClient.socketOrder(primaryBrowser: "helium", fallbackBrowser: "chrome", liveSlugs: [])
                 == ["helium", "chrome"]
         )
     }
@@ -36,15 +36,40 @@ struct RoutingOrderTests {
     /// One browser is never tried twice, however it appears.
     @Test func duplicateTargetsCollapse() {
         #expect(
-            RelayClient.socketOrder(defaultBrowser: "brave", fallbackBrowser: "brave", liveSlugs: ["brave"])
-                == ["brave"]
+            RelayClient.socketOrder(
+                primaryBrowser: "brave",
+                fallbackBrowser: "brave",
+                liveSlugs: ["brave", "chrome-beta"]
+            ) == ["brave", "chrome-beta"]
+        )
+    }
+
+    @Test func identicalLegacyLaunchTargetsStillReachAnotherInstallation() {
+        var cfg = LilConfig.defaults
+        cfg.primaryBrowser = "brave"
+        cfg.fallbackBrowser = "brave"
+        cfg.knownBrowsers = [
+            KnownBrowser(slug: "brave", name: "Brave", bundleId: "com.brave.Browser", installed: true),
+            KnownBrowser(slug: "chrome", name: "Google Chrome", bundleId: "com.google.Chrome", installed: true),
+        ]
+
+        #expect(OpenRouter.launchBundleIds(config: cfg) == ["com.brave.Browser", "com.google.Chrome"])
+    }
+
+    @Test func siblingChannelsRemainDistinctRelayTargets() {
+        #expect(
+            RelayClient.socketOrder(
+                primaryBrowser: "chrome",
+                fallbackBrowser: "chrome-beta",
+                liveSlugs: ["chrome-beta", "chrome"]
+            ) == ["chrome", "chrome-beta"]
         )
     }
 
     /// An unset primary or fallback is skipped, not turned into "relay-.sock".
     @Test func emptySlugsAreDropped() {
         #expect(
-            RelayClient.socketOrder(defaultBrowser: "", fallbackBrowser: "chrome", liveSlugs: ["", "arc"])
+            RelayClient.socketOrder(primaryBrowser: "", fallbackBrowser: "chrome", liveSlugs: ["", "arc"])
                 == ["chrome", "arc"]
         )
     }
@@ -55,7 +80,7 @@ struct RoutingOrderTests {
     /// order and never bare-opens the URL (it is the system default handler).
     @Test func launchOrderIsPrimaryFallbackThenInstalled() {
         var cfg = LilConfig.defaults
-        cfg.defaultBrowser = "helium"
+        cfg.primaryBrowser = "helium"
         cfg.fallbackBrowser = "chrome"
         cfg.knownBrowsers = [
             KnownBrowser(slug: "vivaldi", name: "Vivaldi", bundleId: "com.vivaldi.Vivaldi", installed: false),
@@ -70,27 +95,36 @@ struct RoutingOrderTests {
         )
     }
 
-    /// A browser installation recorded in the config wins over the built-in
-    /// table, so a relocated or channel-specific install is still launchable.
-    @Test func configBundleIdBeatsTheBuiltInTable() {
+    /// The installation slug is canonical: a stale known-browser row cannot
+    /// silently turn the stable channel into its Beta sibling.
+    @Test func siblingChannelsKeepTheirCatalogBundleIdentity() {
         var cfg = LilConfig.defaults
-        cfg.defaultBrowser = "chrome"
-        cfg.fallbackBrowser = ""
+        cfg.primaryBrowser = "chrome"
+        cfg.fallbackBrowser = "chrome-beta"
         cfg.knownBrowsers = [
-            KnownBrowser(slug: "chrome", name: "Chrome Beta", bundleId: "com.google.Chrome.beta", installed: true)
+            KnownBrowser(slug: "chrome", name: "Google Chrome", bundleId: "com.google.Chrome.beta", installed: true),
+            KnownBrowser(slug: "chrome-beta", name: "Google Chrome Beta", bundleId: "com.google.Chrome", installed: true),
         ]
 
-        #expect(OpenRouter.launchBundleIds(config: cfg) == ["com.google.Chrome.beta"])
+        #expect(OpenRouter.launchBundleIds(config: cfg) == ["com.google.Chrome", "com.google.Chrome.beta"])
     }
 
-    /// An unrecognized slug has no bundle id: it drops out instead of producing
-    /// a launch that cannot work.
-    @Test func unknownSlugContributesNothing() {
+    /// A supported but uninstalled Primary is attempted before Fallback and
+    /// another installed browser; the launcher advances when it cannot resolve
+    /// that first bundle id, so the URL remains in the same ordered operation.
+    @Test func missingPrimaryStillKeepsFallbackAndInstalledCandidates() {
         var cfg = LilConfig.defaults
-        cfg.defaultBrowser = "unknown"
-        cfg.fallbackBrowser = "netscape"
-        cfg.knownBrowsers = []
+        cfg.primaryBrowser = "chrome-beta"
+        cfg.fallbackBrowser = "chrome"
+        cfg.knownBrowsers = [
+            KnownBrowser(slug: "chrome-beta", name: "Google Chrome Beta", bundleId: "com.google.Chrome.beta", installed: false),
+            KnownBrowser(slug: "chrome", name: "Google Chrome", bundleId: "com.google.Chrome", installed: true),
+            KnownBrowser(slug: "brave", name: "Brave", bundleId: "com.brave.Browser", installed: true),
+        ]
 
-        #expect(OpenRouter.launchBundleIds(config: cfg) == [])
+        #expect(
+            OpenRouter.launchBundleIds(config: cfg)
+                == ["com.google.Chrome.beta", "com.google.Chrome", "com.brave.Browser"]
+        )
     }
 }

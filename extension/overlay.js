@@ -6,7 +6,7 @@
 // needs — reported only for lils via the SW's per-tab flag). If it is a lil, it
 // mounts a HOVER-REVEAL top bar in a closed shadow DOM with: back, editable
 // address field with an omnibox suggestions dropdown, reload, copy-URL,
-// "Open in {defaultBrowser}" promote, and a caret menu (promote targets, host
+// "Open in {Primary browser}" promote, and a caret menu (promote targets, host
 // groups, other browsers, Keep/expiry, Sleep, Reopen incognito, Close).
 
 (() => {
@@ -226,8 +226,8 @@
     let context = {
       browser: "chrome",
       browserName: "Chrome",
-      defaultBrowser: "chrome",
-      defaultBrowserName: "Chrome",
+      primaryBrowser: "chrome",
+      primaryBrowserName: "Chrome",
       fallbackBrowser: "chrome",
       linkBehavior: "new-lil",
       ephemeralDefault: "never",
@@ -910,11 +910,11 @@
     // -----------------------------------------------------------------------
     // Promote + caret menu.
     // -----------------------------------------------------------------------
-    function labelForDefault() {
-      return "Open in " + (context.defaultBrowserName || "Chrome");
+    function labelForPrimary() {
+      return "Open in " + (context.primaryBrowserName || "Chrome");
     }
     function applyContextLabels() {
-      promoteLabel.textContent = labelForDefault();
+      promoteLabel.textContent = labelForPrimary();
     }
 
     function promote(dest, extra) {
@@ -938,12 +938,12 @@
       if (infoResp && typeof infoResp.expiry !== "undefined") lilExpiry = infoResp.expiry;
 
       menu.innerHTML = "";
-      const defName = context.defaultBrowserName || "Chrome";
+      const primaryName = context.primaryBrowserName || "Chrome";
       const hostName = context.browserName || "this browser";
 
-      addItem(menu, "Open in " + defName, "⌘O", () => promote("default"));
+      addItem(menu, "Open in " + primaryName, "⌘O", () => promote("primary"));
 
-      if (context.browser && context.defaultBrowser && context.browser !== context.defaultBrowser) {
+      if (context.browser && context.primaryBrowser && context.browser !== context.primaryBrowser) {
         addItem(menu, "Open in " + hostName + " tab", "", () => promote("host-tab"));
       }
 
@@ -956,7 +956,7 @@
 
       const known = Array.isArray(context.knownBrowsers) ? context.knownBrowsers : [];
       const others = known.filter(
-        (b) => b && b.installed && b.slug && b.slug !== context.defaultBrowser && b.slug !== context.browser
+        (b) => b && b.installed && b.slug && b.slug !== context.primaryBrowser && b.slug !== context.browser
       );
       if (others.length) {
         addSep(menu);

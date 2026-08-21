@@ -91,7 +91,7 @@ enum OpenRouter {
     }
 
     /// Fallback when no relay answered: launch the URL in a real browser by
-    /// bundle id, in order — config defaultBrowser, then fallbackBrowser, then
+    /// bundle id, in order — configured Primary, then Fallback, then
     /// the first installed known browser. NEVER `NSWorkspace.shared.open(url)`
     /// bare: this app IS the system default HTTP handler, so a bare open would
     /// route straight back to us (infinite loop). If nothing can be launched
@@ -112,14 +112,14 @@ enum OpenRouter {
         }
         func appendBundleId(forSlug slug: String) {
             guard !slug.isEmpty else { return }
-            // Prefer the config's recorded bundle id; fall back to the table.
-            append(cfg.knownBrowsers.first(where: { $0.slug == slug })?.bundleId
-                ?? BrowserTable.bundleId(forSlug: slug))
+            append(BrowserTable.bundleId(forSlug: slug))
         }
-        appendBundleId(forSlug: cfg.defaultBrowser)
+        appendBundleId(forSlug: cfg.primaryBrowser)
         appendBundleId(forSlug: cfg.fallbackBrowser)
         // Then any installed known browser from the config scan.
-        for kb in cfg.knownBrowsers where kb.installed { append(kb.bundleId) }
+        for kb in cfg.knownBrowsers where kb.installed {
+            append(BrowserTable.bundleId(forSlug: kb.slug))
+        }
         return candidates
     }
 

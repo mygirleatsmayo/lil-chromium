@@ -1,11 +1,8 @@
 {
-  "type": "context",
-  "id": "ctx-1",
-  "browser": "brave",
-  "browserName": "Brave",
+  "version": 3,
   "primaryBrowser": "helium",
-  "primaryBrowserName": "Helium",
   "fallbackBrowser": "chrome",
+  "paletteAnchor": "top-center",
   "linkBehavior": "new-lil",
   "ephemeralDefault": "6h",
   "sleep": {
@@ -17,6 +14,7 @@
     "whitelist": ["mail.google.com"]
   },
   "searchEngine": {
+    "provider": "kagi",
     "name": "Kagi",
     "template": "https://kagi.com/search?q=%s"
   },
@@ -25,7 +23,8 @@
     "tint": "#112233"
   },
   "knownBrowsers": [
-    {"slug": "helium", "name": "Helium", "installed": true},
-    {"slug": "brave", "name": "Brave", "installed": true}
+    {"slug": "helium", "name": "Helium", "bundleId": "net.imput.helium", "installed": true},
+    {"slug": "chrome", "name": "Google Chrome", "bundleId": "com.google.Chrome", "installed": true},
+    {"slug": "vivaldi", "name": "Vivaldi", "bundleId": "com.vivaldi.Vivaldi", "installed": false}
   ]
 }

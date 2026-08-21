@@ -24,12 +24,12 @@ enum RelayClient {
     }
 
     /// The routing order for sockets, per PROTOCOL.md "App routing order":
-    /// 1. relay-<defaultBrowser>.sock  2. relay-<fallbackBrowser>.sock
+    /// 1. relay-<primaryBrowser>.sock  2. relay-<fallbackBrowser>.sock
     /// 3. any other live relay-*.sock (`liveSlugs`, newest mtime first).
     /// Deduped, preserving order; empty slugs are dropped.
-    static func socketOrder(defaultBrowser: String, fallbackBrowser: String, liveSlugs: [String]) -> [String] {
+    static func socketOrder(primaryBrowser: String, fallbackBrowser: String, liveSlugs: [String]) -> [String] {
         var seen = Set<String>()
-        return ([defaultBrowser, fallbackBrowser] + liveSlugs).filter { slug in
+        return ([primaryBrowser, fallbackBrowser] + liveSlugs).filter { slug in
             !slug.isEmpty && seen.insert(slug).inserted
         }
     }
@@ -38,7 +38,7 @@ enum RelayClient {
     private static func routedSockets() -> [(slug: String, path: String)] {
         let cfg = LilConfig.load()
         let order = socketOrder(
-            defaultBrowser: cfg.defaultBrowser,
+            primaryBrowser: cfg.primaryBrowser,
             fallbackBrowser: cfg.fallbackBrowser,
             liveSlugs: LilPaths.allSocketURLs().map(\.slug)
         )

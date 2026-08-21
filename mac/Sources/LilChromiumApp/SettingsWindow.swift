@@ -140,10 +140,24 @@ final class SettingsStore: ObservableObject {
         BrowserCatalog.installedChoices(from: config.knownBrowsers)
     }
 
-    /// True when the chosen default browser is not currently installed (drives
+    var fallbackBrowsers: [KnownBrowser] {
+        BrowserCatalog.fallbackChoices(
+            from: config.knownBrowsers,
+            primaryBrowser: config.primaryBrowser
+        )
+    }
+
+    /// True when the chosen Primary browser is not currently installed (drives
     /// the Settings warning indicator).
-    var defaultBrowserMissing: Bool {
-        !BrowserCatalog.isInstalled(config.defaultBrowser, in: config)
+    var primaryBrowserMissing: Bool {
+        !BrowserCatalog.isInstalled(config.primaryBrowser, in: config)
+    }
+
+    /// A legacy file may contain identical targets. Keep it readable, but make
+    /// the invalid Fallback visible until the user selects another installation.
+    var fallbackBrowserUnavailable: Bool {
+        config.fallbackBrowser == config.primaryBrowser
+            || !BrowserCatalog.isInstalled(config.fallbackBrowser, in: config)
     }
 
     // Launch-at-Login (SMAppService). Reflects the real system state.
@@ -201,7 +215,7 @@ struct SettingsRoot: View {
             } label: {
                 HStack(spacing: 6) {
                     Text("Primary browser")
-                    if store.defaultBrowserMissing {
+                    if store.primaryBrowserMissing {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.yellow)
                             .help("The selected Primary browser isn't installed.")
@@ -209,9 +223,18 @@ struct SettingsRoot: View {
                 }
             }
 
-            Picker("Fallback browser", selection: fallbackBrowserBinding) {
-                ForEach(store.installedBrowsers, id: \.slug) { b in
-                    Text(b.name).tag(b.slug)
+            Picker(selection: fallbackBrowserBinding) {
+                ForEach(store.fallbackBrowsers, id: \.slug) { browser in
+                    Text(browser.name).tag(browser.slug)
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Fallback browser")
+                    if store.fallbackBrowserUnavailable {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.yellow)
+                            .help("Choose an installed browser other than Primary.")
+                    }
                 }
             }
 
@@ -349,8 +372,8 @@ struct SettingsRoot: View {
     // MARK: - Bindings (route through store.config so didSet -> save())
 
     private var primaryBrowserBinding: Binding<String> {
-        Binding(get: { store.config.defaultBrowser },
-                set: { store.config.defaultBrowser = $0 })
+        Binding(get: { store.config.primaryBrowser },
+                set: { store.config.primaryBrowser = $0 })
     }
     private var fallbackBrowserBinding: Binding<String> {
         Binding(get: { store.config.fallbackBrowser },

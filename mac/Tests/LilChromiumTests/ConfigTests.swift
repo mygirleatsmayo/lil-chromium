@@ -6,6 +6,14 @@ import Testing
 /// arrive at its documented default (docs/PROTOCOL.md, "Config file").
 struct ConfigDecodingTests {
 
+    /// v0.4 reads the explicit Chromium destination written by v0.3 under its
+    /// legacy `defaultBrowser` key as the configured Primary browser.
+    @Test func v03ExplicitBrowserBecomesPrimaryBrowser() throws {
+        let cfg = try Fixture.decode(LilConfig.self, from: "config-v2-complete")
+
+        #expect(cfg.primaryBrowser == "helium")
+    }
+
     /// v0.3 compatibility: a v1-era file predates ephemerality, Lil Nap, search
     /// engine, and hover bar. Each addition is additive — the fields the file
     /// does carry survive, the rest default.
@@ -14,7 +22,7 @@ struct ConfigDecodingTests {
 
         // Present in the legacy file: preserved verbatim.
         #expect(cfg.version == 1)
-        #expect(cfg.defaultBrowser == "brave")
+        #expect(cfg.primaryBrowser == "brave")
         #expect(cfg.paletteAnchor == "top-right")
         #expect(cfg.linkBehavior == "same-lil")
 
@@ -42,7 +50,7 @@ struct ConfigDecodingTests {
         let cfg = try Fixture.decode(LilConfig.self, from: "config-v2-complete")
 
         #expect(cfg.version == 2)
-        #expect(cfg.defaultBrowser == "helium")
+        #expect(cfg.primaryBrowser == "helium")
         #expect(cfg.fallbackBrowser == "chrome")
         #expect(cfg.ephemeralDefault == "6h")
         #expect(cfg.sleep.enabled)
@@ -57,5 +65,15 @@ struct ConfigDecodingTests {
         #expect(cfg.hoverBar.tint == "#112233")
         #expect(cfg.knownBrowsers.map(\.slug) == ["helium", "chrome", "vivaldi"])
         #expect(cfg.knownBrowsers.map(\.installed) == [true, true, false])
+    }
+
+    @Test func canonicalV04ConfigDecodesVerbatim() throws {
+        let cfg = try Fixture.decode(LilConfig.self, from: "config-v3-complete")
+
+        #expect(cfg.version == 3)
+        #expect(cfg.primaryBrowser == "helium")
+        #expect(cfg.fallbackBrowser == "chrome")
+        #expect(cfg.searchEngine.provider == "kagi")
+        #expect(cfg.knownBrowsers.map(\.slug) == ["helium", "chrome", "vivaldi"])
     }
 }

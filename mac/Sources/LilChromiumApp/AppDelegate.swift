@@ -168,7 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         handleIncomingURL(urlString)
     }
 
-    /// Central intake: dedupe, then route (relay-first, Chrome fallback), always
+    /// Central intake: dedupe, then route (relay-first, browser fallback), always
     /// anchored to the current mouse position.
     private func handleIncomingURL(_ urlString: String) {
         let now = Date()

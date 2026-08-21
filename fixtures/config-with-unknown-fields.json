@@ -1,6 +1,6 @@
 {
-  "version": 3,
-  "defaultBrowser": "helium",
+  "version": 4,
+  "primaryBrowser": "helium",
   "fallbackBrowser": "chrome",
   "paletteAnchor": "top-center",
   "linkBehavior": "new-lil",

@@ -214,8 +214,8 @@ public struct ContextMessage: Codable, Sendable {
     public let id: String
     public let browser: String
     public let browserName: String
-    public let defaultBrowser: String
-    public let defaultBrowserName: String
+    public let primaryBrowser: String
+    public let primaryBrowserName: String
     public let fallbackBrowser: String
     public let linkBehavior: String
     public let ephemeralDefault: String
@@ -228,8 +228,8 @@ public struct ContextMessage: Codable, Sendable {
         id: String,
         browser: String,
         browserName: String,
-        defaultBrowser: String,
-        defaultBrowserName: String,
+        primaryBrowser: String,
+        primaryBrowserName: String,
         fallbackBrowser: String,
         linkBehavior: String,
         ephemeralDefault: String,
@@ -242,8 +242,8 @@ public struct ContextMessage: Codable, Sendable {
         self.id = id
         self.browser = browser
         self.browserName = browserName
-        self.defaultBrowser = defaultBrowser
-        self.defaultBrowserName = defaultBrowserName
+        self.primaryBrowser = primaryBrowser
+        self.primaryBrowserName = primaryBrowserName
         self.fallbackBrowser = fallbackBrowser
         self.linkBehavior = linkBehavior
         self.ephemeralDefault = ephemeralDefault

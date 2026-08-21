@@ -40,7 +40,7 @@
         "default": "Ctrl+Shift+O",
         "mac": "Command+Shift+O"
       },
-      "description": "Open this lil in the default browser"
+      "description": "Open this lil in the Primary browser"
     }
   }
 }

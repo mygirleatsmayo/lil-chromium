@@ -75,8 +75,8 @@ const DEFAULT_HOVERBAR = { style: "glass", tint: null };
 const DEFAULT_CONTEXT = {
   browser: "chrome",
   browserName: "Chrome",
-  defaultBrowser: "helium",
-  defaultBrowserName: "Helium",
+  primaryBrowser: "helium",
+  primaryBrowserName: "Helium",
   fallbackBrowser: "chrome",
   linkBehavior: "new-lil",
   ephemeralDefault: "never",
@@ -125,8 +125,11 @@ function normalizeContext(msg) {
   return {
     browser: src.browser || DEFAULT_CONTEXT.browser,
     browserName: src.browserName || DEFAULT_CONTEXT.browserName,
-    defaultBrowser: src.defaultBrowser || DEFAULT_CONTEXT.defaultBrowser,
-    defaultBrowserName: src.defaultBrowserName || DEFAULT_CONTEXT.defaultBrowserName,
+    // A persisted v0.3 context may still use the legacy keys. Normalize it to
+    // the v0.4 contract so no caller needs two browser-identity vocabularies.
+    primaryBrowser: src.primaryBrowser || src.defaultBrowser || DEFAULT_CONTEXT.primaryBrowser,
+    primaryBrowserName:
+      src.primaryBrowserName || src.defaultBrowserName || DEFAULT_CONTEXT.primaryBrowserName,
     fallbackBrowser: src.fallbackBrowser || DEFAULT_CONTEXT.fallbackBrowser,
     linkBehavior: src.linkBehavior === "same-lil" ? "same-lil" : "new-lil",
     ephemeralDefault: normalizeExpiry(src.ephemeralDefault, "never"),
@@ -368,7 +371,7 @@ async function handlePortMessage(msg) {
       log(
         "context updated",
         "browser=" + msg.browser,
-        "default=" + msg.defaultBrowser,
+        "primary=" + msg.primaryBrowser,
         "link=" + msg.linkBehavior
       );
     } else {
@@ -1261,8 +1264,8 @@ async function promoteTab(tabId, dest, groupId, browser) {
   if (dest === "group" && typeof groupId === "number") return moveTabIntoHostBrowser(tabId, groupId);
   if (dest === "host-tab") return moveTabIntoHostBrowser(tabId, undefined);
   if (dest === "browser" && typeof browser === "string" && browser) return handOffToBrowser(tabId, browser);
-  if (ctx.defaultBrowser && ctx.defaultBrowser === ctx.browser) return moveTabIntoHostBrowser(tabId, undefined);
-  return handOffToBrowser(tabId, ctx.defaultBrowser || DEFAULT_CONTEXT.defaultBrowser);
+  if (ctx.primaryBrowser && ctx.primaryBrowser === ctx.browser) return moveTabIntoHostBrowser(tabId, undefined);
+  return handOffToBrowser(tabId, ctx.primaryBrowser || DEFAULT_CONTEXT.primaryBrowser);
 }
 
 // Open a URL into a lil already living in `windowId` per link behavior. Used by
