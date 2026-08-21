@@ -42,6 +42,46 @@ export async function flush(turns = 8) {
   }
 }
 
+/**
+ * Opt-in overlay clock. Tests that need a deadline (copy-reset) step it;
+ * everyone else keeps unref'd real timers so reveal/omnibox waits still work.
+ */
+function createClock() {
+  let now = 0;
+  let seq = 0;
+  const timers = new Map();
+  return {
+    setTimeout(fn, ms = 0) {
+      const id = ++seq;
+      timers.set(id, { at: now + Math.max(0, ms), fn });
+      return id;
+    },
+    clearTimeout(id) {
+      timers.delete(id);
+    },
+    async advance(ms) {
+      const target = now + ms;
+      for (;;) {
+        let nextId = null;
+        let nextAt = Infinity;
+        for (const [id, t] of timers) {
+          if (t.at <= target && t.at < nextAt) {
+            nextAt = t.at;
+            nextId = id;
+          }
+        }
+        if (nextId === null) break;
+        const t = timers.get(nextId);
+        timers.delete(nextId);
+        now = t.at;
+        t.fn();
+        await flush();
+      }
+      now = target;
+    },
+  };
+}
+
 function captureFlag(options) {
   return options === true || !!(options && options.capture);
 }
@@ -245,6 +285,7 @@ function createChrome(options = {}) {
  */
 export async function mountOverlay(options = {}) {
   delete globalThis.__lilChromiumOverlayLoaded;
+  const clock = options.clock === true ? createClock() : null;
   const window = parseHTML("<!DOCTYPE html><html><head></head><body></body></html>");
   const document = window.document;
   const href = options.url || "https://example.com/docs";
@@ -281,8 +322,8 @@ export async function mountOverlay(options = {}) {
     history: window.history,
     navigator,
     console: quietConsole,
-    setTimeout: unrefTimeout,
-    clearTimeout,
+    setTimeout: clock ? clock.setTimeout : unrefTimeout,
+    clearTimeout: clock ? clock.clearTimeout : clearTimeout,
     setInterval: unrefInterval,
     clearInterval,
     queueMicrotask,
@@ -329,6 +370,7 @@ export async function mountOverlay(options = {}) {
     host,
     root,
     overlayPath: OVERLAY_PATH,
+    clock,
     addr: root ? root.querySelector(".addr") : null,
     omni: root ? root.querySelector(".omni") : null,
     bar: root ? root.querySelector(".bar") : null,

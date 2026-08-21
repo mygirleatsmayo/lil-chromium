@@ -139,7 +139,7 @@ test("hoverbar controls draw bundled Material Symbols, not text glyphs", async (
 });
 
 test("Copy URL sits inside the address field and keeps one accessible name", async () => {
-  const page = await mountOverlay();
+  const page = await mountOverlay({ clock: true });
   const copy = page.root.querySelector(".addrwrap > .copy");
   assert.ok(copy, "Copy URL is a child of the address field wrapper");
   assert.equal(copy.getAttribute("aria-label"), "Copy URL");
@@ -155,7 +155,11 @@ test("Copy URL sits inside the address field and keeps one accessible name", asy
   assert.equal(copy.getAttribute("aria-label"), "Copy URL");
   assert.equal(copy.getAttribute("title"), "Copy URL");
 
-  await new Promise((r) => setTimeout(r, 1300));
+  // Production copy feedback lasts 1200ms. Step just shy of that, then onto
+  // the deadline, so a shorter or longer reset cannot pass by accident.
+  await page.clock.advance(1199);
+  assertIconContract(copy.querySelector("svg"), "check");
+  await page.clock.advance(1);
   assertIconContract(copy.querySelector("svg"), "link");
 });
 
