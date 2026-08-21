@@ -72,7 +72,7 @@ export function createChrome(options = {}) {
   const events = {
     runtime: { onMessage: makeEvent(), onStartup: makeEvent(), onInstalled: makeEvent() },
     windows: { onFocusChanged: makeEvent(), onBoundsChanged: makeEvent(), onRemoved: makeEvent() },
-    tabs: { onUpdated: makeEvent(), onActivated: makeEvent() },
+    tabs: { onCreated: makeEvent(), onUpdated: makeEvent(), onActivated: makeEvent() },
     webNavigation: { onCreatedNavigationTarget: makeEvent() },
     alarms: { onAlarm: makeEvent() },
     contextMenus: { onClicked: makeEvent() },
@@ -153,6 +153,8 @@ export function createChrome(options = {}) {
     };
     windows.set(id, win);
 
+    // A tab adopted via tabId moved, not created: no tabs.onCreated.
+    let createdTab = null;
     if (typeof opts.tabId === "number") {
       const tab = tabs.get(opts.tabId);
       const oldId = tab.windowId;
@@ -163,11 +165,12 @@ export function createChrome(options = {}) {
       win.tabIds.push(tab.id);
       await closeWindowIfEmpty(oldId);
     } else if (typeof opts.url === "string") {
-      const tab = addTab({ windowId: id, url: opts.url, active: true, incognito: win.incognito });
-      win.tabIds.push(tab.id);
+      createdTab = addTab({ windowId: id, url: opts.url, active: true, incognito: win.incognito });
+      win.tabIds.push(createdTab.id);
     }
 
     record("windows.create", { windowId: id, create: { ...opts } });
+    if (createdTab) await events.tabs.onCreated.fire(snapshotTab(createdTab));
     if (win.focused) await events.windows.onFocusChanged.fire(id);
     return snapshotWindow(win, tabs);
   }
@@ -334,9 +337,11 @@ export function createChrome(options = {}) {
           url: opts.url || "about:blank",
           active: opts.active !== false,
           openerTabId: opts.openerTabId,
+          incognito: win.incognito,
         });
         win.tabIds.push(tab.id);
         record("tabs.create", { tabId: tab.id, create: { ...opts } });
+        await events.tabs.onCreated.fire(snapshotTab(tab));
         return snapshotTab(tab);
       },
       async move(id, opts = {}) {
@@ -376,6 +381,7 @@ export function createChrome(options = {}) {
         record("tabs.captureVisibleTab", { windowId, opts: { ...opts } });
         return TINY_JPEG;
       },
+      onCreated: events.tabs.onCreated,
       onUpdated: events.tabs.onUpdated,
       onActivated: events.tabs.onActivated,
     },
