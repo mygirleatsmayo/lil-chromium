@@ -329,6 +329,25 @@ public struct ContextMessage: Codable, Sendable {
         self.hoverBar = hoverBar
         self.knownBrowsers = knownBrowsers
     }
+
+    /// Fresh-read reconnect reply: host identity plus the same ContextPayload
+    /// mapping `config-update` uses, so the two wires cannot drift.
+    public init(id: String, browser: String, config: LilConfig) {
+        self.init(
+            id: id,
+            browser: browser,
+            browserName: BrowserTable.name(forSlug: browser),
+            primaryBrowser: config.primaryBrowser,
+            primaryBrowserName: ContextPayload.displayName(forSlug: config.primaryBrowser, in: config),
+            fallbackBrowser: config.fallbackBrowser,
+            linkBehavior: config.linkBehavior,
+            ephemeralDefault: config.ephemeralDefault,
+            sleep: config.sleep,
+            searchEngine: config.searchEngine,
+            hoverBar: config.hoverBar,
+            knownBrowsers: ContextPayload.browsers(from: config)
+        )
+    }
 }
 
 /// The config payload mapping shared by `context` (host -> its extension) and

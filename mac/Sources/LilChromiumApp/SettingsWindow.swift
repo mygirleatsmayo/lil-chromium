@@ -362,10 +362,10 @@ struct SettingsRoot: View {
                             ... Double(HoverBarConfig.revealHeightRange.upperBound),
                         step: 1
                     )
+                    .accessibilityValue("\(store.config.hoverBar.revealHeight) px")
                     Text("\(store.config.hoverBar.revealHeight) px")
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
-                        .frame(width: 44, alignment: .trailing)
                 }
             }
             Text("Cursor distance from the top edge that reveals the bar. 0 disables mouse reveal; ⌘L still reveals it.")

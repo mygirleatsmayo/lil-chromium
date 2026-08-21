@@ -129,6 +129,43 @@ struct MessageTests {
         #expect(reloaded.knownBrowsers.map(\.name) == original.knownBrowsers.map(\.name))
     }
 
+    /// Reconnect `context` and Settings `config-update` share ContextPayload
+    /// for every config field. Host identity stays on `context` only.
+    @Test func contextAndConfigUpdateShareBrowserNormalization() throws {
+        var config = try Fixture.decode(LilConfig.self, from: "config-v3-complete")
+        config.hoverBar.revealHeight = 100
+
+        let ctx = ContextMessage(id: "ctx-1", browser: "brave", config: config)
+        let update = ConfigUpdateMessage(config: config)
+
+        #expect(ctx.type == "context")
+        #expect(ctx.id == "ctx-1")
+        #expect(ctx.browser == "brave")
+        #expect(ctx.browserName == "Brave")
+        #expect(ctx.primaryBrowser == "helium")
+        #expect(ctx.primaryBrowserName == "Helium")
+        #expect(ctx.primaryBrowser == update.primaryBrowser)
+        #expect(ctx.primaryBrowserName == update.primaryBrowserName)
+        #expect(ctx.fallbackBrowser == update.fallbackBrowser)
+        #expect(ctx.linkBehavior == update.linkBehavior)
+        #expect(ctx.ephemeralDefault == update.ephemeralDefault)
+        #expect(ctx.sleep.whitelist == update.sleep.whitelist)
+        #expect(ctx.searchEngine.name == update.searchEngine.name)
+        #expect(ctx.hoverBar.revealHeight == 48, "both messages carry the clamped value")
+        #expect(ctx.hoverBar.revealHeight == update.hoverBar.revealHeight)
+        #expect(ctx.knownBrowsers.map(\.slug) == ["helium", "chrome", "vivaldi"])
+        #expect(ctx.knownBrowsers.map(\.slug) == update.knownBrowsers.map(\.slug))
+        #expect(ctx.knownBrowsers.map(\.name) == update.knownBrowsers.map(\.name))
+        #expect(ctx.knownBrowsers.map(\.installed) == update.knownBrowsers.map(\.installed))
+
+        let empty = ContextMessage(id: "ctx-empty", browser: "chrome", config: .defaults)
+        let emptyUpdate = ConfigUpdateMessage(config: .defaults)
+        #expect(empty.knownBrowsers.count == BrowserTable.all.count)
+        #expect(empty.knownBrowsers.map(\.slug) == emptyUpdate.knownBrowsers.map(\.slug))
+        #expect(empty.knownBrowsers.allSatisfy { $0.installed == false })
+        #expect(empty.primaryBrowserName == emptyUpdate.primaryBrowserName)
+    }
+
     // MARK: - config-update (issue #12 hot-apply)
 
     /// The shared wire meaning: a native Settings write published to every
