@@ -164,7 +164,7 @@ Native app activation does not require Accessibility permission. The contract do
 
 ## App behavior contract (v2 changes)
 
-- Palette: anchor per config (`top-center` default: centered horizontally, panel top at 20% of the primary display's visibleFrame height). Dismiss ONLY on: Esc, ⌘⌥N toggle, X button, opening a result, or showing Settings (v4 — a floating panel must not cover the normal-level Settings window). NOT on app deactivation (user can visit Raycast/pasteboard and come back). Panel level stays `.floating`, `.nonactivatingPanel`, visible across Spaces. Persistent gear control and a selectable Settings result (queries that prefix “settings” or “preferences”) both close the palette then present Settings; they never send `open`.
+- Palette: anchor per config (`top-center` default: centered horizontally, panel top at 20% of the primary display's visibleFrame height). Dismiss ONLY on: Esc, ⌘⌥N toggle, X button, opening a result, or showing Settings (v4 — a floating panel must not cover the normal-level Settings window). NOT on app deactivation (user can visit Raycast/pasteboard and come back). Panel level stays `.floating`, `.nonactivatingPanel`, visible across Spaces. Persistent gear control and a selectable Settings result (the complete case-insensitive words “settings” and “preferences” only) both close the palette then present Settings; they never send `open`.
 - Palette sends `open` anchored near the panel; link clicks anchored at mouse (unchanged).
 - Settings window (Liquid Glass mini window), organized into three sections (v4):
   - **General** — Primary browser picker (installed only), Fallback browser, palette position, search engine (presets + custom template), launch-at-login.
