@@ -78,6 +78,10 @@ export function createChrome(options = {}) {
   const rejectScripting = options.rejectScripting || (() => false);
   // Fault injection: predicate over tabs.create options; true ⇒ the call rejects.
   const rejectTabCreate = options.rejectTabCreate || (() => false);
+  // Fault injection: predicates over tabs.update(id, opts) / tabs.remove(id);
+  // true ⇒ the call rejects.
+  const rejectTabUpdate = options.rejectTabUpdate || (() => false);
+  const rejectTabRemove = options.rejectTabRemove || (() => false);
   let lastError = undefined;
   let nextWindowId = 1;
   let nextTabId = 1;
@@ -374,6 +378,7 @@ export function createChrome(options = {}) {
       async update(id, opts = {}) {
         const tab = tabs.get(id);
         if (!tab) return rejectMissing("tab", id);
+        if (rejectTabUpdate(id, opts)) return Promise.reject(new Error("tabs.update failed"));
         const changeInfo = {};
         if (opts.url !== undefined) {
           navigateTab(tab, opts.url, { replace: false });
@@ -397,6 +402,7 @@ export function createChrome(options = {}) {
       async remove(id) {
         const tab = tabs.get(id);
         if (!tab) return rejectMissing("tab", id);
+        if (rejectTabRemove(id)) return Promise.reject(new Error("tabs.remove failed"));
         const windowId = tab.windowId;
         const win = windows.get(windowId);
         if (win) win.tabIds = win.tabIds.filter((tid) => tid !== id);

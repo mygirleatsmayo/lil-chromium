@@ -30,9 +30,11 @@ export async function flush(turns = 8) {
  * `setTimeout`/`clearTimeout` queue on it, so tests step time forward instead
  * of sleeping against the wall clock. advance() fires due timers in time
  * order, flushing promise continuations after each one.
+ *
+ * Private and fixed-start until a real caller needs customization.
  */
-export function createClock(start = 1_700_000_000_000) {
-  let now = start;
+function createClock() {
+  let now = 1_700_000_000_000;
   let seq = 0;
   const timers = new Map();
   const clock = {
@@ -129,7 +131,7 @@ function sandbox({ chrome, indexedDB, clock }) {
 export async function boot(options = {}) {
   const chrome = createChrome(options);
   const indexedDB = createIndexedDB();
-  const clock = options.clock === true ? createClock(options.clockStart) : null;
+  const clock = options.clock === true ? createClock() : null;
   const context = vm.createContext(sandbox({ chrome, indexedDB, clock }));
   vm.runInContext(fs.readFileSync(WORKER_PATH, "utf8"), context, { filename: WORKER_PATH });
   await flush();

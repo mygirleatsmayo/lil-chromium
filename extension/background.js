@@ -1266,6 +1266,12 @@ async function sleepLil(windowId) {
 const WAKE_MIN_HOLD_MS = 180;
 const WAKE_MAX_WAIT_MS = 500;
 
+// Milliseconds until the wake image floor is met, never negative. The one
+// timing rule for both the preload waiter and the replacement-fallback path.
+function wakeFloorRemainingMs(startedAt) {
+  return Math.max(0, startedAt + WAKE_MIN_HOLD_MS - Date.now());
+}
+
 // Wait until the wake swap may happen for the preloaded tab: the fresh page's
 // first `status: "complete"` held to the 180 ms image floor, or the 500 ms cap
 // if readiness never arrives — the transition proceeds regardless.
@@ -1281,20 +1287,30 @@ function waitForWakeSwap(tabId, startedAt) {
       clearTimeout(capTimer);
       resolve();
     };
-    const onUpdated = (id, changeInfo) => {
-      if (id !== tabId || !changeInfo || changeInfo.status !== "complete") return;
-      if (floorTimer !== null) return; // readiness already observed
-      const wait = Math.max(0, startedAt + WAKE_MIN_HOLD_MS - Date.now());
+    // Readiness observed: swap at once past the floor, else when it is met.
+    const ready = () => {
+      if (done || floorTimer !== null) return; // readiness already observed
+      const wait = wakeFloorRemainingMs(startedAt);
       if (wait === 0) finish();
       else floorTimer = setTimeout(finish, wait);
     };
+    const onUpdated = (id, changeInfo) => {
+      if (id !== tabId || !changeInfo || changeInfo.status !== "complete") return;
+      ready();
+    };
     const capTimer = setTimeout(finish, Math.max(0, startedAt + WAKE_MAX_WAIT_MS - Date.now()));
     chrome.tabs.onUpdated.addListener(onUpdated);
+    // Subscribed first, so readiness cannot fall between the listener and this
+    // inspection: a load that already completed still swaps at the floor.
+    void safe(chrome.tabs.get(tabId), "tabs.get wake readiness").then((tab) => {
+      if (tab && tab.status === "complete") ready();
+    });
   });
 }
 
 // Clear every nap-only registry field while keeping the lil registered, and
-// delete the stored capture. Called only after the fresh document exists.
+// delete the stored capture. Called only once a fresh active document has
+// actually replaced the nap document.
 async function clearNapState(windowId, originalUrl, captureKey) {
   const reg = await getRegistry();
   const entry = reg[String(windowId)];
@@ -1314,7 +1330,9 @@ async function clearNapState(windowId, originalUrl, captureKey) {
 // begins loading at once in an inactive tab of the same lil window while the
 // nap image stays painted; once the fresh page is ready (never before the
 // 180 ms floor, never waiting past 500 ms) the fresh tab takes over and the
-// nap tab — and with it the internal nap history entry — is removed.
+// nap tab — and with it the internal nap history entry — is removed. Success
+// is reported only after that replacement has actually happened; failures
+// leave nap state truthful so the nap page's own fallback can fire.
 async function wakeLil(windowId) {
   const reg = await getRegistry();
   const entry = reg[String(windowId)];
@@ -1338,7 +1356,7 @@ async function wakeLil(windowId) {
     // through entry's replacement-only path so history stays clean. If even
     // that is impossible, leave nap state truthful and report failure — the
     // nap page's own fallback can still navigate it.
-    const wait = startedAt + WAKE_MIN_HOLD_MS - Date.now();
+    const wait = wakeFloorRemainingMs(startedAt);
     if (wait > 0) await delay(wait);
     const released = await replaceTabDocument(napTab.id, originalUrl);
     if (!released) {
@@ -1351,8 +1369,26 @@ async function wakeLil(windowId) {
   }
 
   await waitForWakeSwap(freshTab.id, startedAt);
-  await safe(chrome.tabs.update(freshTab.id, { active: true }), "tabs.update wake activate");
-  await safe(chrome.tabs.remove(napTab.id), "tabs.remove nap page");
+
+  // Wake completes only when a fresh active document has actually replaced
+  // the nap document. Until then nap state stays truthful and the reply
+  // reports failure, so the nap page's own fallback can fire.
+  const activated = await safe(chrome.tabs.update(freshTab.id, { active: true }), "tabs.update wake activate");
+  if (!activated) {
+    await safe(chrome.tabs.remove(freshTab.id), "tabs.remove wake preload");
+    log("wakeLil: fresh tab activation failed for", windowId);
+    return false;
+  }
+  try {
+    await chrome.tabs.remove(napTab.id);
+  } catch (err) {
+    // The nap document survived: put it back in front and drop the preload so
+    // the visible lil and the registry tell the same nap truth.
+    log("wakeLil: nap tab removal failed for", windowId, err && err.message ? err.message : err);
+    await safe(chrome.tabs.update(napTab.id, { active: true }), "tabs.update wake rollback");
+    await safe(chrome.tabs.remove(freshTab.id), "tabs.remove wake preload");
+    return false;
+  }
   await clearNapState(windowId, originalUrl, captureKey);
   log("woke lil", windowId);
   return true;

@@ -1381,6 +1381,40 @@ test("after the 180ms floor the wake transition completes as soon as the fresh p
   assert.equal((await reply).ok, true);
 });
 
+test("wake swaps at the floor when the fresh page finished loading before the worker's readiness listener attached", async () => {
+  const env = await boot({ clock: true });
+  const lil = await openTitledLil(env);
+  const originalUrl = lil.tabs[0].url;
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+  const napTabId = napping.tabs[0].id;
+
+  // The fresh load completes in the gap between tabs.create resolving and the
+  // worker's readiness subscription, so its onUpdated signal is never
+  // observed by the waiter.
+  env.chrome.tabs.onCreated.addListener((tab) => {
+    if (tab.url === originalUrl) void env.setTabState(tab.id, { status: "complete" });
+  });
+
+  const reply = env.messageLater({ action: "wakeLil" }, sender(napping));
+  await env.flush();
+  const fresh = env.windows().find((w) => w.id === lil.id).tabs.find((t) => t.id !== napTabId);
+  assert.equal(fresh.status, "complete", "readiness already happened before the waiter listened");
+
+  // The already-complete load still holds the image floor...
+  await env.clock.advance(179);
+  await env.flush();
+  assert.equal(env.windows().find((w) => w.id === lil.id).tabs.length, 2);
+
+  // ...and swaps at the floor rather than waiting out the 500ms cap.
+  await env.clock.advance(1);
+  await env.flush();
+  const woken = env.windows().find((w) => w.id === lil.id);
+  assert.deepEqual(woken.tabs.map((t) => t.id), [fresh.id]);
+  assert.equal(woken.tabs[0].url, originalUrl);
+  assert.equal((await reply).ok, true);
+});
+
 test("the wake transition stops waiting and swaps no later than 500ms", async () => {
   const env = await boot({ clock: true });
   const lil = await openTitledLil(env);
@@ -1524,6 +1558,75 @@ test("when wake cannot navigate at all, it reports failure and leaves nap state 
   const tab = env.windows().find((w) => w.id === lil.id).tabs[0];
   assert.equal(tab.id, napTabId);
   assert.match(tab.url, NAP_PAGE);
+  const entry = env.registry()[String(lil.id)];
+  assert.ok(entry, "the lil stays registered");
+  assert.equal(entry.slept, true);
+  assert.equal(entry.sleepCaptureKey, captureKey);
+  assert.equal(entry.originalUrl, "https://example.com/docs");
+  assert.equal(entry.originalTitle, ORIGINAL_PAGE_TITLE);
+  assert.ok(env.captures().has(captureKey), "the capture stays referenced, not orphaned");
+});
+
+test("when wake cannot activate the fresh document, it reports failure and leaves the nap exactly as it was", async () => {
+  const env = await boot({
+    clock: true,
+    rejectTabUpdate: (id, opts) => !!(opts && opts.active === true),
+  });
+  const lil = await openTitledLil(env);
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+  const napTabId = napping.tabs[0].id;
+  const captureKey = env.registry()[String(lil.id)].sleepCaptureKey;
+
+  const reply = env.messageLater({ action: "wakeLil" }, sender(napping));
+  await env.flush();
+  const fresh = env.windows().find((w) => w.id === lil.id).tabs.find((t) => t.id !== napTabId);
+  await env.setTabState(fresh.id, { status: "complete" });
+  await env.clock.advance(180);
+  await env.flush();
+  assert.equal((await reply).ok, false, "an inactive preload is not a completed wake");
+
+  // The failed preload is gone and the nap document is still the visible,
+  // active tab: visible state, registry truth, and capture all agree.
+  const win = env.windows().find((w) => w.id === lil.id);
+  assert.deepEqual(win.tabs.map((t) => t.id), [napTabId]);
+  assert.equal(win.tabs[0].active, true);
+  assert.match(win.tabs[0].url, NAP_PAGE);
+  const entry = env.registry()[String(lil.id)];
+  assert.ok(entry, "the lil stays registered");
+  assert.equal(entry.slept, true);
+  assert.equal(entry.sleepCaptureKey, captureKey);
+  assert.equal(entry.originalUrl, "https://example.com/docs");
+  assert.equal(entry.originalTitle, ORIGINAL_PAGE_TITLE);
+  assert.ok(env.captures().has(captureKey), "the capture stays referenced, not orphaned");
+});
+
+test("when the nap tab cannot be removed, wake puts it back in front, reports failure, and keeps nap state", async () => {
+  let napTabId = -1;
+  const env = await boot({
+    clock: true,
+    rejectTabRemove: (id) => id === napTabId,
+  });
+  const lil = await openTitledLil(env);
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+  napTabId = napping.tabs[0].id;
+  const captureKey = env.registry()[String(lil.id)].sleepCaptureKey;
+
+  const reply = env.messageLater({ action: "wakeLil" }, sender(napping));
+  await env.flush();
+  const fresh = env.windows().find((w) => w.id === lil.id).tabs.find((t) => t.id !== napTabId);
+  await env.setTabState(fresh.id, { status: "complete" });
+  await env.clock.advance(180);
+  await env.flush();
+  assert.equal((await reply).ok, false, "the nap document was never replaced");
+
+  // Rolled back to the exact pre-wake truth: the nap document is the visible
+  // active tab, the preload is gone, and nap registry fields + capture stay.
+  const win = env.windows().find((w) => w.id === lil.id);
+  assert.deepEqual(win.tabs.map((t) => t.id), [napTabId]);
+  assert.equal(win.tabs[0].active, true, "the nap document is back in front");
+  assert.match(win.tabs[0].url, NAP_PAGE);
   const entry = env.registry()[String(lil.id)];
   assert.ok(entry, "the lil stays registered");
   assert.equal(entry.slept, true);

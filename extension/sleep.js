@@ -13,12 +13,16 @@ if (typeof window !== "undefined" && window.SLEEPING_LIL_DATA) {
 // titles the document with the sleeping symbol, and wakes the lil on any click
 // (the SW runs the bounded wake transition — the original URL loads behind this
 // static image, the swap lands within 180–500 ms, and the capture is deleted —
-// with a hard fallback here if the worker fails or is unreachable).
+// with a fallback here, only if the worker fails or is unreachable, that clears
+// nap state and navigates directly).
 // See PROTOCOL.md Lil Nap.
 
 (() => {
   const IDB_NAME = "lil-sleep";
   const IDB_STORE = "captures";
+  // Registry key and nap-only field names mirror background.js — the
+  // extension ships unpacked with no shared module between page and worker.
+  const REGISTRY_KEY = "ephemeralWindows";
 
   const params = new URLSearchParams(location.search);
   const captureKey = params.get("k") || "";
@@ -96,6 +100,39 @@ if (typeof window !== "undefined" && window.SLEEPING_LIL_DATA) {
     });
   }
 
+  function idbDelete(key) {
+    return new Promise((resolve, reject) => {
+      let req;
+      try {
+        req = indexedDB.open(IDB_NAME, 1);
+      } catch (e) {
+        reject(e);
+        return;
+      }
+      req.onsuccess = () => {
+        const db = req.result;
+        let tx;
+        try {
+          tx = db.transaction(IDB_STORE, "readwrite");
+        } catch (e) {
+          db.close();
+          reject(e);
+          return;
+        }
+        tx.objectStore(IDB_STORE).delete(key);
+        tx.oncomplete = () => {
+          db.close();
+          resolve(true);
+        };
+        tx.onerror = () => {
+          db.close();
+          reject(tx.error);
+        };
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
   let objectUrl = null;
   (async () => {
     if (!captureKey) return;
@@ -115,32 +152,79 @@ if (typeof window !== "undefined" && window.SLEEPING_LIL_DATA) {
   });
 
   // ---- Wake on any click. The worker owns the bounded transition (see
-  // PROTOCOL.md Lil Nap); a hard fallback keeps the page from stranding when
-  // the worker fails or is unreachable. ----
+  // PROTOCOL.md Lil Nap). The direct fallback below fires only on an explicit
+  // worker failure or genuine unreachability — never in parallel with the
+  // worker's bounded path. ----
   let waking = false;
+
+  // Leaving the nap document directly must finish what the worker could not:
+  // clear this lil's nap-only registry fields (the lil stays registered) and
+  // delete the capture, then navigate. Best effort throughout — a dead
+  // extension context must not stop the page from waking itself.
+  async function reconcileNapState() {
+    try {
+      const obj = await chrome.storage.local.get(REGISTRY_KEY);
+      const reg = (obj && obj[REGISTRY_KEY]) || {};
+      let touched = false;
+      for (const entry of Object.values(reg)) {
+        if (captureKey && entry && entry.sleepCaptureKey === captureKey) {
+          delete entry.slept;
+          delete entry.sleepCaptureKey;
+          delete entry.originalUrl;
+          delete entry.originalTitle;
+          entry.url = originalUrl;
+          entry.lastInteraction = Date.now();
+          touched = true;
+        }
+      }
+      if (touched) await chrome.storage.local.set({ [REGISTRY_KEY]: reg });
+    } catch (_) {
+      /* storage unreachable — navigate anyway */
+    }
+    if (captureKey) {
+      try {
+        await idbDelete(captureKey);
+      } catch (_) {
+        /* the worker's sweep keeps orphan-capture cleanup as a backstop */
+      }
+    }
+  }
+
+  function leaveNap() {
+    if (!originalUrl) return;
+    (async () => {
+      await reconcileNapState();
+      try {
+        location.replace(originalUrl);
+      } catch (_) {
+        /* ignore */
+      }
+    })();
+  }
+
   function wake() {
     if (waking) return;
     waking = true;
-    let owned = false; // the worker confirmed it owns the wake transition
+    let answered = false; // the worker answered, one way or another
     try {
       chrome.runtime.sendMessage({ action: "wakeLil" }, (reply) => {
-        // Only a successful reply suppresses the fallback: a failed or
-        // unreachable worker must not leave the nap page stuck.
-        owned = !chrome.runtime.lastError && !!(reply && reply.ok);
+        answered = true;
+        // Only a successful reply means the worker owns the transition: an
+        // explicit failure or a message error leaves the nap page to go
+        // directly.
+        if (chrome.runtime.lastError || !reply || !reply.ok) leaveNap();
       });
     } catch (_) {
-      /* context invalidated — the fallback below still fires */
+      leaveNap(); // context invalidated — no worker will answer
+      return;
     }
-    // Fallback: if the worker hasn't owned the wake within 500ms, go directly.
+    // A reply that never arrives well past the worker's 500 ms cap (plus
+    // reply margin) means the worker is unreachable: go directly rather than
+    // strand. The deadline can never race the bounded path — a successful
+    // swap has removed this page long before it fires.
     setTimeout(() => {
-      if (!owned && originalUrl) {
-        try {
-          location.replace(originalUrl);
-        } catch (_) {
-          /* ignore */
-        }
-      }
-    }, 500);
+      if (!answered) leaveNap();
+    }, 1000);
   }
 
   document.addEventListener("click", wake, true);
