@@ -30,3 +30,7 @@ Reports: `REVIEW-FINAL-STANDARDS.md`, `REVIEW-FINAL-SPEC.md` (this directory).
 | P2 | Spec | Same stale `docs/PROTOCOL.md` prefix sentence | **fix through S1** | Duplicate of S1; no additional product behavior change is owed. |
 
 Final round 1 found contract drift only. One documentation-only fix is owed before repeating the remediation review and final full review.
+
+## Manager close-out
+
+S1 and duplicate P2 are resolved by `8bd0539cdf44dd3ca1ac07cb6d472ff05a00eab1`: `docs/PROTOCOL.md` now states the settled complete-word rule. Per owner direction, this one-line prose correction was checked directly rather than sent through another worker review round. Focused palette tests, the full extension and Swift suites, release build, and `git diff --check` passed.
