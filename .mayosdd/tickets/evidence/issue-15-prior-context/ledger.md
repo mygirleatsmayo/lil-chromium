@@ -35,3 +35,9 @@ Primary source: https://developer.chrome.com/docs/extensions/reference/api/windo
 ## Round 1 outcome
 
 Two fixes are owed (S2, P1). Two findings are settled without code changes (S1, P2). No owner adjudication is required before remediation.
+
+## Final-review adjudication
+
+| ID | Location | Verdict | Reasoning |
+|---|---|---|---|
+| NA1 | Caret action `reopenIncognito` replaces a source lil without carrying its recorded predecessor into the successor | **won't-fix; defer** | This is a non-blocking edge case outside the ticket's settled transfer behavior. The owner chose not to spend another remediation and full-review cycle on it now. Revisit as separately scoped work if incognito-reopen continuity becomes a priority. |
