@@ -148,6 +148,10 @@ export async function boot(options = {}) {
       await state.events.alarms.onAlarm.fire({ name });
       await flush();
     },
+    async command(name) {
+      await state.events.commands.onCommand.fire(name);
+      await flush();
+    },
     async clickMenu(menuItemId, tab, info = {}) {
       await state.events.contextMenus.onClicked.fire({ menuItemId, ...info }, tab);
       await flush();

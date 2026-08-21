@@ -984,6 +984,13 @@ test("a browser restart rebuilds the nap page with the current configured tint, 
 });
 
 test("registry and capture state distinguish Lil Nap from native discard and freeze", async () => {
+  // Deterministic seam: Node fake Chrome has no Memory Saver and no Drowzy.
+  // discarded/frozen are public tab flags applied without naming an actor.
+  // Real-browser control: disposable profile with Memory Saver off and Drowzy
+  // disabled; separate controls may enable each actor to confirm the same
+  // oracle (nap URL + discarded==false vs original URL + discarded==true vs
+  // original URL + frozen==true) without attributing the discarder.
+
   const env = await boot();
   await env.deliver(fixture("message-context"));
 
@@ -1056,18 +1063,33 @@ test("the whitelist context menu uses napping language", async () => {
   assert.equal(item().title, "Allow napping example.com");
 });
 
+async function applySleepConfig(env, sleepPatch) {
+  const wire = fixture("message-context");
+  await env.deliver({
+    ...wire,
+    sleep: { ...wire.sleep, ...sleepPatch },
+  });
+}
+
+async function parkIdle(env, lil, idleMinutes) {
+  const registry = env.registry();
+  registry[String(lil.id)].lastInteraction = Date.now() - idleMinutes * 60 * 1000;
+  await env.chrome.storage.local.set({ ephemeralWindows: registry });
+}
+
+function lilTab(env, lil) {
+  return env.windows().find((w) => w.id === lil.id).tabs[0];
+}
+
 test("automatic Lil Nap records the same capture and registry truth as a manual entry", async () => {
   const env = await boot();
   const lil = await openTitledLil(env, { url: "https://idle.example/", title: "Idle Docs" });
   await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
 
-  const registry = env.registry();
-  registry[String(lil.id)].lastInteraction = Date.now() - 46 * 60 * 1000;
-  await env.chrome.storage.local.set({ ephemeralWindows: registry });
-
+  await parkIdle(env, lil, 46);
   await env.alarm();
 
-  const tab = env.windows().find((w) => w.id === lil.id).tabs[0];
+  const tab = lilTab(env, lil);
   const entry = env.registry()[String(lil.id)];
   assert.match(tab.url, NAP_PAGE);
   assert.equal(entry.slept, true);
@@ -1077,6 +1099,203 @@ test("automatic Lil Nap records the same capture and registry truth as a manual 
   assert.equal(tab.title, "💤 Idle Docs");
   assert.ok(env.captures().has(entry.sleepCaptureKey));
   assert.deepEqual(env.sessionHistory(tab.id), [tab.url]);
+});
+
+test("automatic Lil Nap does not run when globally disabled, even after the idle threshold", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "https://idle.example/", title: "Idle Docs" });
+  await applySleepConfig(env, { enabled: false, afterMinutes: 45 });
+  await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await parkIdle(env, lil, 46);
+
+  await env.alarm();
+
+  assert.equal(lilTab(env, lil).url, "https://idle.example/");
+  assert.equal(env.registry()[String(lil.id)].slept, undefined);
+  assert.equal(env.captures().size, 0);
+});
+
+test("automatic Lil Nap waits until the configured idle threshold has passed", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "https://idle.example/", title: "Idle Docs" });
+  await applySleepConfig(env, { enabled: true, afterMinutes: 45 });
+  await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+
+  await parkIdle(env, lil, 44);
+  await env.alarm();
+  assert.equal(lilTab(env, lil).url, "https://idle.example/");
+  assert.equal(env.registry()[String(lil.id)].slept, undefined);
+
+  await parkIdle(env, lil, 46);
+  await env.alarm();
+  assert.match(lilTab(env, lil).url, NAP_PAGE);
+  assert.equal(env.registry()[String(lil.id)].slept, true);
+});
+
+test("automatic Lil Nap independently skips a focused lil", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "https://idle.example/", title: "Idle Docs" });
+  await applySleepConfig(env, {
+    enabled: true,
+    afterMinutes: 45,
+    audioGuard: false,
+    formGuard: false,
+    whitelist: [],
+  });
+  await parkIdle(env, lil, 46);
+
+  await env.alarm();
+
+  assert.equal(lil.focused, true);
+  assert.equal(lilTab(env, lil).url, "https://idle.example/");
+  assert.equal(env.registry()[String(lil.id)].slept, undefined);
+});
+
+test("automatic Lil Nap independently skips an audible lil when the audio guard is on", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "https://idle.example/", title: "Idle Docs" });
+  await applySleepConfig(env, { enabled: true, afterMinutes: 45, audioGuard: true, formGuard: false, whitelist: [] });
+  await env.setTabState(lil.tabs[0].id, { audible: true });
+  await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await parkIdle(env, lil, 46);
+
+  await env.alarm();
+
+  assert.equal(lilTab(env, lil).url, "https://idle.example/");
+  assert.equal(env.registry()[String(lil.id)].slept, undefined);
+});
+
+test("automatic Lil Nap independently skips a dirty-form lil when the form guard is on", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "https://idle.example/", title: "Idle Docs" });
+  await applySleepConfig(env, { enabled: true, afterMinutes: 45, audioGuard: false, formGuard: true, whitelist: [] });
+  await env.message({ action: "formDirty", dirty: true }, sender(lil));
+  await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await parkIdle(env, lil, 46);
+
+  await env.alarm();
+
+  assert.equal(lilTab(env, lil).url, "https://idle.example/");
+  assert.equal(env.registry()[String(lil.id)].slept, undefined);
+});
+
+test("automatic Lil Nap independently skips a whitelisted domain", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "https://mail.google.com/inbox", title: "Mail" });
+  await applySleepConfig(env, {
+    enabled: true,
+    afterMinutes: 45,
+    audioGuard: false,
+    formGuard: false,
+    whitelist: ["mail.google.com"],
+  });
+  await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await parkIdle(env, lil, 46);
+
+  await env.alarm();
+
+  assert.equal(lilTab(env, lil).url, "https://mail.google.com/inbox");
+  assert.equal(env.registry()[String(lil.id)].slept, undefined);
+});
+
+test("automatic Lil Nap independently skips an incognito lil", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "https://private.example/", title: "Secret", incognito: true });
+  await applySleepConfig(env, { enabled: true, afterMinutes: 45, audioGuard: false, formGuard: false, whitelist: [] });
+  await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+
+  await env.alarm();
+
+  assert.equal(env.registry()[String(lil.id)], undefined);
+  assert.equal(lilTab(env, lil).url, "https://private.example/");
+  assert.equal(env.captures().size, 0);
+  assert.equal(journalHas(env, "tabs.captureVisibleTab"), false);
+});
+
+test("manual Let This Lil Nap still works while automatic Nap is disabled", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "https://idle.example/", title: "Idle Docs" });
+  await applySleepConfig(env, { enabled: false, afterMinutes: 45 });
+
+  const reply = await env.message({ action: "sleepThisLil" }, sender(lil));
+
+  assert.equal(reply.ok, true);
+  assert.match(lilTab(env, lil).url, NAP_PAGE);
+  assert.equal(env.registry()[String(lil.id)].slept, true);
+  assert.equal(env.registry()[String(lil.id)].originalUrl, "https://idle.example/");
+});
+
+test("manual Let This Lil Nap ignores automatic-only guards but still refuses incognito capture", async () => {
+  const env = await boot();
+  const audible = await openTitledLil(env, { url: "https://audio.example/", title: "Audio" });
+  await applySleepConfig(env, {
+    enabled: false,
+    audioGuard: true,
+    formGuard: true,
+    whitelist: ["audio.example"],
+  });
+  await env.setTabState(audible.tabs[0].id, { audible: true });
+  await env.message({ action: "formDirty", dirty: true }, sender(audible));
+  const audibleReply = await env.message({ action: "sleepThisLil" }, sender(audible));
+  assert.equal(audibleReply.ok, true);
+  assert.match(lilTab(env, audible).url, NAP_PAGE);
+
+  const privateLil = await openTitledLil(env, { url: "https://private.example/", title: "Secret", incognito: true });
+  const privateReply = await env.message({ action: "sleepThisLil" }, sender(privateLil));
+  assert.equal(privateReply.ok, false);
+  assert.equal(lilTab(env, privateLil).url, "https://private.example/");
+});
+
+const MANIFEST_PATH = path.resolve(path.dirname(WORKER_PATH), "manifest.json");
+
+test("the extension registers Let This Lil Nap as an unassigned command and keeps existing shortcuts", async () => {
+  const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
+  const commands = manifest.commands;
+  assert.deepEqual(Object.keys(commands).sort(), ["let-this-lil-nap", "promote-tab"]);
+  assert.equal(commands["let-this-lil-nap"].description, "Let This Lil Nap");
+  assert.equal("suggested_key" in commands["let-this-lil-nap"], false);
+  assert.deepEqual(commands["promote-tab"].suggested_key, {
+    default: "Ctrl+Shift+O",
+    mac: "Command+Shift+O",
+  });
+  const overlay = fs.readFileSync(path.resolve(path.dirname(WORKER_PATH), "overlay.js"), "utf8");
+  assert.match(overlay, /e\.key === "l" \|\| e\.key === "L"/);
+  assert.match(overlay, /e\.key === "o" \|\| e\.key === "O"/);
+});
+
+test("the Let This Lil Nap command naps the focused lil while automatic Nap is disabled", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "https://idle.example/", title: "Idle Docs" });
+  await applySleepConfig(env, { enabled: false });
+
+  await env.command("let-this-lil-nap");
+
+  assert.match(lilTab(env, lil).url, NAP_PAGE);
+  assert.equal(env.registry()[String(lil.id)].slept, true);
+  assert.equal(env.registry()[String(lil.id)].originalUrl, "https://idle.example/");
+});
+
+test("concurrent Lil Nap captures serialize within two captures per second", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver({ type: "open", url: "https://one.example/", left: 10, top: 10 });
+  const one = env.windows()[0];
+  await env.setTabState(one.tabs[0].id, { title: "One" });
+  await env.deliver({ type: "open", url: "https://two.example/", left: 40, top: 40 });
+  const two = env.windows().find((w) => w.tabs[0].url === "https://two.example/");
+  await env.setTabState(two.tabs[0].id, { title: "Two" });
+
+  await Promise.all([
+    env.message({ action: "sleepThisLil" }, sender(one)),
+    env.message({ action: "sleepThisLil" }, sender(two)),
+  ]);
+
+  const captures = env.journal().filter((e) => e.op === "tabs.captureVisibleTab");
+  assert.equal(captures.length, 2);
+  assert.ok(captures[1].at - captures[0].at >= 500, "captures stay within Chromium's two-per-second bound");
+  assert.match(lilTab(env, one).url, NAP_PAGE);
+  assert.match(lilTab(env, two).url, NAP_PAGE);
+  assert.equal(env.captures().size, 2);
 });
 
 test("unknown config fields are not required for the worker to apply known ones", async () => {

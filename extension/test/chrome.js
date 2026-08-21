@@ -106,7 +106,7 @@ export function createChrome(options = {}) {
   };
 
   function record(op, detail) {
-    journal.push({ op, ...detail });
+    journal.push({ op, at: Date.now(), ...detail });
   }
 
   function rejectMissing(kind, id) {

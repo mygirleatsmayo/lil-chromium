@@ -42,6 +42,9 @@
         "mac": "Command+Shift+O"
       },
       "description": "Open this lil in the Primary browser"
+    },
+    "let-this-lil-nap": {
+      "description": "Let This Lil Nap"
     }
   }
 }

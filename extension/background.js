@@ -1889,12 +1889,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 chrome.commands.onCommand.addListener(async (command) => {
-  if (command !== "promote-tab") return;
   const tabs = await safe(chrome.tabs.query({ active: true, lastFocusedWindow: true }), "tabs.query command");
   const tab = tabs && tabs[0];
   if (!tab || tab.windowId === undefined) return;
   if (!(await isEphemeralWindow(tab.windowId))) return;
-  await promoteTab(tab.id, "default");
+  if (command === "promote-tab") {
+    await promoteTab(tab.id, "default");
+    return;
+  }
+  if (command === "let-this-lil-nap") {
+    await sleepLil(tab.windowId);
+  }
 });
 
 // ===========================================================================
