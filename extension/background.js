@@ -20,7 +20,7 @@ const NATIVE_HOST = "com.lilchromium.relay";
 //   { url, bounds:{left,top,width,height},
 //     expiry: "never"|"quit"|<hoursNumber>, lastInteraction: ts,
 //     priorContext?: {kind,...},
-//     slept?: bool, sleepCaptureKey?: string, originalUrl?: string }
+//     slept?: bool, sleepCaptureKey?: string, originalUrl?: string, originalTitle?: string }
 const REGISTRY_KEY = "ephemeralWindows";
 const LAST_SIZE_KEY = "lastSize"; // {width, height} — last user-resized lil size
 const CONTEXT_KEY = "hostContext"; // cached `context` reply (stale-but-usable)
@@ -677,7 +677,7 @@ async function broadcastToWindow(windowId, message) {
 
 // ===========================================================================
 // RESTORE — parked lils survive restart. Skips "quit"-expiry lils; slept lils
-// reopen as their sleep page.
+// reopen as their nap page.
 // ===========================================================================
 
 async function restoreWindows() {
@@ -698,7 +698,7 @@ async function restoreWindows() {
     const slept = entry.slept && entry.sleepCaptureKey && entry.originalUrl;
 
     const win = await openLil({
-      url: slept ? sleepPageUrl(entry.sleepCaptureKey, entry.originalUrl) : entry.url,
+      url: slept ? sleepPageUrl(entry.sleepCaptureKey, entry.originalUrl, undefined, entry.originalTitle) : entry.url,
       recordUrl: entry.url,
       left: b.left,
       top: b.top,
@@ -712,6 +712,7 @@ async function restoreWindows() {
         slept: !!entry.slept,
         sleepCaptureKey: entry.sleepCaptureKey,
         originalUrl: entry.originalUrl,
+        originalTitle: entry.originalTitle,
       },
     });
     if (win) {
@@ -900,8 +901,9 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
 // SLEEP SYSTEM (v3).
 //
 // Pipeline: captureVisibleTab (throttled ≤2/sec) → dataURL→Blob→IndexedDB →
-// mark registry {slept, sleepCaptureKey, originalUrl} → navigate the tab to
-// sleep.html. Wake: sleep page click → wakeLil → navigate back + delete capture.
+// mark registry {slept, sleepCaptureKey, originalUrl, originalTitle} →
+// replace the tab document with sleep.html. Wake: sleep page click → wakeLil
+// → navigate back + delete capture.
 // ===========================================================================
 
 const IDB_NAME = "lil-sleep";
@@ -980,12 +982,34 @@ function idbKeys() {
 }
 
 // Build the sleep-page URL for a given capture key + original URL + tint.
-function sleepPageUrl(captureKey, originalUrl, tint) {
+function sleepPageUrl(captureKey, originalUrl, tint, originalTitle) {
   const params = new URLSearchParams();
   params.set("k", captureKey);
   params.set("u", originalUrl || "");
+  params.set("t", originalTitle || "");
   if (tint) params.set("tint", tint);
   return chrome.runtime.getURL("sleep.html") + "?" + params.toString();
+}
+
+// Release the original document by replacing the current history entry so the
+// nap URL does not sit on top of the live page in back/forward.
+async function replaceTabDocument(tabId, url) {
+  const execute = chrome.scripting && chrome.scripting.executeScript;
+  if (typeof execute === "function") {
+    const injected = await safe(
+      execute.call(chrome.scripting, {
+        target: { tabId },
+        func: (nextUrl) => {
+          location.replace(nextUrl);
+        },
+        args: [url],
+      }),
+      "scripting.executeScript replace"
+    );
+    if (injected) return true;
+  }
+  await safe(chrome.tabs.update(tabId, { url }), "tabs.update sleep");
+  return false;
 }
 
 // Global capture throttle: serialize captures with a min gap so we never exceed
@@ -1041,6 +1065,7 @@ async function sleepLil(windowId) {
   const tab = tabs && tabs[0];
   if (!tab || tab.id === undefined) return false;
   const originalUrl = tab.url || entry.url || "";
+  const originalTitle = typeof tab.title === "string" ? tab.title : "";
   if (!originalUrl || /^chrome-extension:\/\//i.test(originalUrl)) return false; // already a lil page
 
   const dataUrl = await throttledCapture(windowId);
@@ -1064,10 +1089,11 @@ async function sleepLil(windowId) {
     reg2[String(windowId)].slept = true;
     reg2[String(windowId)].sleepCaptureKey = captureKey;
     reg2[String(windowId)].originalUrl = originalUrl;
+    reg2[String(windowId)].originalTitle = originalTitle;
     await setRegistry(reg2);
   }
 
-  await safe(chrome.tabs.update(tab.id, { url: sleepPageUrl(captureKey, originalUrl, tint) }), "tabs.update sleep");
+  await replaceTabDocument(tab.id, sleepPageUrl(captureKey, originalUrl, tint, originalTitle));
   log("slept lil", windowId);
   return true;
 }
@@ -1682,7 +1708,7 @@ chrome.commands.onCommand.addListener(async (command) => {
 // CONTEXT MENUS (v3) — recreated cleanly in onInstalled (removeAll first).
 //
 // link (lil windows):   Open link in new lil / this lil / incognito lil
-// page (lil windows):   Sleep this lil, Never sleep {host} / Allow sleeping {host}
+// page (lil windows):   Let This Lil Nap, Never sleep {host} / Allow sleeping {host}
 // page (NORMAL windows): Send to lil
 // onClicked handlers verify window context and no-op gracefully.
 // ===========================================================================
@@ -1705,7 +1731,7 @@ function createContextMenus() {
         title: "Open link in incognito lil",
         contexts: ["link"],
       });
-      chrome.contextMenus.create({ id: CTX_SLEEP, title: "Sleep this lil", contexts: ["page"] });
+      chrome.contextMenus.create({ id: CTX_SLEEP, title: "Let This Lil Nap", contexts: ["page"] });
       chrome.contextMenus.create({ id: CTX_WHITELIST, title: "Never sleep this site", contexts: ["page"] });
       chrome.contextMenus.create({ id: CTX_SEND_TO_LIL, title: "Send to lil", contexts: ["page"] });
     } catch (err) {
@@ -1727,7 +1753,7 @@ async function updateContextMenusForTab(tab) {
   };
 
   // Lil-only page items visible in lils; "Send to lil" visible only in normal windows.
-  setTitle(CTX_SLEEP, "Sleep this lil", isLil && !incognitoLils.has(tab.windowId));
+  setTitle(CTX_SLEEP, "Let This Lil Nap", isLil && !incognitoLils.has(tab.windowId));
   setTitle(
     CTX_WHITELIST,
     host ? (whitelisted ? "Allow sleeping " + host : "Never sleep " + host) : "Never sleep this site",

@@ -4,6 +4,8 @@
  * Event listeners are awaited so tests observe the worker's async handlers.
  */
 
+import vm from "node:vm";
+
 const EXTENSION_ID = "oofeehjoocddelicpmnpbafmbalaakge";
 const WINDOW_ID_NONE = -1;
 const DEFAULT_DISPLAY = {
@@ -35,7 +37,8 @@ function makeEvent() {
 }
 
 function snapshotTab(tab) {
-  return { ...tab };
+  const { sessionHistory, ...publicTab } = tab;
+  return { ...publicTab };
 }
 
 function snapshotWindow(win, tabs) {
@@ -105,21 +108,47 @@ export function createChrome(options = {}) {
     for (const w of windows.values()) w.focused = w.id === id;
   }
 
-  function addTab({ windowId, url, active = true, openerTabId, incognito = false }) {
+  function addTab({ windowId, url, active = true, openerTabId, incognito = false, title = "" }) {
     const id = nextTabId++;
     const tab = {
       id,
       windowId,
       url,
+      title,
       active,
       openerTabId,
       audible: false,
       discarded: false,
       frozen: false,
       incognito,
+      sessionHistory: [url],
     };
     tabs.set(id, tab);
+    applyNapDocument(tab);
     return tab;
+  }
+
+  // Simulate the nap page's document title. Real Chromium runs sleep.js;
+  // the worker encodes the original title as `t` on the nap URL.
+  function applyNapDocument(tab) {
+    try {
+      const parsed = new URL(tab.url);
+      if (!parsed.pathname.endsWith("/sleep.html")) return;
+      const originalTitle = parsed.searchParams.get("t");
+      if (originalTitle !== null) tab.title = "💤 " + originalTitle;
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  function navigateTab(tab, url, { replace = false } = {}) {
+    tab.url = url;
+    if (replace) {
+      tab.sessionHistory[tab.sessionHistory.length - 1] = url;
+    } else {
+      tab.sessionHistory = tab.sessionHistory.concat(url);
+    }
+    applyNapDocument(tab);
   }
 
   function closeWindowIfEmpty(windowId) {
@@ -189,6 +218,24 @@ export function createChrome(options = {}) {
     async blurBrowser() {
       focusExclusive(WINDOW_ID_NONE);
       await events.windows.onFocusChanged.fire(WINDOW_ID_NONE);
+    },
+    sessionHistory(tabId) {
+      const tab = tabs.get(tabId);
+      return tab ? [...tab.sessionHistory] : [];
+    },
+    async setTabState(id, patch = {}) {
+      const tab = tabs.get(id);
+      if (!tab) return rejectMissing("tab", id);
+      const changeInfo = {};
+      for (const key of ["title", "discarded", "frozen", "audible"]) {
+        if (patch[key] !== undefined) {
+          tab[key] = patch[key];
+          changeInfo[key] = patch[key];
+        }
+      }
+      record("tabs.state", { tabId: id, patch: { ...patch } });
+      if (Object.keys(changeInfo).length) await events.tabs.onUpdated.fire(id, changeInfo, snapshotTab(tab));
+      return snapshotTab(tab);
     },
     async deliver(msg) {
       await native.deliver(msg);
@@ -286,8 +333,9 @@ export function createChrome(options = {}) {
         if (!tab) return rejectMissing("tab", id);
         const changeInfo = {};
         if (opts.url !== undefined) {
-          tab.url = opts.url;
+          navigateTab(tab, opts.url, { replace: false });
           changeInfo.url = opts.url;
+          if (tab.title) changeInfo.title = tab.title;
         }
         if (opts.active === true) {
           const win = windows.get(tab.windowId);
@@ -490,6 +538,44 @@ export function createChrome(options = {}) {
     },
     commands: {
       onCommand: events.commands.onCommand,
+    },
+    scripting: {
+      async executeScript({ target = {}, func, args = [] } = {}) {
+        const tabId = target.tabId;
+        const tab = tabs.get(tabId);
+        if (!tab) return rejectMissing("tab", tabId);
+        record("scripting.executeScript", { tabId, args: [...args] });
+        if (typeof func !== "function") return [];
+
+        const changeInfo = {};
+        const location = {
+          get href() {
+            return tab.url;
+          },
+          replace(nextUrl) {
+            navigateTab(tab, nextUrl, { replace: true });
+            changeInfo.url = nextUrl;
+            if (tab.title) changeInfo.title = tab.title;
+          },
+        };
+        vm.runInNewContext(`(${func.toString()})(...__args)`, {
+          location,
+          document: {
+            get title() {
+              return tab.title || "";
+            },
+            set title(value) {
+              tab.title = value;
+              changeInfo.title = value;
+            },
+          },
+          __args: args,
+        });
+        if (Object.keys(changeInfo).length) {
+          await events.tabs.onUpdated.fire(tabId, changeInfo, snapshotTab(tab));
+        }
+        return [{ result: undefined }];
+      },
     },
     tabGroups: {
       async query() {

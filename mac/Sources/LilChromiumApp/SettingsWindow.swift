@@ -282,21 +282,21 @@ struct SettingsRoot: View {
     // MARK: Sleep (inside Lils)
 
     @ViewBuilder private var sleepControls: some View {
-        Toggle("Put idle lils to sleep", isOn: sleepEnabledBinding)
-        Text("Sleeping frees the page’s memory; click a sleeping lil to wake it.")
+        Toggle("Let idle lils nap", isOn: sleepEnabledBinding)
+        Text("Lil Nap frees the page’s memory; click a napping lil to Wake This Lil.")
             .font(.caption)
             .foregroundStyle(.secondary)
 
         // Only expose the detail controls when sleep is enabled.
         if store.config.sleep.enabled {
-            Picker("Sleep after", selection: sleepMinutesBinding) {
+            Picker("Lil Nap after", selection: sleepMinutesBinding) {
                 Text("15 minutes").tag(15)
                 Text("30 minutes").tag(30)
                 Text("60 minutes").tag(60)
                 Text("120 minutes").tag(120)
             }
-            Toggle("Don’t sleep lils playing audio", isOn: audioGuardBinding)
-            Toggle("Don’t sleep lils with unsaved form input", isOn: formGuardBinding)
+            Toggle("Don’t nap lils playing audio", isOn: audioGuardBinding)
+            Toggle("Don’t nap lils with unsaved form input", isOn: formGuardBinding)
 
             TintEditor(
                 committed: sleepTintBinding,
