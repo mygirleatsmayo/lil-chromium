@@ -1,3 +1,4 @@
+import AppKit
 import Testing
 @testable import LilChromiumApp
 @testable import LilShared
@@ -355,5 +356,136 @@ struct PaletteOrderingTests {
 
         #expect(rows.prefix(2).map(\.kind) == [.openURL, .search])
         #expect(rows[0].actionURL == "https://example.com/pricing")
+    }
+}
+
+/// Return chooses a concrete palette action at the native model boundary.
+/// AppKit event handling and row rendering stay outside these behavior tests.
+struct PaletteActionTests {
+
+    @Test("Return opens the selected action", .bug(id: 14))
+    func returnOpensTheSelectedAction() throws {
+        let model = PaletteModel()
+        let input = "example.com/pricing"
+        let selectedRow = try #require(model.rows(for: input).first)
+
+        let action = try #require(model.action(
+            for: input,
+            selectedRow: selectedRow,
+            modifiers: []
+        ))
+
+        #expect(action.kind == .open)
+        #expect(action.url == "https://example.com/pricing")
+        #expect(action.incognito == false)
+        #expect(action.hint == "⏎ Open")
+    }
+
+    @Test("Shift-Return forces the current text through search", .bug(id: 14))
+    func shiftReturnForcesTheCurrentTextThroughSearch() throws {
+        let model = PaletteModel()
+        model.searchEngine = SearchEngineConfig(
+            name: "Kagi",
+            template: "https://kagi.com/search?q=%s",
+            provider: "kagi"
+        )
+        let selectedRow = try #require(model.rows(for: "example.com/pricing").first)
+
+        let action = try #require(model.action(
+            for: "privacy news",
+            selectedRow: selectedRow,
+            modifiers: [.shift]
+        ))
+
+        #expect(action.kind == .search)
+        #expect(action.url == "https://kagi.com/search?q=privacy%20news")
+        #expect(action.incognito == false)
+        #expect(action.hint == "⇧⏎ Search")
+    }
+
+    @Test("Command-Return opens the selected action incognito", .bug(id: 14))
+    func commandReturnOpensTheSelectedActionIncognito() throws {
+        let model = PaletteModel()
+        let input = "example.com/private"
+        let selectedRow = try #require(model.rows(for: input).first)
+
+        let action = try #require(model.action(
+            for: input,
+            selectedRow: selectedRow,
+            modifiers: [.command]
+        ))
+
+        #expect(action.kind == .open)
+        #expect(action.url == "https://example.com/private")
+        #expect(action.incognito == true)
+        #expect(action.hint == "⌘⏎ Open Incognito")
+    }
+
+    @Test("Command-Shift-Return forces search incognito", .bug(id: 14))
+    func commandShiftReturnForcesSearchIncognito() throws {
+        let model = PaletteModel()
+        model.searchEngine = SearchEngineConfig(
+            name: "Kagi",
+            template: "https://kagi.com/search?q=%s",
+            provider: "kagi"
+        )
+        let selectedRow = try #require(model.rows(for: "example.com/private").first)
+
+        let action = try #require(model.action(
+            for: "secret cats",
+            selectedRow: selectedRow,
+            modifiers: [.command, .shift]
+        ))
+
+        #expect(action.kind == .search)
+        #expect(action.url == "https://kagi.com/search?q=secret%20cats")
+        #expect(action.incognito == true)
+        #expect(action.hint == "⇧⌘⏎ Search Incognito")
+    }
+
+    @Test("Return uses the current selection", .bug(id: 14))
+    func returnUsesTheCurrentSelection() throws {
+        let model = PaletteModel()
+        let input = "example.com/pricing"
+        let rows = model.rows(for: input)
+        let selectedSearchRow = try #require(rows.dropFirst().first)
+
+        let action = try #require(model.action(
+            for: input,
+            selectedRow: selectedSearchRow,
+            modifiers: []
+        ))
+
+        #expect(action.kind == .search)
+        #expect(action.url == "https://www.startpage.com/sp/search?query=example.com/pricing")
+        #expect(action.incognito == false)
+        #expect(action.hint == "⏎ Search")
+    }
+
+    @Test(
+        "Extra modifiers never submit an action",
+        .bug(id: 14),
+        arguments: [
+            NSEvent.ModifierFlags.option.rawValue,
+            NSEvent.ModifierFlags.control.rawValue,
+            NSEvent.ModifierFlags.capsLock.rawValue,
+            NSEvent.ModifierFlags.function.rawValue,
+            NSEvent.ModifierFlags.numericPad.rawValue,
+            NSEvent.ModifierFlags([.shift, .option]).rawValue,
+            NSEvent.ModifierFlags([.command, .option]).rawValue,
+            NSEvent.ModifierFlags([.command, .shift, .control]).rawValue,
+        ]
+    )
+    func extraModifiersNeverSubmitAnAction(_ rawModifiers: UInt) throws {
+        let model = PaletteModel()
+        let selectedRow = try #require(model.rows(for: "example.com/private").first)
+
+        let action = model.action(
+            for: "private search",
+            selectedRow: selectedRow,
+            modifiers: NSEvent.ModifierFlags(rawValue: rawModifiers)
+        )
+
+        #expect(action == nil)
     }
 }
