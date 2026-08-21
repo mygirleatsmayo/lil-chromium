@@ -14,19 +14,23 @@ test("a successful worker reply keeps the nap page on the worker's bounded trans
   assert.deepEqual(page.wakeMessages, [{ action: "wakeLil" }]);
 
   // No deadline of the page's own may navigate it: the worker owns the swap.
-  page.fireTimers(() => true);
-  await flush();
+  await page.advance(5000);
   assert.equal(page.navigatedTo(), null);
   assert.equal(page.registry()[WINDOW_KEY].slept, true);
   assert.equal(page.captures().has(CAPTURE_KEY), true);
 });
 
-test("an explicit worker failure runs the page fallback at once and reconciles nap state", async () => {
+test("an explicit worker failure reconciles nap state before the page leaves", async () => {
   const page = await mountSleepPage({ reply: "fail" });
   page.click();
   await flush();
 
-  assert.equal(page.navigatedTo(), ORIGINAL_URL, "the page goes directly without waiting out a deadline");
+  // Cleanup is real work across the extension API boundary, so the page is
+  // still here while it runs: leaving first would abandon it unfinished.
+  assert.equal(page.navigatedTo(), null, "the page does not leave in the same turn it asks");
+
+  await page.advance(149);
+  assert.equal(page.navigatedTo(), ORIGINAL_URL, "cleanup landed, then the page left");
   const entry = page.registry()[WINDOW_KEY];
   assert.ok(entry, "the lil stays registered");
   assert.equal(entry.url, ORIGINAL_URL);
@@ -44,25 +48,24 @@ test("the page fallback does not compete with the worker's bounded path at the 5
 
   // The worker's reply is still pending through its whole bounded path: the
   // page must not navigate at the transition's own deadline.
-  page.fireTimers((ms) => ms <= 500);
-  await flush();
+  await page.advance(500);
   assert.equal(page.navigatedTo(), null, "no race against the worker at the same deadline");
   assert.equal(page.registry()[WINDOW_KEY].slept, true);
   assert.equal(page.captures().has(CAPTURE_KEY), true);
 
   // Silence well past the worker's cap is genuine unreachability: the page
   // goes directly rather than stranding, reconciling nap state itself.
-  page.fireTimers(() => true);
-  await flush();
+  await page.advance(1000);
   assert.equal(page.navigatedTo(), ORIGINAL_URL);
   assert.equal(page.registry()[WINDOW_KEY].slept, undefined);
   assert.equal(page.captures().has(CAPTURE_KEY), false);
 });
 
-test("a worker message error (unreachable worker) runs the fallback at once with cleanup", async () => {
+test("a worker message error (unreachable worker) runs the fallback with cleanup", async () => {
   const page = await mountSleepPage({ reply: "error" });
   page.click();
   await flush();
+  await page.advance(149);
 
   assert.equal(page.navigatedTo(), ORIGINAL_URL);
   assert.equal(page.registry()[WINDOW_KEY].slept, undefined);
@@ -70,10 +73,11 @@ test("a worker message error (unreachable worker) runs the fallback at once with
   assert.equal(page.captures().has(CAPTURE_KEY), false);
 });
 
-test("a thrown send (invalidated context) runs the fallback at once with cleanup", async () => {
+test("a thrown send (invalidated context) runs the fallback with cleanup", async () => {
   const page = await mountSleepPage({ reply: "throw" });
   page.click();
   await flush();
+  await page.advance(149);
 
   assert.equal(page.navigatedTo(), ORIGINAL_URL);
   assert.equal(page.registry()[WINDOW_KEY].slept, undefined);
@@ -85,13 +89,13 @@ test("a hung storage API does not strand the nap document: the page navigates af
   page.click();
   await flush();
 
-  assert.equal(page.navigatedTo(), null, "navigation waits only on the cleanup bound, not forever");
+  await page.advance(149);
+  assert.equal(page.navigatedTo(), null, "the bound is a real wait, not an immediate departure");
   assert.equal(page.registry()[WINDOW_KEY].slept, true, "hung storage left nap fields in place");
   assert.equal(page.captures().has(CAPTURE_KEY), true);
 
-  page.fireTimers((ms) => ms < 1000);
-  await flush();
+  await page.advance(1);
   assert.equal(page.navigatedTo(), ORIGINAL_URL, "the bound lets the page leave without cleanup settling");
   assert.equal(page.registry()[WINDOW_KEY].slept, true, "eventual cleanup is not this page's job once hung");
-  assert.equal(page.captures().has(CAPTURE_KEY), true);
+  assert.equal(page.captures().has(CAPTURE_KEY), true, "the worker backstop and orphan sweep still own it");
 });
