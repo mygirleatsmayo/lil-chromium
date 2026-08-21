@@ -189,6 +189,10 @@ struct SettingsRoot: View {
     // Local editing state for the sleep whitelist add field.
     @State private var newWhitelistDomain: String = ""
 
+    /// Hit area for the Form's icon-only row controls. Scales with Dynamic Type
+    /// so the target grows with the text it sits beside.
+    @ScaledMetric(relativeTo: .body) private var rowControlSide = 22.0
+
     var body: some View {
         // Three sections, in the order the parent spec fixes them: General
         // (what Lil Chromium itself does), Lils (what a lil does), Hoverbar
@@ -220,8 +224,9 @@ struct SettingsRoot: View {
                     Text("Primary browser")
                     if store.primaryBrowserMissing {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.yellow)
+                            .symbolRenderingMode(.multicolor)
                             .help("The selected Primary browser isn't installed.")
+                            .accessibilityLabel("The selected Primary browser isn't installed.")
                     }
                 }
             }
@@ -235,7 +240,7 @@ struct SettingsRoot: View {
                     Text("Fallback browser")
                     if store.fallbackBrowserUnavailable {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.yellow)
+                            .symbolRenderingMode(.multicolor)
                             .help("Choose an installed browser other than Primary.")
                             .accessibilityLabel("Choose an installed browser other than Primary.")
                     }
@@ -326,9 +331,12 @@ struct SettingsRoot: View {
                     } label: {
                         Image(systemName: "minus.circle.fill")
                             .foregroundStyle(.secondary)
+                            .frame(width: rowControlSide, height: rowControlSide)
+                            .contentShape(.rect)
                     }
                     .buttonStyle(.borderless)
                     .help("Remove \(domain) from the whitelist")
+                    .accessibilityLabel("Remove \(domain) from the whitelist")
                 }
             }
         }

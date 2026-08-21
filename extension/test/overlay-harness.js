@@ -185,6 +185,22 @@ function defaultContext() {
   };
 }
 
+/**
+ * Chromium's async clipboard, reduced to what the copy control uses. Tests read
+ * `writes` to see what the overlay actually put on the clipboard; `fail: true`
+ * exercises the execCommand fallback path.
+ */
+function createClipboard(options = {}) {
+  const writes = [];
+  return {
+    writes,
+    async writeText(text) {
+      if (options.clipboardFails) throw new Error("denied");
+      writes.push(text);
+    },
+  };
+}
+
 function createChrome(options = {}) {
   const context = { ...defaultContext(), ...(options.context || {}) };
   if (options.hoverBar) context.hoverBar = { ...context.hoverBar, ...options.hoverBar };
@@ -253,13 +269,17 @@ export async function mountOverlay(options = {}) {
   installFocus(window);
 
   const chrome = createChrome(options);
+  const clipboard = createClipboard(options);
+  const navigator = Object.create(window.navigator, {
+    clipboard: { value: clipboard, configurable: true },
+  });
   const sandbox = {
     window,
     document,
     chrome,
     location: window.location,
     history: window.history,
-    navigator: window.navigator,
+    navigator,
     console: quietConsole,
     setTimeout: unrefTimeout,
     clearTimeout,
@@ -305,6 +325,7 @@ export async function mountOverlay(options = {}) {
     window,
     document,
     chrome,
+    clipboard,
     host,
     root,
     overlayPath: OVERLAY_PATH,
@@ -312,6 +333,13 @@ export async function mountOverlay(options = {}) {
     omni: root ? root.querySelector(".omni") : null,
     bar: root ? root.querySelector(".bar") : null,
     urlDisplay: root ? root.querySelector(".url") : null,
+    /** Pointer press + release, so handlers that guard mousedown are exercised. */
+    click(target) {
+      const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+      target.dispatchEvent(down);
+      target.dispatchEvent(new DOMEvent("click", { bubbles: true, cancelable: true }));
+      return down;
+    },
     key(target, key, init = {}) {
       const event = new KeyboardEvent("keydown", {
         key,

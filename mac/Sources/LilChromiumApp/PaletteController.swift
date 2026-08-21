@@ -39,6 +39,12 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     private let maxResultRows = 8
     private let cornerRadius = PaletteGlass.cornerRadius
 
+    /// The palette's two functional controls (Settings, Close) share one symbol
+    /// size and one square hit area, so neither reads as the smaller of the
+    /// pair and both stay comfortably clickable inside the 56pt input row.
+    private static let paletteSymbolPointSize: CGFloat = 15
+    private static let paletteControlSide: CGFloat = 28
+
     // MARK: - Public entry points (called by AppDelegate)
 
     /// Toggle the palette. Called from the ⌘⌥N hotkey and the menu item.
@@ -149,7 +155,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         settingsButton.isBordered = false
         settingsButton.bezelStyle = .regularSquare
         settingsButton.imagePosition = .imageOnly
-        let gearCfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        let gearCfg = NSImage.SymbolConfiguration(pointSize: Self.paletteSymbolPointSize, weight: .regular)
         let gearImg = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")?
             .withSymbolConfiguration(gearCfg)
         gearImg?.isTemplate = true
@@ -165,12 +171,13 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         closeButton.isBordered = false
         closeButton.bezelStyle = .regularSquare
         closeButton.imagePosition = .imageOnly
-        let xCfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        let xCfg = NSImage.SymbolConfiguration(pointSize: Self.paletteSymbolPointSize, weight: .regular)
         let xImg = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Close")?
             .withSymbolConfiguration(xCfg)
         xImg?.isTemplate = true
         closeButton.image = xImg
         closeButton.contentTintColor = .secondaryLabelColor
+        closeButton.setAccessibilityLabel("Close")
         closeButton.target = self
         closeButton.action = #selector(closeButtonPressed)
 
@@ -201,13 +208,13 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
 
             settingsButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -8),
             settingsButton.centerYAnchor.constraint(equalTo: inputRow.centerYAnchor),
-            settingsButton.widthAnchor.constraint(equalToConstant: 22),
-            settingsButton.heightAnchor.constraint(equalToConstant: 22),
+            settingsButton.widthAnchor.constraint(equalToConstant: Self.paletteControlSide),
+            settingsButton.heightAnchor.constraint(equalToConstant: Self.paletteControlSide),
 
             closeButton.trailingAnchor.constraint(equalTo: inputRow.trailingAnchor, constant: -18),
             closeButton.centerYAnchor.constraint(equalTo: inputRow.centerYAnchor),
-            closeButton.widthAnchor.constraint(equalToConstant: 22),
-            closeButton.heightAnchor.constraint(equalToConstant: 22),
+            closeButton.widthAnchor.constraint(equalToConstant: Self.paletteControlSide),
+            closeButton.heightAnchor.constraint(equalToConstant: Self.paletteControlSide),
 
             stack.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: root.trailingAnchor),
