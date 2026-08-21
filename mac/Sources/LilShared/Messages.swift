@@ -18,8 +18,60 @@ public enum MessageType: String, Codable, Sendable {
     case getContext = "get-context"
     case context
     case openExternal = "open-external"
+    case restoreFocus = "restore-focus"
     // v3: extension -> host, edits sleep.whitelist in config.json.
     case whitelistOp = "whitelist-op"
+}
+
+/// The exact context that was active before one lil took focus. Browser window
+/// identities are meaningful only to the extension instance that recorded
+/// them; external applications carry an exact process id plus an optional
+/// bundle-id fallback for native restoration.
+public enum PriorContext: Codable, Equatable, Sendable {
+    case lil(windowId: Int)
+    case normalWindow(windowId: Int)
+    case externalApp(pid: Int32, bundleId: String?)
+
+    private enum Kind: String, Codable {
+        case lil
+        case normalWindow = "normal-window"
+        case externalApp = "external-app"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, windowId, pid, bundleId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .lil:
+            self = .lil(windowId: try container.decode(Int.self, forKey: .windowId))
+        case .normalWindow:
+            self = .normalWindow(windowId: try container.decode(Int.self, forKey: .windowId))
+        case .externalApp:
+            self = .externalApp(
+                pid: try container.decode(Int32.self, forKey: .pid),
+                bundleId: try container.decodeIfPresent(String.self, forKey: .bundleId)
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .lil(windowId):
+            try container.encode(Kind.lil, forKey: .kind)
+            try container.encode(windowId, forKey: .windowId)
+        case let .normalWindow(windowId):
+            try container.encode(Kind.normalWindow, forKey: .kind)
+            try container.encode(windowId, forKey: .windowId)
+        case let .externalApp(pid, bundleId):
+            try container.encode(Kind.externalApp, forKey: .kind)
+            try container.encode(pid, forKey: .pid)
+            try container.encodeIfPresent(bundleId, forKey: .bundleId)
+        }
+    }
 }
 
 /// Minimal envelope: decode just enough to route/dispatch, ignore the rest.
@@ -44,19 +96,27 @@ public struct OpenMessage: Codable, Sendable {
     public let left: Int
     public let top: Int
     public let incognito: Bool?
+    public let priorContext: PriorContext?
 
     // Explicit CodingKeys: both init(from:) and encode(to:) are custom, so we
     // declare the keys rather than depend on synthesis.
     private enum CodingKeys: String, CodingKey {
-        case type, url, left, top, incognito
+        case type, url, left, top, incognito, priorContext
     }
 
-    public init(url: String, left: Int, top: Int, incognito: Bool? = nil) {
+    public init(
+        url: String,
+        left: Int,
+        top: Int,
+        incognito: Bool? = nil,
+        priorContext: PriorContext? = nil
+    ) {
         self.type = MessageType.open.rawValue
         self.url = url
         self.left = left
         self.top = top
         self.incognito = incognito
+        self.priorContext = priorContext
     }
 
     // Tolerate a v1/v2 open that lacks `incognito`.
@@ -69,6 +129,7 @@ public struct OpenMessage: Codable, Sendable {
         // decodeIfPresent -> Bool?; wrap in try? and flatten the Bool?? so a
         // decode error or a missing/null key both collapse to nil.
         self.incognito = (try? c.decodeIfPresent(Bool.self, forKey: .incognito)) ?? nil
+        self.priorContext = try c.decodeIfPresent(PriorContext.self, forKey: .priorContext)
     }
 
     // Encode `incognito` only when present so we never emit `"incognito":null`.
@@ -79,6 +140,20 @@ public struct OpenMessage: Codable, Sendable {
         try c.encode(left, forKey: .left)
         try c.encode(top, forKey: .top)
         try c.encodeIfPresent(incognito, forKey: .incognito)
+        try c.encodeIfPresent(priorContext, forKey: .priorContext)
+    }
+}
+
+/// extension -> host: restore an external app after its successor lil closes.
+/// Browser-window predecessors are restored inside the extension and never
+/// cross the native boundary.
+public struct RestoreFocusMessage: Codable, Sendable {
+    public let type: String
+    public let priorContext: PriorContext
+
+    public init(priorContext: PriorContext) {
+        self.type = MessageType.restoreFocus.rawValue
+        self.priorContext = priorContext
     }
 }
 

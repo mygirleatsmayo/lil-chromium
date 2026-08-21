@@ -186,6 +186,10 @@ export function createChrome(options = {}) {
     listWindows() {
       return [...windows.values()].map((w) => snapshotWindow(w, tabs));
     },
+    async blurBrowser() {
+      focusExclusive(WINDOW_ID_NONE);
+      await events.windows.onFocusChanged.fire(WINDOW_ID_NONE);
+    },
     async deliver(msg) {
       await native.deliver(msg);
     },

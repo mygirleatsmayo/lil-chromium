@@ -202,6 +202,137 @@ test("closing a focused lil removes it and focuses the prior window", async () =
   assert.ok(journalHas(env, "windows.update", (e) => e.windowId === first && e.update.focused === true));
 });
 
+test("each lil restores its recorded prior context from a nested external-app chain", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.blurBrowser();
+  await env.deliver(fixture("message-open-prior-context"));
+  const first = env.windows()[0];
+
+  assert.deepEqual(JSON.parse(JSON.stringify(env.registry()[String(first.id)].priorContext)), {
+    kind: "external-app",
+    pid: 4242,
+    bundleId: "com.apple.mail",
+  });
+
+  await env.deliver({ type: "open", url: "https://nested.example/", left: 20, top: 20 });
+  const second = env.windows().find((win) => win.id !== first.id);
+  assert.deepEqual(JSON.parse(JSON.stringify(env.registry()[String(second.id)].priorContext)), {
+    kind: "lil",
+    windowId: first.id,
+  });
+
+  await env.chrome.windows.remove(second.id);
+  await env.flush();
+  assert.equal(env.windows().find((win) => win.id === first.id).focused, true);
+
+  await env.chrome.windows.remove(first.id);
+  await env.flush();
+  assert.deepEqual(env.outgoing().at(-1), fixture("message-restore-focus"));
+  assert.deepEqual(Object.keys(env.registry()), []);
+});
+
+test("the Close lil action restores prior context exactly once before cleanup", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.blurBrowser();
+  await env.deliver(fixture("message-open-prior-context"));
+  const lil = env.windows()[0];
+
+  await env.message({ action: "closeWindow" }, sender(lil));
+
+  assert.equal(env.windows().length, 0);
+  assert.equal(
+    env.outgoing().filter((message) => message.type === "restore-focus").length,
+    1,
+    "one close event makes one restore request"
+  );
+  assert.deepEqual(Object.keys(env.registry()), []);
+});
+
+test("closing an unfocused lil after WINDOW_ID_NONE does not raise a browser window", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://related.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const lil = env.windows().find((win) => win.type === "popup");
+  await env.blurBrowser();
+  const before = env.journal().length;
+
+  await env.chrome.windows.remove(lil.id);
+  await env.flush();
+
+  const after = env.journal().slice(before);
+  assert.equal(
+    after.some(
+      (entry) =>
+        entry.op === "windows.update" &&
+        entry.windowId === normal.id &&
+        entry.update.focused === true
+    ),
+    false
+  );
+  assert.equal(env.outgoing().some((message) => message.type === "restore-focus"), false);
+});
+
+test("a lil restores its exact related normal window despite later normal-window activity", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const related = await env.chrome.windows.create({ url: "https://related.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const lil = env.windows().find((win) => win.type === "popup");
+  const unrelated = await env.chrome.windows.create({ url: "https://unrelated.example/", type: "normal" });
+  await env.chrome.windows.update(lil.id, { focused: true });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(env.registry()[String(lil.id)].priorContext)), {
+    kind: "normal-window",
+    windowId: related.id,
+  });
+
+  await env.chrome.windows.remove(lil.id);
+  await env.flush();
+  assert.equal(env.windows().find((win) => win.id === related.id).focused, true);
+  assert.equal(env.windows().find((win) => win.id === unrelated.id).focused, false);
+});
+
+test("a stale predecessor lil is ignored without focusing an unrelated normal window", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver({ type: "open", url: "https://first.example/", left: 10, top: 10 });
+  const first = env.windows()[0];
+  await env.deliver({ type: "open", url: "https://second.example/", left: 20, top: 20 });
+  const second = env.windows().find((win) => win.id !== first.id);
+  await env.chrome.windows.remove(first.id);
+  const unrelated = await env.chrome.windows.create({ url: "https://unrelated.example/", type: "normal" });
+  await env.chrome.windows.update(second.id, { focused: true });
+  const before = env.journal().length;
+
+  await env.chrome.windows.remove(second.id);
+  await env.flush();
+
+  const after = env.journal().slice(before);
+  assert.equal(
+    after.some(
+      (entry) =>
+        entry.op === "windows.update" &&
+        entry.windowId === unrelated.id &&
+        entry.update.focused === true
+    ),
+    false
+  );
+});
+
+test("an unregistered native popup is not mislabeled as a normal-window predecessor", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.chrome.windows.create({ url: "https://auth.example/", type: "popup" });
+
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+
+  const lil = env.windows().find((win) => win.tabs[0].url === "https://lil.example/");
+  assert.equal(env.registry()[String(lil.id)].priorContext, null);
+});
+
 test("history-query replies with the shared history-result rows, including sparse ones", async () => {
   const expected = fixture("message-history-result");
   const now = Date.now();
@@ -258,6 +389,24 @@ test("sweep alarm is installed and a tick is harmless with no lils", async () =>
   assert.equal(env.windows().length, 0);
 });
 
+test("automatic expiry of a focused lil restores prior context before cleanup", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.blurBrowser();
+  await env.deliver(fixture("message-open-prior-context"));
+  const lil = env.windows()[0];
+  const registry = env.registry();
+  registry[String(lil.id)].expiry = 1;
+  registry[String(lil.id)].lastInteraction = Date.now() - 2 * 3600 * 1000;
+  await env.chrome.storage.local.set({ ephemeralWindows: registry });
+
+  await env.alarm();
+
+  assert.equal(env.windows().length, 0);
+  assert.equal(env.outgoing().filter((message) => message.type === "restore-focus").length, 1);
+  assert.deepEqual(Object.keys(env.registry()), []);
+});
+
 test("sleeping a lil stores a capture in IndexedDB and navigates to the sleep page", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));
@@ -310,6 +459,33 @@ test("new-window target from a lil is re-parented into a cascaded lil", async ()
   assert.equal(cascaded.focused, true);
   assert.ok(env.registry()[String(cascaded.id)]);
   assert.equal(cascaded.tabs.some((t) => t.id === spawned.id), true);
+});
+
+test("a cascaded lil records its source lil despite incidental normal-window focus", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.blurBrowser();
+  await env.deliver(fixture("message-open-prior-context"));
+  const source = env.windows()[0];
+  const incidental = await env.chrome.windows.create({ url: "https://incidental.example/", type: "normal" });
+  const spawned = await env.chrome.tabs.create({
+    windowId: incidental.id,
+    url: "https://spawned.example/",
+    openerTabId: source.tabs[0].id,
+    active: true,
+  });
+
+  await env.createdNavigationTarget({
+    tabId: spawned.id,
+    sourceTabId: source.tabs[0].id,
+    url: "https://spawned.example/",
+  });
+
+  const child = env.windows().find((win) => win.type === "popup" && win.id !== source.id);
+  assert.deepEqual(JSON.parse(JSON.stringify(env.registry()[String(child.id)].priorContext)), {
+    kind: "lil",
+    windowId: source.id,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -375,6 +551,48 @@ test("restart restoration reopens parked lils unfocused, skips quit-expiry ones,
   assert.equal(registry[String(napping.id)].sleepCaptureKey, "43-1");
 });
 
+test("restart restoration remaps a nested lil chain and preserves its external root", async () => {
+  const parked = {
+    41: {
+      url: "https://root.example/",
+      bounds: { left: 100, top: 100, width: 900, height: 700 },
+      expiry: "never",
+      lastInteraction: 1,
+      priorContext: { kind: "external-app", pid: 4242, bundleId: "com.apple.mail" },
+    },
+    42: {
+      url: "https://child.example/",
+      bounds: { left: 132, top: 132, width: 900, height: 700 },
+      expiry: "never",
+      lastInteraction: 1,
+      priorContext: { kind: "lil", windowId: 41 },
+    },
+  };
+  const env = await boot({ storage: { ephemeralWindows: parked } });
+  await env.startup();
+  const root = env.windows().find((win) => win.tabs[0].url === "https://root.example/");
+  const child = env.windows().find((win) => win.tabs[0].url === "https://child.example/");
+
+  assert.deepEqual(JSON.parse(JSON.stringify(env.registry()[String(child.id)].priorContext)), {
+    kind: "lil",
+    windowId: root.id,
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(env.registry()[String(root.id)].priorContext)), {
+    kind: "external-app",
+    pid: 4242,
+    bundleId: "com.apple.mail",
+  });
+
+  await env.chrome.windows.update(child.id, { focused: true });
+  await env.chrome.windows.remove(child.id);
+  await env.flush();
+  assert.equal(env.windows().find((win) => win.id === root.id).focused, true);
+
+  await env.chrome.windows.remove(root.id);
+  await env.flush();
+  assert.deepEqual(env.outgoing().at(-1), fixture("message-restore-focus"));
+});
+
 test("an incognito lil is focused, in-memory only, and never restored", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));
@@ -401,6 +619,20 @@ test("an incognito lil is focused, in-memory only, and never restored", async ()
     restarted.windows().map((w) => w.tabs[0].url),
     ["https://normal.example/"]
   );
+});
+
+test("an incognito lil keeps its external predecessor in memory and restores it on close", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.blurBrowser();
+  await env.deliver({ ...fixture("message-open-prior-context"), incognito: true });
+  const lil = env.windows()[0];
+
+  await env.chrome.windows.remove(lil.id);
+  await env.flush();
+
+  assert.deepEqual(Object.keys(env.registry()), []);
+  assert.deepEqual(env.outgoing().at(-1), fixture("message-restore-focus"));
 });
 
 test("without incognito access the incognito path falls back to a normal lil and hints why", async () => {

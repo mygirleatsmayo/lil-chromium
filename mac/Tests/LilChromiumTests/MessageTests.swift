@@ -19,6 +19,7 @@ struct MessageTests {
         #expect(msg.left == 120)
         #expect(msg.top == 80)
         #expect(msg.incognito == nil)
+        #expect(msg.priorContext == nil)
     }
 
     /// A normal lil carries no `incognito` key at all — the extension must not
@@ -35,6 +36,30 @@ struct MessageTests {
         let encoded = try LilCodec.encode(OpenMessage(url: "https://example.com", left: 1, top: 2, incognito: true))
         let out = try jsonObject(encoded)
         #expect(out["incognito"] as? Bool == true)
+    }
+
+    @Test func openCarriesTheExternalAppThatPrecededTheLil() throws {
+        let msg = try Fixture.decode(OpenMessage.self, from: "message-open-prior-context")
+
+        #expect(msg.priorContext == .externalApp(pid: 4242, bundleId: "com.apple.mail"))
+    }
+
+    @Test func restoreFocusCarriesTheSameTypedPriorContext() throws {
+        let msg = try Fixture.decode(RestoreFocusMessage.self, from: "message-restore-focus")
+
+        #expect(msg.type == "restore-focus")
+        #expect(msg.priorContext == .externalApp(pid: 4242, bundleId: "com.apple.mail"))
+    }
+
+    @Test(arguments: [
+        PriorContext.lil(windowId: 17),
+        PriorContext.normalWindow(windowId: 23),
+        PriorContext.externalApp(pid: 4242, bundleId: "com.apple.mail"),
+    ])
+    func everyPriorContextKindRoundTrips(_ original: PriorContext) throws {
+        let decoded = try LilCodec.decode(PriorContext.self, from: LilCodec.encode(original))
+
+        #expect(decoded == original)
     }
 
     // MARK: - ping / pong

@@ -104,6 +104,10 @@ export async function boot(options = {}) {
     windows() {
       return state.listWindows();
     },
+    async blurBrowser() {
+      await state.blurBrowser();
+      await flush();
+    },
     menus() {
       return [...state.menus.values()];
     },
