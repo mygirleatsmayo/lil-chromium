@@ -143,6 +143,13 @@ final class Relay {
                 enqueueOpen(line)
             }
 
+        case MessageType.configUpdate.rawValue:
+            // Hot-apply (issue #12): the app published the normalized full
+            // config; forward it to the extension verbatim. Never queued —
+            // if the port is down this host is exiting anyway, and the
+            // extension's reconnect get-context re-reads config.json fresh.
+            forwardToExtension(line, kind: "config-update")
+
         default:
             // Unknown from socket -> forward to extension verbatim.
             forwardToExtension(line, kind: "unknown(\(env.type))")
@@ -232,44 +239,10 @@ final class Relay {
     private func handleGetContext(id: String) {
         let cfg = LilConfig.load()
 
-        // Prefer a name from the config's knownBrowsers, fall back to the table.
-        func displayName(forSlug slug: String) -> String {
-            if let kb = cfg.knownBrowsers.first(where: { $0.slug == slug }), !kb.name.isEmpty {
-                return kb.name
-            }
-            return BrowserTable.name(forSlug: slug)
-        }
-
-        // Prefer config's knownBrowsers list; if empty (no scan yet) fall back
-        // to the full table marked not-installed so the extension always has a
-        // menu to build from.
-        let known: [ContextBrowser]
-        if cfg.knownBrowsers.isEmpty {
-            known = BrowserTable.all.map {
-                ContextBrowser(slug: $0.slug, name: $0.name, installed: false)
-            }
-        } else {
-            known = cfg.knownBrowsers.map {
-                ContextBrowser(slug: $0.slug, name: $0.name, installed: $0.installed)
-            }
-        }
-
         // v3: carry the full config objects verbatim so the extension has the
         // whole runtime picture (ephemerality, sleep, search, hover bar).
-        let ctx = ContextMessage(
-            id: id,
-            browser: browserSlug,
-            browserName: BrowserTable.name(forSlug: browserSlug),
-            primaryBrowser: cfg.primaryBrowser,
-            primaryBrowserName: displayName(forSlug: cfg.primaryBrowser),
-            fallbackBrowser: cfg.fallbackBrowser,
-            linkBehavior: cfg.linkBehavior,
-            ephemeralDefault: cfg.ephemeralDefault,
-            sleep: cfg.sleep,
-            searchEngine: cfg.searchEngine,
-            hoverBar: cfg.hoverBar,
-            knownBrowsers: known
-        )
+        // Browser/name mapping is ContextPayload — the same path as config-update.
+        let ctx = ContextMessage(id: id, browser: browserSlug, config: cfg)
 
         guard let payload = try? LilCodec.encode(ctx) else {
             hlog("host: failed to encode context reply")

@@ -152,14 +152,35 @@ public struct HoverBarConfig: Codable, Sendable {
     public var style: String     // "glass" | "solid"
     public var tint: String?     // optional "#rrggbb"
 
-    // Explicit CodingKeys: both init(from:) and encode(to:) are custom.
-    private enum CodingKeys: String, CodingKey {
-        case style, tint
+    /// Hover-reveal zone height in pixels (v0.4, issue #12). Zero disables
+    /// mouse reveal while ⌘L still reveals the bar. Always clamped into
+    /// `revealHeightRange` — this model is the single clamp site ("before
+    /// use"), so hosts reading the file and app broadcasts both carry an
+    /// in-range value and consumers never re-clamp.
+    public var revealHeight: Int {
+        didSet { revealHeight = Self.clampRevealHeight(revealHeight) }
     }
 
-    public init(style: String = "glass", tint: String? = nil) {
+    public static let defaultRevealHeight = 15
+    public static let revealHeightRange = 0...48
+
+    public static func clampRevealHeight(_ value: Int) -> Int {
+        min(max(value, revealHeightRange.lowerBound), revealHeightRange.upperBound)
+    }
+
+    // Explicit CodingKeys: both init(from:) and encode(to:) are custom.
+    private enum CodingKeys: String, CodingKey {
+        case style, tint, revealHeight
+    }
+
+    public init(
+        style: String = "glass",
+        tint: String? = nil,
+        revealHeight: Int = HoverBarConfig.defaultRevealHeight
+    ) {
         self.style = style
         self.tint = tint
+        self.revealHeight = HoverBarConfig.clampRevealHeight(revealHeight)
     }
 
     public static let defaults = HoverBarConfig()
@@ -170,6 +191,8 @@ public struct HoverBarConfig: Codable, Sendable {
         self.style = (try? c.decode(String.self, forKey: .style)) ?? d.style
         // tint is nullable: absent OR explicit null both decode to nil.
         self.tint = (try? c.decodeIfPresent(String.self, forKey: .tint)) ?? d.tint
+        let rawReveal = (try? c.decode(Int.self, forKey: .revealHeight)) ?? d.revealHeight
+        self.revealHeight = HoverBarConfig.clampRevealHeight(rawReveal)
     }
 
     // Encode tint only when present so we never emit an explicit `null`.
@@ -177,6 +200,7 @@ public struct HoverBarConfig: Codable, Sendable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(style, forKey: .style)
         try c.encodeIfPresent(tint, forKey: .tint)
+        try c.encode(revealHeight, forKey: .revealHeight)
     }
 }
 

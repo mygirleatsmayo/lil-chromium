@@ -119,6 +119,10 @@ export async function boot(options = {}) {
       await state.deliver(msg);
       await flush();
     },
+    async disconnect() {
+      state.native.disconnectPort();
+      await flush();
+    },
     async message(msg, sender = {}) {
       const reply = await state.sendRuntimeMessage(msg, sender);
       await flush();

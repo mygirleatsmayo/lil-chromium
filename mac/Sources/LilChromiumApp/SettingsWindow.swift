@@ -114,6 +114,9 @@ final class SettingsStore: ObservableObject {
         didSet {
             guard !suppressSave else { return }
             config.save()  // atomic, unknown-field-preserving (see ConfigMerge)
+            // Hot-apply (issue #12): publish the normalized full config to
+            // EVERY live relay so all browsers and lils converge at once.
+            RelayClient.broadcastConfigAsync(config)
         }
     }
 
@@ -351,6 +354,23 @@ struct SettingsRoot: View {
                 reloadToken: store.reloadToken,
                 label: "Tint"
             )
+            LabeledContent("Reveal zone") {
+                HStack {
+                    Slider(
+                        value: revealHeightBinding,
+                        in: Double(HoverBarConfig.revealHeightRange.lowerBound)
+                            ... Double(HoverBarConfig.revealHeightRange.upperBound),
+                        step: 1
+                    )
+                    .accessibilityValue("\(store.config.hoverBar.revealHeight) px")
+                    Text("\(store.config.hoverBar.revealHeight) px")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Text("Cursor distance from the top edge that reveals the bar. 0 disables mouse reveal; ⌘L still reveals it.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -439,6 +459,12 @@ struct SettingsRoot: View {
     private var hoverStyleBinding: Binding<String> {
         Binding(get: { store.config.hoverBar.style },
                 set: { store.config.hoverBar.style = $0 })
+    }
+    /// Slider is Double; the model is Int pixels (and clamps on set, so the
+    /// write through store.config stays inside the documented range).
+    private var revealHeightBinding: Binding<Double> {
+        Binding(get: { Double(store.config.hoverBar.revealHeight) },
+                set: { store.config.hoverBar.revealHeight = Int($0) })
     }
     private var hoverTintBinding: Binding<String?> {
         Binding(

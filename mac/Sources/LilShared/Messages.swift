@@ -23,6 +23,8 @@ public enum MessageType: String, Codable, Sendable {
     case whitelistOp = "whitelist-op"
     // v4: extension -> host, open native Settings (never forwarded).
     case openSettings = "open-settings"
+    // v4 (issue #12): app -> every relay -> extension, hot-applied Settings write.
+    case configUpdate = "config-update"
 }
 
 /// The exact context that was active before one lil took focus. Browser window
@@ -328,6 +330,90 @@ public struct ContextMessage: Codable, Sendable {
         self.searchEngine = searchEngine
         self.hoverBar = hoverBar
         self.knownBrowsers = knownBrowsers
+    }
+
+    /// Fresh-read reconnect reply: host identity plus the same ContextPayload
+    /// mapping `config-update` uses, so the two wires cannot drift.
+    public init(id: String, browser: String, config: LilConfig) {
+        self.init(
+            id: id,
+            browser: browser,
+            browserName: BrowserTable.name(forSlug: browser),
+            primaryBrowser: config.primaryBrowser,
+            primaryBrowserName: ContextPayload.displayName(forSlug: config.primaryBrowser, in: config),
+            fallbackBrowser: config.fallbackBrowser,
+            linkBehavior: config.linkBehavior,
+            ephemeralDefault: config.ephemeralDefault,
+            sleep: config.sleep,
+            searchEngine: config.searchEngine,
+            hoverBar: config.hoverBar,
+            knownBrowsers: ContextPayload.browsers(from: config)
+        )
+    }
+}
+
+/// The config payload mapping shared by `context` (host -> its extension) and
+/// `config-update` (app -> every relay -> every extension). One mapping so the
+/// two messages can never diverge in shape or normalization (issue #12).
+public enum ContextPayload {
+    /// knownBrowsers in the trimmed wire shape (no bundle ids). An empty
+    /// config list falls back to the full catalog marked not-installed, so
+    /// the extension always has a menu to build from.
+    public static func browsers(from config: LilConfig) -> [ContextBrowser] {
+        if config.knownBrowsers.isEmpty {
+            return BrowserTable.all.map {
+                ContextBrowser(slug: $0.slug, name: $0.name, installed: false)
+            }
+        }
+        return config.knownBrowsers.map {
+            ContextBrowser(slug: $0.slug, name: $0.name, installed: $0.installed)
+        }
+    }
+
+    /// Display name for a slug: the config's knownBrowsers first, then the
+    /// catalog (which capitalizes unknown slugs so callers always get a name).
+    public static func displayName(forSlug slug: String, in config: LilConfig) -> String {
+        if let kb = config.knownBrowsers.first(where: { $0.slug == slug }), !kb.name.isEmpty {
+            return kb.name
+        }
+        return BrowserTable.name(forSlug: slug)
+    }
+}
+
+/// app -> every live relay -> extension (v4, issue #12): a native Settings
+/// write published to ALL relays, not just the current routing target. The
+/// payload is the normalized full configuration — the `context` config fields
+/// minus the host identity (`browser`/`browserName`), which each service
+/// worker keeps for itself when it replaces its cached context.
+///
+/// The host forwards the line verbatim and never queues it: a relay that
+/// misses the broadcast catches up from config.json on the extension's next
+/// (re)connect `get-context`, which the host always answers with a fresh read.
+public struct ConfigUpdateMessage: Codable, Sendable {
+    public let type: String
+    public let primaryBrowser: String
+    public let primaryBrowserName: String
+    public let fallbackBrowser: String
+    public let linkBehavior: String
+    public let ephemeralDefault: String
+    public let sleep: SleepConfig
+    public let searchEngine: SearchEngineConfig
+    public let hoverBar: HoverBarConfig
+    public let knownBrowsers: [ContextBrowser]
+
+    /// The broadcast for the config the app just persisted. Values arrive
+    /// already normalized by the model (e.g. clamped `hoverBar.revealHeight`).
+    public init(config: LilConfig) {
+        self.type = MessageType.configUpdate.rawValue
+        self.primaryBrowser = config.primaryBrowser
+        self.primaryBrowserName = ContextPayload.displayName(forSlug: config.primaryBrowser, in: config)
+        self.fallbackBrowser = config.fallbackBrowser
+        self.linkBehavior = config.linkBehavior
+        self.ephemeralDefault = config.ephemeralDefault
+        self.sleep = config.sleep
+        self.searchEngine = config.searchEngine
+        self.hoverBar = config.hoverBar
+        self.knownBrowsers = ContextPayload.browsers(from: config)
     }
 }
 

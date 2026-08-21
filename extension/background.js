@@ -72,7 +72,7 @@ const DEFAULT_SLEEP = {
   whitelist: [],
 };
 const DEFAULT_SEARCH = { name: "Startpage", template: "https://www.startpage.com/sp/search?query=%s" };
-const DEFAULT_HOVERBAR = { style: "glass", tint: null };
+const DEFAULT_HOVERBAR = { style: "glass", tint: null, revealHeight: 15 };
 const DEFAULT_CONTEXT = {
   browser: "chrome",
   browserName: "Chrome",
@@ -149,6 +149,12 @@ function normalizeContext(msg) {
     hoverBar: {
       style: hoverBar.style === "solid" ? "solid" : "glass",
       tint: typeof hoverBar.tint === "string" ? hoverBar.tint : null,
+      // Writers clamp to 0..48 before the value leaves the config model
+      // (PROTOCOL.md); a non-number here degrades to the default.
+      revealHeight:
+        typeof hoverBar.revealHeight === "number" && Number.isFinite(hoverBar.revealHeight)
+          ? hoverBar.revealHeight
+          : DEFAULT_HOVERBAR.revealHeight,
     },
     knownBrowsers: Array.isArray(src.knownBrowsers) ? src.knownBrowsers : [],
   };
@@ -339,17 +345,50 @@ async function handlePortMessage(msg) {
       await answerHistoryQuery(msg);
     } else if (msg.type === "context") {
       await storeContext(msg);
+      // Reconnect catch-up (issue #12): a fresh host-sourced context also
+      // converges the lils that missed a config-update while disconnected.
+      await broadcastContextToLils();
       log(
         "context updated",
         "browser=" + msg.browser,
         "primary=" + msg.primaryBrowser,
         "link=" + msg.linkBehavior
       );
+    } else if (msg.type === "config-update") {
+      await applyConfigUpdate(msg);
     } else {
       log("unknown port message", msg.type);
     }
   } catch (err) {
     log("handlePortMessage error", err && err.message ? err.message : err);
+  }
+}
+
+// Hot-apply (issue #12): the app published the normalized full config to every
+// relay. Replace the config half of the cached context — the host identity
+// (browser/browserName) is this worker's own, not the app's — then push the
+// result to every live lil so overlays apply it without a reload.
+async function applyConfigUpdate(msg) {
+  const current = await getContext();
+  await storeContext({ ...msg, browser: current.browser, browserName: current.browserName });
+  await broadcastContextToLils();
+  log("config hot-applied", "primary=" + msg.primaryBrowser, "link=" + msg.linkBehavior);
+}
+
+// Push the current context to every live lil's overlay (registered lils plus
+// in-memory incognito ones). Fire-and-forget per lil: a tab mid-navigation
+// misses the push but reads fresh context when its overlay mounts.
+async function broadcastContextToLils() {
+  const ctx = await getContext();
+  const reg = await getRegistry();
+  const windowIds = new Set(
+    Object.keys(reg)
+      .map((key) => parseInt(key, 10))
+      .filter((id) => Number.isInteger(id))
+  );
+  for (const id of incognitoLils) windowIds.add(id);
+  for (const windowId of windowIds) {
+    await broadcastToWindow(windowId, { action: "contextUpdate", context: ctx });
   }
 }
 

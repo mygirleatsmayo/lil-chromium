@@ -74,6 +74,24 @@ struct RoutingOrderTests {
         )
     }
 
+    // MARK: - Config broadcast (issue #12 hot-apply)
+
+    /// A Settings write converges on EVERY live relay, ignoring the routing
+    /// preference order: slug-sorted, deduped, no empties — a normalized
+    /// order both the implementation and its tests can rely on.
+    @Test func broadcastReachesEveryLiveRelayInNormalizedOrder() {
+        #expect(
+            RelayClient.broadcastTargets(liveSlugs: ["vivaldi", "chrome", "brave", "chrome", ""])
+                == ["brave", "chrome", "vivaldi"]
+        )
+    }
+
+    /// No live relays means no targets — the write still lands in config.json
+    /// and each relay catches up from the file when its extension reconnects.
+    @Test func broadcastTargetsEmptyWhenNoRelaysLive() {
+        #expect(RelayClient.broadcastTargets(liveSlugs: []) == [])
+    }
+
     // MARK: - Steps 4-5: direct browser launch
 
     /// With no relay answering, the app launches browsers in the same preference
