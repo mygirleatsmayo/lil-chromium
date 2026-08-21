@@ -844,6 +844,17 @@
       omniDebounce = setTimeout(queryOmni, OMNIBOX_DEBOUNCE_MS);
     });
 
+    // Issue #19: while the address field or suggestions own the event, consume
+    // it at this boundary so the page never observes it. Do not cancel default
+    // — native editing, paste, arrows, and IME stay with the field.
+    function containEditingKey(e) {
+      e.stopPropagation();
+    }
+    for (const type of ["keydown", "keyup", "keypress"]) {
+      addr.addEventListener(type, containEditingKey);
+      omni.addEventListener(type, containEditingKey);
+    }
+
     addr.addEventListener("keydown", (e) => {
       if (e.key === "ArrowDown") {
         if (suggestions.length) {
@@ -880,6 +891,9 @@
         addr.value = location.href;
         addr.blur();
         blurAddress();
+        clearTimeout(hideTimer);
+        hideTimer = null;
+        hide();
       }
     });
     addr.addEventListener("blur", () => {
@@ -1111,6 +1125,7 @@
       (e) => {
         if (e.key !== "Escape") return;
         // The address field's own handler deals with Esc while focused.
+        if (addrFocused()) return;
         if (omniOpen()) {
           closeOmni();
           return;
