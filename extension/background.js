@@ -817,10 +817,12 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (reg[key]) {
     // Don't overwrite the "real" url with the sleep-page URL — slept entries
     // keep their originalUrl and are managed by sleep/wake directly.
-    // If the visible document has already left the nap URL (page fallback
+    // If the active, user-visible document has left the nap URL (page fallback
     // whose own cleanup hung), finish the leftover registry/capture work.
+    // An inactive same-window wake preload reporting the original URL is not
+    // a completed wake and must not clear nap state.
     if (reg[key].slept) {
-      if (!isSleepPageUrl(changeInfo.url)) {
+      if (tab.active && !isSleepPageUrl(changeInfo.url)) {
         await clearNapState(
           tab.windowId,
           reg[key].originalUrl || changeInfo.url,

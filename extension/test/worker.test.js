@@ -1661,6 +1661,42 @@ test("when a napping lil leaves the nap document without a worker wake, leftover
   assert.equal(env.captures().has(captureKey), false, "the capture is not left behind");
 });
 
+test("when an inactive same-window wake preload reports its original URL, nap state stays truthful", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env);
+  const originalUrl = lil.tabs[0].url;
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+  const napTabId = napping.tabs[0].id;
+  const captureKey = env.registry()[String(lil.id)].sleepCaptureKey;
+  assert.match(napping.tabs[0].url, NAP_PAGE);
+  assert.ok(env.captures().has(captureKey));
+
+  // Same create wakeLil uses. Chromium then reports the preload URL through
+  // tabs.onUpdated while the nap document is still the visible tab; the fake's
+  // tabs.create does not emit that URL event, so drive it the same way the
+  // leftover-nap backstop test does.
+  const preload = await env.chrome.tabs.create({
+    windowId: lil.id,
+    url: originalUrl,
+    active: false,
+  });
+  await env.chrome.tabs.update(preload.id, { url: originalUrl });
+  await env.flush();
+
+  const win = env.windows().find((w) => w.id === lil.id);
+  const stillNap = win.tabs.find((t) => t.id === napTabId);
+  assert.equal(stillNap.active, true, "the nap document stays in front");
+  assert.match(stillNap.url, NAP_PAGE);
+  const entry = env.registry()[String(lil.id)];
+  assert.ok(entry, "the lil stays registered");
+  assert.equal(entry.slept, true);
+  assert.equal(entry.sleepCaptureKey, captureKey);
+  assert.equal(entry.originalUrl, originalUrl);
+  assert.equal(entry.originalTitle, ORIGINAL_PAGE_TITLE);
+  assert.ok(env.captures().has(captureKey), "the capture stays referenced, not orphaned");
+});
+
 test("unknown config fields are not required for the worker to apply known ones", async () => {
   const cfg = fixture("config-with-unknown-fields");
   const env = await boot();
