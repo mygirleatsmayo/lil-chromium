@@ -18,14 +18,10 @@ public enum SettingsAction {
     }
 
     /// True for palette queries that should surface the Settings result:
-    /// a case-insensitive prefix of “settings” (at least “set”) or
-    /// “preferences” (at least “pref”).
+    /// the complete case-insensitive words “settings” or “preferences”.
     public static func matchesQuery(_ raw: String) -> Bool {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !text.isEmpty else { return false }
-        if "settings".hasPrefix(text) { return text.count >= 3 }
-        if "preferences".hasPrefix(text) { return text.count >= 4 }
-        return false
+        return text == "settings" || text == "preferences"
     }
 
     /// True only for the dedicated Settings URL (`lilchromium://settings`),

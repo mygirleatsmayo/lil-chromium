@@ -109,7 +109,7 @@ struct PaletteSettingsAccessTests {
         PaletteModel()
     }
 
-    @Test(arguments: ["settings", "Settings", "SETTINGS", "set", "sett"])
+    @Test(arguments: ["settings", "Settings", "SETTINGS"])
     func settingsQueryLeadsWithTheSettingsAction(_ query: String) {
         let rows = model().rows(for: query)
         let row = rows.first
@@ -120,12 +120,25 @@ struct PaletteSettingsAccessTests {
         #expect(rows.contains { $0.kind == .search }, "Search stays available below Settings")
     }
 
-    @Test(arguments: ["preferences", "Preferences", "pref", "prefer"])
+    @Test(arguments: ["preferences", "Preferences", "PREFERENCES"])
     func preferencesQueryLeadsWithTheSettingsAction(_ query: String) {
         let rows = model().rows(for: query)
 
         #expect(rows.first?.kind == .settings)
         #expect(rows.first?.actionURL == SettingsAction.urlString)
+        #expect(rows.contains { $0.kind == .search }, "Search stays available below Settings")
+    }
+
+    @Test(
+        "Partial stubs stay ordinary non-URL queries",
+        .bug(id: 9),
+        arguments: ["set", "sett", "pref", "prefer"]
+    )
+    func partialSettingsStubsStayOrdinaryNonURLQueries(_ query: String) {
+        let rows = model().rows(for: query)
+
+        #expect(rows.contains { $0.kind == .settings } == false)
+        #expect(rows.first?.kind == .search)
     }
 
     @Test(arguments: ["", "s", "p", "gi", "quarterly budget review", "settings extra"])
