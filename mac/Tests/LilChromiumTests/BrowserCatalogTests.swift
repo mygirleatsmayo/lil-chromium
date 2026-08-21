@@ -35,6 +35,18 @@ struct BrowserCatalogTests {
         #expect(choices.contains { $0.installed == false } == false)
     }
 
+    @Test func fallbackChoicesExcludePrimaryButKeepSiblingChannels() {
+        let known = [
+            KnownBrowser(slug: "chrome", name: "Google Chrome", bundleId: "com.google.Chrome", installed: true),
+            KnownBrowser(slug: "chrome-beta", name: "Google Chrome Beta", bundleId: "com.google.Chrome.beta", installed: true),
+            KnownBrowser(slug: "helium", name: "Helium", bundleId: "net.imput.helium", installed: true),
+        ]
+
+        let choices = BrowserCatalog.fallbackChoices(from: known, primaryBrowser: "chrome")
+
+        #expect(choices.map(\.slug) == ["chrome-beta", "helium"])
+    }
+
     @Test func mergedReplacesKnownBrowsersWithTheFullScan() {
         var cfg = LilConfig.defaults
         cfg.knownBrowsers = [
@@ -44,7 +56,7 @@ struct BrowserCatalogTests {
 
         #expect(updated.knownBrowsers.count == BrowserTable.all.count)
         #expect(updated.knownBrowsers.allSatisfy { $0.installed == false })
-        #expect(updated.defaultBrowser == cfg.defaultBrowser)
+        #expect(updated.primaryBrowser == cfg.primaryBrowser)
         #expect(updated.fallbackBrowser == cfg.fallbackBrowser)
     }
 

@@ -7,19 +7,36 @@ import Testing
 /// See docs/PROTOCOL.md, "Config file".
 struct ConfigMergeTests {
 
+    @Test func v03SaveAddsPrimaryWithoutDeletingLegacyConfiguration() throws {
+        let existing = try Fixture.data("config-v2-complete")
+        var cfg = try JSONDecoder().decode(LilConfig.self, from: existing)
+        cfg.primaryBrowser = "brave"
+
+        let merged = try #require(ConfigMerge.mergedJSONData(existing: existing, applying: cfg))
+        let out = try jsonObject(merged)
+
+        #expect(out["version"] as? Int == 3)
+        #expect(out["primaryBrowser"] as? String == "brave")
+        #expect(out["defaultBrowser"] as? String == "helium")
+        #expect(out["fallbackBrowser"] as? String == "chrome")
+
+        let reloaded = try JSONDecoder().decode(LilConfig.self, from: merged)
+        #expect(reloaded.primaryBrowser == "brave", "canonical Primary wins over the preserved legacy key")
+    }
+
     /// A v0.4 writer may add top-level sections (here: `unknownSectionProbe`)
     /// a v0.3 writer has never heard of. Saving from the older model must not
     /// delete them.
     @Test func savePreservesUnknownTopLevelFields() throws {
         let existing = try Fixture.data("config-with-unknown-fields")
         var cfg = try JSONDecoder().decode(LilConfig.self, from: existing)
-        cfg.defaultBrowser = "brave"
+        cfg.primaryBrowser = "brave"
 
         let merged = try #require(ConfigMerge.mergedJSONData(existing: existing, applying: cfg))
         let out = try jsonObject(merged)
 
         // Owned key rewritten.
-        #expect(out["defaultBrowser"] as? String == "brave")
+        #expect(out["primaryBrowser"] as? String == "brave")
         // Unowned section untouched, values and all.
         let probe = try #require(out["unknownSectionProbe"] as? [String: Any])
         #expect(probe["someNumber"] as? Int == 24)
@@ -46,8 +63,9 @@ struct ConfigMergeTests {
         let merged = try #require(ConfigMerge.mergedJSONData(existing: nil, applying: .defaults))
         let out = try jsonObject(merged)
 
-        #expect(out["version"] as? Int == 2)
-        #expect(out["defaultBrowser"] as? String == "helium")
+        #expect(out["version"] as? Int == 3)
+        #expect(out["primaryBrowser"] as? String == "helium")
+        #expect(out["defaultBrowser"] == nil)
         #expect(out["linkBehavior"] as? String == "new-lil")
     }
 
@@ -57,7 +75,7 @@ struct ConfigMergeTests {
         let merged = try #require(
             ConfigMerge.mergedJSONData(existing: Data("not json".utf8), applying: .defaults)
         )
-        #expect(try jsonObject(merged)["defaultBrowser"] as? String == "helium")
+        #expect(try jsonObject(merged)["primaryBrowser"] as? String == "helium")
     }
 
     // MARK: - Normalized encoding
@@ -73,8 +91,8 @@ struct ConfigMergeTests {
         #expect(first == second, "an unchanged save must be byte-identical")
 
         let text = try #require(String(data: first, encoding: .utf8))
-        let keyOrder = ["defaultBrowser", "ephemeralDefault", "fallbackBrowser", "hoverBar",
-                        "knownBrowsers", "linkBehavior", "paletteAnchor", "searchEngine",
+        let keyOrder = ["ephemeralDefault", "fallbackBrowser", "hoverBar", "knownBrowsers",
+                        "linkBehavior", "paletteAnchor", "primaryBrowser", "searchEngine",
                         "sleep", "unknownSectionProbe", "version"]
         let offsets = keyOrder.compactMap { text.range(of: "\"\($0)\"")?.lowerBound }
         #expect(offsets.count == keyOrder.count, "every top-level key is present")
@@ -112,7 +130,7 @@ struct ConfigMergeTests {
         // Unknown keys survive — both nested and top-level.
         #expect(sleep["unknownNestedProbe"] as? String == "chime")
         #expect(out["unknownSectionProbe"] != nil)
-        #expect(out["version"] as? Int == 3, "a host edit never downgrades the schema version")
+        #expect(out["version"] as? Int == 4, "a host edit never downgrades the schema version")
     }
 
     @Test func whitelistAddIsIdempotent() throws {
@@ -141,7 +159,7 @@ struct ConfigMergeTests {
 
         #expect(sleep["whitelist"] as? [String] == ["example.com"])
         #expect(sleep["afterMinutes"] as? Int == 30)
-        #expect(out["version"] as? Int == 2)
+        #expect(out["version"] as? Int == 3)
     }
 
     /// Garbage in, no write out: the host logs and drops instead of corrupting.

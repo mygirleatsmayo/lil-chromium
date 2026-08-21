@@ -61,18 +61,18 @@ struct MessageTests {
         let ctx = try Fixture.decode(ContextMessage.self, from: "message-context")
 
         #expect(wire.keys.sorted() == [
-            "browser", "browserName", "defaultBrowser", "defaultBrowserName",
-            "ephemeralDefault", "fallbackBrowser", "hoverBar", "id",
-            "knownBrowsers", "linkBehavior", "searchEngine", "sleep", "type",
+            "browser", "browserName", "ephemeralDefault", "fallbackBrowser",
+            "hoverBar", "id", "knownBrowsers", "linkBehavior",
+            "primaryBrowser", "primaryBrowserName", "searchEngine", "sleep", "type",
         ])
 
         // Host identity is the host's, not the config's.
         #expect(ctx.browser == "brave")
         #expect(ctx.browserName == "Brave")
-        #expect(ctx.browser != ctx.defaultBrowser)
+        #expect(ctx.browser != ctx.primaryBrowser)
         // Routing targets come from the config.
-        #expect(ctx.defaultBrowser == "helium")
-        #expect(ctx.defaultBrowserName == "Helium")
+        #expect(ctx.primaryBrowser == "helium")
+        #expect(ctx.primaryBrowserName == "Helium")
         #expect(ctx.fallbackBrowser == "chrome")
         #expect(ctx.linkBehavior == "new-lil")
         // Config sections arrive whole.

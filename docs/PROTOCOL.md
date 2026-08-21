@@ -54,8 +54,8 @@ Written by the app (Settings window / menu). Read by the app and by each host (f
 
 ```json
 {
-  "version": 2,
-  "defaultBrowser": "helium",
+  "version": 3,
+  "primaryBrowser": "helium",
   "fallbackBrowser": "chrome",
   "paletteAnchor": "top-center",
   "linkBehavior": "new-lil",
@@ -84,7 +84,8 @@ Written by the app (Settings window / menu). Read by the app and by each host (f
 }
 ```
 
-- `defaultBrowser`: promote target + palette history source + link-open fallback target.
+- `primaryBrowser`: Primary browser installation for new lils, promotion, palette history, and direct-launch fallback.
+- `fallbackBrowser`: second browser installation tried when Primary is unavailable. Settings excludes the current Primary installation while preserving sibling channels as distinct choices.
 - `paletteAnchor`: `"top-center"` (centered horizontally, top edge at 20% of screen height) | `"top-right"` (24pt insets).
 - `linkBehavior` (v3 semantics): governs links that request a new tab/window (`target=_blank` etc.) from a lil. `"new-lil"` (DEFAULT: cascade into a new lil) | `"same-lil"` (collapse into the current lil — settings copy must warn this can break some sign-in popups). Native popup windows (featureful `window.open`, OAuth) are ALWAYS left alone regardless of this setting. ⌘-click flips the behavior per click.
 - `ephemeralDefault`: `"never" | "6h" | "12h" | "24h" | "quit"` — default lifetime for new lils. `"quit"` = excluded from restore-on-startup. Hours = auto-close that long after the lil's last user interaction. Per-lil override lives in the extension registry, set from the hover bar menu.
@@ -92,7 +93,7 @@ Written by the app (Settings window / menu). Read by the app and by each host (f
 - `searchEngine`: `provider` id + `name` + `template` with `%s` placeholder. `provider` is the explicit Settings selection (`google` | `ddg` | `bing` | `kagi` | `startpage` | `custom`) and is never inferred from `template`. Used by BOTH the palette and the lil hover-bar omnibox. Presets in Settings: Google, DuckDuckGo, Bing, Kagi, Startpage, Custom.
 - `hoverBar`: `style` `"glass"` (v0.2 look) | `"solid"` (adaptive title-bar-like background; glass kept only on the address input). `tint` optional `#rrggbb`, applies to either style.
 - `knownBrowsers`: app scans /Applications + NSWorkspace on launch and on settings-open, writes results. Hosts/extension treat it as read-only truth.
-- Missing file/fields → built-in defaults above. First app launch with no config opens the Settings window (onboarding) and writes it. All writers (app AND host) preserve unknown fields via read-merge-write.
+- Missing file/fields → built-in defaults above. A v0.3 `defaultBrowser` value is read as Primary when `primaryBrowser` is absent. Full v0.4 writes emit `primaryBrowser`, upgrade older schema versions to 3, and preserve the legacy key plus every unknown field; newer schema versions are never downgraded. First app launch with no config opens the Settings window (onboarding) and writes it. All writers (app AND host) preserve unknown fields via read-merge-write.
 
 ## Transports
 
@@ -101,11 +102,11 @@ Written by the app (Settings window / menu). Read by the app and by each host (f
 
 ### App routing order (link click / palette open)
 
-1. `relay-<defaultBrowser>.sock`
+1. `relay-<primaryBrowser>.sock`
 2. `relay-<fallbackBrowser>.sock`
 3. any other `relay-*.sock` present (newest mtime first)
-4. `NSWorkspace.open` the URL with the default browser's bundle id (launches it; normal tab)
-5. same with fallback browser / any installed known browser.
+4. `NSWorkspace.open` the URL with the Primary browser installation's bundle id (launches it; normal tab)
+5. same with Fallback / any installed known browser.
 Never `NSWorkspace.shared.open(url)` bare — the app IS the system default handler (infinite loop).
 
 Palette `history-query` uses the same order but only steps 1–3 (no launch), returning empty items if no socket answers.
@@ -122,7 +123,7 @@ All JSON with `type`. `id` for request/response matching.
 ### extension → host (host handles directly; never reaches the app)
 
 - `{"type":"get-context","id":string}` → host replies on the port:
-  `{"type":"context","id":string,"browser":slug,"browserName":string,"defaultBrowser":slug,"defaultBrowserName":string,"fallbackBrowser":slug,"linkBehavior":"new-lil"|"same-lil","ephemeralDefault":string,"sleep":{...},"searchEngine":{...},"hoverBar":{...},"knownBrowsers":[{"slug":...,"name":...,"installed":bool}]}`
+  `{"type":"context","id":string,"browser":slug,"browserName":string,"primaryBrowser":slug,"primaryBrowserName":string,"fallbackBrowser":slug,"linkBehavior":"new-lil"|"same-lil","ephemeralDefault":string,"sleep":{...},"searchEngine":{...},"hoverBar":{...},"knownBrowsers":[{"slug":...,"name":...,"installed":bool}]}`
   (v3: context carries the full config objects verbatim from config.json plus the host's browser identity.)
   Host reads config.json fresh on every call and injects its own detected identity. Extension calls this on every port (re)connect and caches.
 - `{"type":"open-external","browser":slug,"url":string}` — host launches the URL in that browser via `open -b <bundleId> <url>` (or NSWorkspace equivalent). Fire-and-forget; host logs failures.
@@ -139,10 +140,10 @@ As v1: host queues `open` (max 20 FIFO) while the port is down; `history-query` 
 ## Extension behavior contract (v2 changes)
 
 - **Naming**: user-facing copy says "lil"/"lils" (e.g. "Open in a new lil").
-- **Hover-reveal top bar** replaces the always-visible pill. Hidden by default (nothing covers page UI). Reveal when cursor is within 24px of the viewport top (~80ms intent delay) or on ⌘L; hide 300ms after the cursor leaves unless the address field is focused or a menu is open; Esc hides. Bar (closed shadow DOM, slides down, glass-look CSS backdrop-blur, adapts to `prefers-color-scheme`): [back button] [editable address field, centered — shows current URL compactly, full URL + select-all on focus, Enter navigates via SW `tabs.update` (add https:// when missing; non-URL input → search via config `searchEngine.template`)] [**Open in {defaultBrowserName}** ⌘O] [⌄ caret menu].
-- **Caret menu**: promote to default browser; "Open in {host browser} tab" when host ≠ default; tab groups of the host browser (`tabGroups.query`); other installed browsers ("Open in {name}…" → `open-external`); "Close lil".
-- **Promote semantics**: if `defaultBrowser == ` the browser the lil lives in → v1 no-reload move (`tabs.move` → `windows.create({tabId})` fallback) + optional group. Else → `open-external` to the default browser + close the lil (state not preservable across browsers — accepted).
-- **⌘O** (content-script capture + `promote-tab` command backstop) = promote to default browser. **⌘L** = reveal + focus address bar.
+- **Hover-reveal top bar** replaces the always-visible pill. Hidden by default (nothing covers page UI). Reveal when cursor is within 24px of the viewport top (~80ms intent delay) or on ⌘L; hide 300ms after the cursor leaves unless the address field is focused or a menu is open; Esc hides. Bar (closed shadow DOM, slides down, glass-look CSS backdrop-blur, adapts to `prefers-color-scheme`): [back button] [editable address field, centered — shows current URL compactly, full URL + select-all on focus, Enter navigates via SW `tabs.update` (add https:// when missing; non-URL input → search via config `searchEngine.template`)] [**Open in {primaryBrowserName}** ⌘O] [⌄ caret menu].
+- **Caret menu**: promote to Primary; "Open in {host browser} tab" when Host ≠ Primary; tab groups of the Host browser (`tabGroups.query`); other installed browsers ("Open in {name}…" → `open-external`); "Close lil".
+- **Promote semantics**: if `primaryBrowser` is the installation the lil lives in → v1 no-reload move (`tabs.move` → `windows.create({tabId})` fallback) + optional group. Else → `open-external` to Primary + close the lil (state not preservable across browsers — accepted).
+- **⌘O** (content-script capture + `promote-tab` command backstop) = promote to Primary. **⌘L** = reveal + focus address bar.
 - **New-window link handling (v3 — replaces v2 collapse logic)**: on `onCreatedNavigationTarget` from a lil, WAIT for the tab to settle (retry `tabs.get`/`windows.get`), then branch:
   1. New tab's window `type === "popup"` OR `openerTabId` missing OR URL matches the OAuth guard list → **native popup, do not touch** (no re-parent, no navigate, no registry). This preserves `window.opener`/postMessage — the Google-auth fix.
   2. Landed as a tab in a normal window → effective behavior = config `linkBehavior` flipped by ⌘ clickHint: `new-lil` → re-parent into a new cascaded lil (create → `update({focused:true})`); `same-lil` → navigate the source lil's tab, close the spawned tab, then **explicitly re-focus the source lil's window** (focus must never remain on the main window).

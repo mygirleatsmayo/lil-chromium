@@ -41,9 +41,10 @@ test("context fixture lands as host identity plus config objects, with no bundle
   const { context } = await env.message({ action: "getContext" });
   assert.equal(context.browser, "brave");
   assert.equal(context.browserName, "Brave");
-  assert.equal(context.defaultBrowser, "helium");
-  assert.equal(context.defaultBrowserName, "Helium");
-  assert.notEqual(context.browser, context.defaultBrowser);
+  assert.equal(context.primaryBrowser, "helium");
+  assert.equal(context.primaryBrowserName, "Helium");
+  assert.notEqual(context.browser, context.primaryBrowser);
+  assert.equal(context.defaultBrowser, undefined);
   assert.equal(context.fallbackBrowser, "chrome");
   assert.equal(context.linkBehavior, "new-lil");
   assert.equal(context.sleep.afterMinutes, 45);
@@ -66,14 +67,14 @@ test("context fixture lands as host identity plus config objects, with no bundle
   assert.deepEqual(Object.keys(wire).sort(), [
     "browser",
     "browserName",
-    "defaultBrowser",
-    "defaultBrowserName",
     "ephemeralDefault",
     "fallbackBrowser",
     "hoverBar",
     "id",
     "knownBrowsers",
     "linkBehavior",
+    "primaryBrowser",
+    "primaryBrowserName",
     "searchEngine",
     "sleep",
     "type",
@@ -90,7 +91,8 @@ test("v1 config fixture yields the same additive defaults as the native suite", 
     linkBehavior: cfg.linkBehavior,
   });
   const { context } = await env.message({ action: "getContext" });
-  assert.equal(context.defaultBrowser, "brave");
+  assert.equal(context.primaryBrowser, "brave");
+  assert.equal(context.defaultBrowser, undefined);
   assert.equal(context.linkBehavior, "same-lil");
   assert.equal(context.fallbackBrowser, "chrome");
   assert.equal(context.ephemeralDefault, "never");
@@ -106,8 +108,8 @@ test("v1 config fixture yields the same additive defaults as the native suite", 
   assert.equal(context.hoverBar.tint, null);
 });
 
-test("v2 complete config fixture matches the context wire's config objects", async () => {
-  const cfg = fixture("config-v2-complete");
+test("v3 complete config fixture matches the context wire's config objects", async () => {
+  const cfg = fixture("config-v3-complete");
   const wire = fixture("message-context");
   assert.equal(cfg.sleep.afterMinutes, wire.sleep.afterMinutes);
   assert.equal(cfg.searchEngine.name, wire.searchEngine.name);
@@ -277,11 +279,12 @@ test("unknown config fields are not required for the worker to apply known ones"
   await env.deliver({
     type: "context",
     id: "ctx-unknown",
-    defaultBrowser: cfg.defaultBrowser,
+    primaryBrowser: cfg.primaryBrowser,
     sleep: cfg.sleep,
     unknownSectionProbe: cfg.unknownSectionProbe,
   });
   const { context } = await env.message({ action: "getContext" });
+  assert.equal(context.primaryBrowser, "helium");
   assert.equal(context.sleep.whitelist.length, 1);
   assert.equal(context.sleep.whitelist[0], "Mail.Google.com");
   assert.equal(context.unknownSectionProbe, undefined);

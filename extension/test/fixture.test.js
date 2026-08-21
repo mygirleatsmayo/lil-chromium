@@ -8,6 +8,7 @@ import { fixture, fixtureBytes, fixtureDirectory } from "./fixture.js";
 const SHARED = [
   "config-v1-legacy",
   "config-v2-complete",
+  "config-v3-complete",
   "config-with-unknown-fields",
   "message-context",
   "message-history-result",
