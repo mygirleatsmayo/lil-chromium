@@ -1,0 +1,11 @@
+{
+  "type": "open",
+  "url": "https://example.com/from-mail",
+  "left": 120,
+  "top": 80,
+  "priorContext": {
+    "kind": "external-app",
+    "pid": 4242,
+    "bundleId": "com.apple.mail"
+  }
+}

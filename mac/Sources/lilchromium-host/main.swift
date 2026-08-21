@@ -22,6 +22,7 @@ import Darwin
 //   socket "ping"          -> answer directly with pong (extensionConnected:true
 //                             while this process lives).
 //   stdin "history-result" -> route to the connection that issued the query.
+//   stdin "restore-focus"  -> reactivate the recorded external app.
 //   unknown from socket     -> forward to extension.
 //   unknown from extension  -> drop.
 
@@ -212,6 +213,9 @@ final class Relay {
         case MessageType.whitelistOp.rawValue:
             handleWhitelistOp(data)
 
+        case MessageType.restoreFocus.rawValue:
+            handleRestoreFocus(data)
+
         default:
             // Unknown from extension -> drop (per PROTOCOL.md).
             hlog("extension: dropping unforwarded type \(env.type)")
@@ -330,6 +334,18 @@ final class Relay {
             hlog("host: open-external \(msg.browser) \(msg.url)")
         } catch {
             hlog("host: open-external launch failed: \(error)")
+        }
+    }
+
+    /// Ask macOS to reactivate the exact recorded external process, falling
+    /// back only to another live process of the same bundle.
+    private func handleRestoreFocus(_ data: Data) {
+        guard let msg = try? LilCodec.decode(RestoreFocusMessage.self, from: data) else {
+            hlog("host: undecodable restore-focus dropped")
+            return
+        }
+        Task { @MainActor in
+            ExternalAppRestorer.restore(msg.priorContext)
         }
     }
 

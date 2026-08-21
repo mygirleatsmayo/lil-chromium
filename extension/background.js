@@ -8,7 +8,7 @@
 //   - Handshake with the host for browser identity + full user config.
 //   - New-window link handling (v3): preserve native popups (OAuth fix),
 //     re-parent normal-window spawns per linkBehavior.
-//   - Focus discipline (v3): MRU stack + explicit refocus.
+//   - Focus discipline: per-lil prior context + explicit refocus.
 //   - Ephemerality (v3): per-lil expiry + 1-min sweep alarm.
 //   - Sleep (v3): captureVisibleTab → IndexedDB → sleep.html; auto + manual.
 //   - Incognito lils (v3): gated on isAllowedIncognitoAccess.
@@ -19,6 +19,7 @@ const NATIVE_HOST = "com.lilchromium.relay";
 // Registry entry shape (v3):
 //   { url, bounds:{left,top,width,height},
 //     expiry: "never"|"quit"|<hoursNumber>, lastInteraction: ts,
+//     priorContext?: {kind,...},
 //     slept?: bool, sleepCaptureKey?: string, originalUrl?: string }
 const REGISTRY_KEY = "ephemeralWindows";
 const LAST_SIZE_KEY = "lastSize"; // {width, height} — last user-resized lil size
@@ -248,44 +249,15 @@ function consumeClickHint(url) {
 }
 
 // ===========================================================================
-// FOCUS DISCIPLINE — MRU stack of window ids.
+// FOCUS DISCIPLINE — live browser focus plus explicit refocus.
 //
-// Maintained via windows.onFocusChanged (ignoring WINDOW_ID_NONE). Keeps BOTH
-// lil and normal windows so, when a focused lil closes, we can return focus to
-// whatever the user was truly on last. Memory-only; rebuilt as the user clicks
-// around. Focused lil creates are followed by an explicit focusWindow() because
+// WINDOW_ID_NONE is retained as real external-app focus state. Focused lil
+// creates are followed by an explicit focusWindow() because
 // create({focused:true}) is unreliable on macOS (research §Focus); unfocused
 // creates (restoreWindows) skip it.
 // ===========================================================================
 
-const mruStack = []; // window ids, most-recent-first
-
-function mruTouch(windowId) {
-  if (typeof windowId !== "number" || windowId < 0) return;
-  const i = mruStack.indexOf(windowId);
-  if (i >= 0) mruStack.splice(i, 1);
-  mruStack.unshift(windowId);
-  while (mruStack.length > 24) mruStack.pop();
-}
-
-function mruRemove(windowId) {
-  const i = mruStack.indexOf(windowId);
-  if (i >= 0) mruStack.splice(i, 1);
-}
-
-// Filter dead ids out of the MRU stack and return the first still-alive id, or
-// null. Used when a focused lil closes so we hand focus to a real window.
-async function mruTopAlive(excludeId) {
-  const all = await safe(chrome.windows.getAll({}), "getAll mru");
-  const live = new Set((all || []).map((w) => w.id));
-  for (let i = mruStack.length - 1; i >= 0; i--) {
-    if (!live.has(mruStack[i])) mruStack.splice(i, 1);
-  }
-  for (const id of mruStack) {
-    if (id !== excludeId && live.has(id)) return id;
-  }
-  return null;
-}
+let focusedWindowId = chrome.windows.WINDOW_ID_NONE;
 
 // Explicit focus. Used after windows.create when a lil is asked to take focus.
 async function focusWindow(windowId) {
@@ -294,8 +266,7 @@ async function focusWindow(windowId) {
 }
 
 chrome.windows.onFocusChanged.addListener((windowId) => {
-  if (windowId === chrome.windows.WINDOW_ID_NONE) return; // ignore blur-to-none
-  mruTouch(windowId);
+  focusedWindowId = windowId;
 });
 
 // ===========================================================================
@@ -360,9 +331,9 @@ async function handlePortMessage(msg) {
   try {
     if (msg.type === "open") {
       if (msg.incognito) {
-        await openIncognitoLil(msg.url, msg.left, msg.top);
+        await openIncognitoLil(msg.url, msg.left, msg.top, msg.priorContext);
       } else {
-        await openLil({ url: msg.url, left: msg.left, top: msg.top });
+        await openLil({ url: msg.url, left: msg.left, top: msg.top, appSuppliedPriorContext: msg.priorContext });
       }
     } else if (msg.type === "history-query") {
       await answerHistoryQuery(msg);
@@ -533,6 +504,53 @@ async function clampBounds(left, top, width, height) {
 // ===========================================================================
 
 const incognitoLils = new Set(); // window ids of live incognito lils
+const incognitoPriorContexts = new Map(); // window id -> prior context
+// Host/group promotion empties the source lil and Chrome removes that window.
+// That onRemoved is a lifecycle transfer, not a close/unwind.
+const promotingWindowIds = new Set();
+
+function normalizePriorContext(value) {
+  if (!value || typeof value !== "object") return null;
+  if ((value.kind === "lil" || value.kind === "normal-window") && Number.isInteger(value.windowId)) {
+    return { kind: value.kind, windowId: value.windowId };
+  }
+  if (value.kind === "external-app" && Number.isInteger(value.pid) && value.pid > 0) {
+    const context = { kind: "external-app", pid: value.pid };
+    if (typeof value.bundleId === "string" && value.bundleId) context.bundleId = value.bundleId;
+    return context;
+  }
+  return null;
+}
+
+// Capture the live Chromium focus before windows.create can change it. When no
+// browser window is focused, only the app-supplied prior-context candidate is
+// eligible.
+async function capturePriorContext(appSuppliedPriorContext) {
+  const all = await safe(chrome.windows.getAll({}), "getAll prior context");
+  const focused = (all || []).find((win) => win.focused && win.id !== undefined);
+  if (focused) {
+    if (await isEphemeralWindow(focused.id)) return { kind: "lil", windowId: focused.id };
+    return focused.type === "normal" ? { kind: "normal-window", windowId: focused.id } : null;
+  }
+  const normalized = normalizePriorContext(appSuppliedPriorContext);
+  return normalized && normalized.kind === "external-app" ? normalized : null;
+}
+
+async function restorePriorContext(priorContext) {
+  const prior = normalizePriorContext(priorContext);
+  if (!prior) return;
+
+  if (prior.kind === "external-app") {
+    postToHost({ type: "restore-focus", priorContext: prior });
+    return;
+  }
+
+  const win = await safe(chrome.windows.get(prior.windowId), "windows.get prior context");
+  if (!win) return;
+  if (prior.kind === "lil" && !(await isEphemeralWindow(prior.windowId))) return;
+  if (prior.kind === "normal-window" && win.type !== "normal") return;
+  await focusWindow(prior.windowId);
+}
 
 /**
  * Open one lil and bring it into the lifecycle. Returns the created window, or
@@ -543,8 +561,11 @@ const incognitoLils = new Set(); // window ids of live incognito lils
  *   tabId        Existing tab to adopt into the new lil.
  *   left, top    Desired top-left before clamping; undefined centers the lil.
  *   size         {width, height}; defaults to the remembered last user size.
- *   focus        Ask for focus after create (default true). Also drives the MRU.
+ *   focus        Ask for focus after create (default true).
  *   incognito    In-memory-only lil: never registered, never restored.
+ *   priorContext Explicit related lil/normal-window predecessor.
+ *   appSuppliedPriorContext App-supplied prior-context candidate, eligible
+ *                only when Chromium has no focused window.
  *   recordUrl    URL to store in the registry. Defaults to `url`, then the
  *                adopted tab's URL — restoration uses it so a slept lil records
  *                its real URL rather than its sleep-page URL.
@@ -558,6 +579,10 @@ async function openLil(spec) {
     return null;
   }
 
+  const priorContext =
+    spec.priorContext !== undefined
+      ? normalizePriorContext(spec.priorContext)
+      : await capturePriorContext(spec.appSuppliedPriorContext);
   const size = spec.size || (await getLastSize());
   const bounds = await clampBounds(spec.left, spec.top, size.width, size.height);
   const focus = spec.focus !== false;
@@ -575,12 +600,12 @@ async function openLil(spec) {
   if (focus) {
     // Explicit refocus (create({focused:true}) unreliable when not frontmost).
     await focusWindow(win.id);
-    mruTouch(win.id);
   }
 
   // Incognito lils live in memory only: never persisted, never restored.
   if (spec.incognito) {
     incognitoLils.add(win.id);
+    if (priorContext) incognitoPriorContexts.set(win.id, priorContext);
     return win;
   }
 
@@ -589,7 +614,10 @@ async function openLil(spec) {
     win.id,
     spec.recordUrl || spec.url || (win.tabs && win.tabs[0] && win.tabs[0].url) || "",
     { left: win.left, top: win.top, width: win.width, height: win.height },
-    Object.assign({ expiry: ctx.ephemeralDefault, lastInteraction: Date.now() }, spec.registration)
+    Object.assign(
+      { expiry: ctx.ephemeralDefault, lastInteraction: Date.now(), priorContext },
+      spec.registration
+    )
   );
   return win;
 }
@@ -610,18 +638,18 @@ async function cascadeOrigin(windowId, unpositionedCoord) {
 // tell the content overlay to show a hint toast pointing at the toggle.
 // ===========================================================================
 
-async function openIncognitoLil(url, left, top) {
+async function openIncognitoLil(url, left, top, appSuppliedPriorContext) {
   if (typeof url !== "string" || !url) return null;
   // A normal lil whose overlay surfaces the incognito-toggle hint.
   const fallback = async () => {
-    const win = await openLil({ url, left, top });
+    const win = await openLil({ url, left, top, appSuppliedPriorContext });
     if (win) queueIncognitoHint(win.id);
     return win;
   };
   const allowed = await safe(chrome.extension.isAllowedIncognitoAccess(), "isAllowedIncognitoAccess");
   if (!allowed) return fallback();
   // A failed create means the toggle raced off (or worse) → normal fallback.
-  return (await openLil({ url, left, top, incognito: true })) || fallback();
+  return (await openLil({ url, left, top, incognito: true, appSuppliedPriorContext })) || fallback();
 }
 
 // When we fall back to a normal lil in place of an incognito one, the overlay
@@ -654,13 +682,14 @@ async function broadcastToWindow(windowId, message) {
 
 async function restoreWindows() {
   const oldReg = await getRegistry();
-  const entries = Object.values(oldReg);
+  const entries = Object.entries(oldReg);
   if (!entries.length) return;
 
   await setRegistry({});
 
   let restored = 0;
-  for (const entry of entries) {
+  const restoredWindowIds = new Map();
+  for (const [oldWindowId, entry] of entries) {
     if (!entry || typeof entry.url !== "string" || !entry.url) continue;
     if (entry.expiry === "quit") continue; // excluded from restore
 
@@ -675,16 +704,34 @@ async function restoreWindows() {
       top: b.top,
       size: { width: b.width || DEFAULT_SIZE.width, height: b.height || DEFAULT_SIZE.height },
       focus: false, // restoration must never steal focus from the user
+      priorContext: null, // never derive a predecessor from incidental startup focus
       registration: {
         expiry: normalizeExpiry(entry.expiry, "never"),
         lastInteraction: Date.now(),
+        priorContext: normalizePriorContext(entry.priorContext),
         slept: !!entry.slept,
         sleepCaptureKey: entry.sleepCaptureKey,
         originalUrl: entry.originalUrl,
       },
     });
-    if (win) restored += 1;
+    if (win) {
+      restored += 1;
+      restoredWindowIds.set(oldWindowId, win.id);
+    }
   }
+
+  // Restored Chromium window ids are new. Re-key predecessor-lil references
+  // after every window exists so chain order in storage cannot matter.
+  const reg = await getRegistry();
+  let remapped = false;
+  for (const entry of Object.values(reg)) {
+    const prior = normalizePriorContext(entry && entry.priorContext);
+    if (!prior || prior.kind !== "lil") continue;
+    const newWindowId = restoredWindowIds.get(String(prior.windowId));
+    entry.priorContext = newWindowId === undefined ? null : { kind: "lil", windowId: newWindowId };
+    remapped = true;
+  }
+  if (remapped) await setRegistry(reg);
   log("restored", restored, "little window(s)");
 }
 
@@ -719,14 +766,21 @@ chrome.windows.onBoundsChanged.addListener(async (win) => {
 });
 
 chrome.windows.onRemoved.addListener(async (windowId) => {
+  const incognitoPriorContext = incognitoPriorContexts.get(windowId);
+  incognitoPriorContexts.delete(windowId);
   const wasIncognito = incognitoLils.delete(windowId);
   const reg = await getRegistry();
   const entry = reg[String(windowId)];
   const wasLil = !!entry || wasIncognito;
 
-  // Was this the focused window? If so, restore focus to the MRU top.
-  const wasFocused = mruStack[0] === windowId;
-  mruRemove(windowId);
+  const wasFocused = focusedWindowId === windowId;
+  if (wasFocused) focusedWindowId = chrome.windows.WINDOW_ID_NONE;
+
+  // Consult the predecessor exactly once, before deleting the lil's state.
+  // Successful host/group promotion is a transfer: skip unwind there only.
+  if (wasLil && wasFocused && !promotingWindowIds.has(windowId)) {
+    await restorePriorContext(entry ? entry.priorContext : incognitoPriorContext);
+  }
 
   // Clean up any stored capture for this lil.
   if (entry && entry.sleepCaptureKey) {
@@ -734,10 +788,6 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
   }
   await deregisterWindow(windowId);
 
-  if (wasLil && wasFocused) {
-    const top = await mruTopAlive(windowId);
-    if (top !== null) await focusWindow(top);
-  }
 });
 
 // ===========================================================================
@@ -793,7 +843,13 @@ function matchesOAuthGuard(url) {
 // no position cascades off the origin, so the lil still lands offset.
 async function cascadeTabToLil(tabId, srcWindowId, fallbackUrl) {
   const { left, top } = await cascadeOrigin(srcWindowId, CASCADE_OFFSET);
-  return openLil({ tabId, recordUrl: fallbackUrl, left, top });
+  return openLil({
+    tabId,
+    recordUrl: fallbackUrl,
+    left,
+    top,
+    priorContext: { kind: "lil", windowId: srcWindowId },
+  });
 }
 
 chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
@@ -1095,11 +1151,10 @@ async function runSweep() {
     const ctx = await getContext();
     const now = Date.now();
     const reg = await getRegistry();
-    // Determine the currently focused window. Prefer the live query (survives SW
-    // restarts where the MRU stack is empty); fall back to the MRU top.
+    // Determine the currently focused window from live browser state.
     const lastFocused = await safe(chrome.windows.getLastFocused({}), "sweep getLastFocused");
-    let focusedTop =
-      lastFocused && lastFocused.focused && lastFocused.id !== undefined ? lastFocused.id : mruStack[0];
+    const focusedTop =
+      lastFocused && lastFocused.focused && lastFocused.id !== undefined ? lastFocused.id : null;
 
     for (const [key, entry] of Object.entries(reg)) {
       const windowId = parseInt(key, 10);
@@ -1110,9 +1165,6 @@ async function runSweep() {
         const idleMs = now - (entry.lastInteraction || 0);
         if (idleMs > entry.expiry * 3600 * 1000) {
           log("ephemeral close", windowId, "idle(min)=" + Math.round(idleMs / 60000));
-          await deregisterWindow(windowId);
-          if (entry.sleepCaptureKey) await safe(idbDelete(entry.sleepCaptureKey), "idb ephemeral");
-          mruRemove(windowId);
           await safe(chrome.windows.remove(windowId), "windows.remove ephemeral");
           continue; // gone — skip sleep checks
         }
@@ -1179,8 +1231,7 @@ async function refreshLastInteraction(windowId) {
 }
 
 // ===========================================================================
-// PROMOTE — get a lil's tab out of ephemeral mode (unchanged from v2, plus
-// focus discipline + MRU cleanup).
+// PROMOTE — get a lil's tab out of ephemeral mode (unchanged from v2).
 // ===========================================================================
 
 async function findNormalWindow() {
@@ -1199,50 +1250,53 @@ async function moveTabIntoHostBrowser(tabId, groupId) {
   const tab = await safe(chrome.tabs.get(tabId), "tabs.get promote");
   if (!tab) return false;
   const sourceWindowId = tab.windowId;
+  if (sourceWindowId !== undefined) promotingWindowIds.add(sourceWindowId);
 
   let ok = false;
-
-  if (typeof groupId === "number") {
-    const res = await safe(chrome.tabs.group({ tabIds: [tabId], groupId }), "tabs.group");
-    if (res !== null) {
-      const g = await safe(chrome.tabGroups.get(groupId), "tabGroups.get");
-      if (g && g.windowId !== undefined) {
-        await safe(chrome.tabs.update(tabId, { active: true }), "tabs.update active group");
-        await safe(chrome.windows.update(g.windowId, { focused: true }), "windows.update focus group");
-      }
-      ok = true;
-    }
-  } else {
-    const target = await findNormalWindow();
-    if (target && target.id !== undefined) {
-      const moved = await safe(chrome.tabs.move(tabId, { windowId: target.id, index: -1 }), "tabs.move promote");
-      if (moved !== null) {
-        await safe(chrome.tabs.update(tabId, { active: true }), "tabs.update active");
-        await safe(chrome.windows.update(target.id, { focused: true }), "windows.update focus");
+  try {
+    if (typeof groupId === "number") {
+      const res = await safe(chrome.tabs.group({ tabIds: [tabId], groupId }), "tabs.group");
+      if (res !== null) {
+        const g = await safe(chrome.tabGroups.get(groupId), "tabGroups.get");
+        if (g && g.windowId !== undefined) {
+          await safe(chrome.tabs.update(tabId, { active: true }), "tabs.update active group");
+          await safe(chrome.windows.update(g.windowId, { focused: true }), "windows.update focus group");
+        }
         ok = true;
       }
-    }
-    if (!ok) {
-      const win = await safe(chrome.windows.create({ tabId, focused: true }), "windows.create promote-fallback");
-      ok = !!win;
-    }
-    if (!ok && tab.url) {
+    } else {
       const target = await findNormalWindow();
-      const createOpts = { url: tab.url, active: true };
-      if (target && target.id !== undefined) createOpts.windowId = target.id;
-      const t = await safe(chrome.tabs.create(createOpts), "tabs.create last-resort");
-      if (t) {
-        await safe(chrome.tabs.remove(tabId), "tabs.remove old");
-        ok = true;
+      if (target && target.id !== undefined) {
+        const moved = await safe(chrome.tabs.move(tabId, { windowId: target.id, index: -1 }), "tabs.move promote");
+        if (moved !== null) {
+          await safe(chrome.tabs.update(tabId, { active: true }), "tabs.update active");
+          await safe(chrome.windows.update(target.id, { focused: true }), "windows.update focus");
+          ok = true;
+        }
+      }
+      if (!ok) {
+        const win = await safe(chrome.windows.create({ tabId, focused: true }), "windows.create promote-fallback");
+        ok = !!win;
+      }
+      if (!ok && tab.url) {
+        const target = await findNormalWindow();
+        const createOpts = { url: tab.url, active: true };
+        if (target && target.id !== undefined) createOpts.windowId = target.id;
+        const t = await safe(chrome.tabs.create(createOpts), "tabs.create last-resort");
+        if (t) {
+          await safe(chrome.tabs.remove(tabId), "tabs.remove old");
+          ok = true;
+        }
       }
     }
-  }
 
-  if (ok) {
-    mruRemove(sourceWindowId);
-    await deregisterWindow(sourceWindowId);
+    if (ok) {
+      await deregisterWindow(sourceWindowId);
+    }
+    return ok;
+  } finally {
+    if (sourceWindowId !== undefined) promotingWindowIds.delete(sourceWindowId);
   }
-  return ok;
 }
 
 async function handOffToBrowser(tabId, browserSlug) {
@@ -1251,7 +1305,6 @@ async function handOffToBrowser(tabId, browserSlug) {
   const posted = postToHost({ type: "open-external", browser: browserSlug, url: tab.url });
   const wid = tab.windowId;
   if (wid !== undefined) {
-    mruRemove(wid);
     await deregisterWindow(wid);
     await safe(chrome.windows.remove(wid), "windows.remove handoff");
   }
@@ -1576,7 +1629,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           if (senderWindowId !== undefined) {
             const { left, top } = await cascadeOrigin(senderWindowId);
             await openIncognitoLil(url, left, top);
-            mruRemove(senderWindowId);
             await deregisterWindow(senderWindowId);
             await safe(chrome.windows.remove(senderWindowId), "windows.remove reopen");
           }
@@ -1597,11 +1649,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         case "closeWindow": {
           if (senderWindowId !== undefined) {
-            mruRemove(senderWindowId);
-            const reg = await getRegistry();
-            const entry = reg[String(senderWindowId)];
-            if (entry && entry.sleepCaptureKey) await safe(idbDelete(entry.sleepCaptureKey), "idb close");
-            await deregisterWindow(senderWindowId);
             await safe(chrome.windows.remove(senderWindowId), "windows.remove close");
           }
           sendResponse({ ok: true });
@@ -1705,7 +1752,12 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 // Re-parent the current NORMAL-window tab into a new lil (Send to lil).
 async function sendTabToLil(tabId, srcWindowId) {
   const { left, top } = await cascadeOrigin(srcWindowId);
-  return openLil({ tabId, left, top });
+  return openLil({
+    tabId,
+    left,
+    top,
+    priorContext: { kind: "normal-window", windowId: srcWindowId },
+  });
 }
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {

@@ -13,7 +13,9 @@ const SHARED = [
   "message-context",
   "message-history-result",
   "message-open-legacy",
+  "message-open-prior-context",
   "message-pong-legacy",
+  "message-restore-focus",
 ];
 
 test("fixture directory is repo-root fixtures, resolved from this file", () => {

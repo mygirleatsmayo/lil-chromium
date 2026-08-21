@@ -158,9 +158,22 @@ enum RelayClient {
     /// every socket fails so the caller can fall back to launching a browser.
     /// `incognito` (palette ⌘-Enter) sets `open.incognito` on the wire; the
     /// extension decides how to honor it (gated on isAllowedIncognitoAccess).
-    static func sendOpen(url: String, left: Int, top: Int, incognito: Bool = false, connectTimeoutMs: Int = 300) throws {
+    static func sendOpen(
+        url: String,
+        left: Int,
+        top: Int,
+        incognito: Bool = false,
+        priorContext: PriorContext? = nil,
+        connectTimeoutMs: Int = 300
+    ) throws {
         let line = try LilCodec.encodeLine(
-            OpenMessage(url: url, left: left, top: top, incognito: incognito ? true : nil)
+            OpenMessage(
+                url: url,
+                left: left,
+                top: top,
+                incognito: incognito ? true : nil,
+                priorContext: priorContext
+            )
         )
         var lastError: Error = RelayError.connectFailed
         for target in routedSockets() {
