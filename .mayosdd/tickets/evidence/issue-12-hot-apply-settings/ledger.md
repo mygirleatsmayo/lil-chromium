@@ -21,3 +21,7 @@ No findings. Hot-apply fanout, future-lil seeding, reconnect catch-up, reveal-zo
 ## Round 1 outcome
 
 Three small Standards fixes are owed. No Spec fix or owner adjudication is required before remediation.
+
+## Remediation round 1
+
+Remediation commit `3caaf61a6b54d73dd57d7dbeff70d727c2472aef`; review `q_Ziw93V` (`cursor-grok-4.6-medium`). S1, S2, and S3 are resolved. The fix delta introduced no regressions, new defects, or unsettled interpretations. Proceed to the final full two-axis review.
