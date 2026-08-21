@@ -17,6 +17,7 @@ Reports: `REVIEW-STANDARDS.md`, `REVIEW-SPEC.md` (this directory).
 | P3 | Spec | `waitForWakeSwap` misses readiness that occurs before its `onUpdated` listener observes it | **fix** | After subscribing, inspect the fresh tab's current status so an already-complete load swaps at the floor; keep the listener/check order race-safe and retain the 500 ms cap. |
 | P4 | Spec | Direct page fallback awaits storage and IndexedDB reconciliation without a bound before navigating | **fix** | Cleanup must remain eventual, but a hung cleanup API must not strand the nap document. Bound the page's wait before navigation and retain a worker-side/event-driven cleanup backstop for state the page could not finish. |
 | S3 | Standards | PROTOCOL says activation failure puts the nap document back in front, while code only needs that rollback after removal failure | **fix** | State the two truthful failure paths precisely: activation failure leaves the already-visible nap document in front; removal failure reactivates it. |
+| P5 | Spec | Round-2 `tabs.onUpdated` backstop clears nap state when the inactive same-window wake preload reports its original URL | **fix** | The backstop may reconcile only navigation of the active, user-visible nap tab. An inactive preload must never clear nap metadata or its capture; add deterministic coverage for that event ordering. |
 
 ## Round 1 outcome
 
@@ -29,3 +30,7 @@ Review `krz4zBqB` found S1, S2, P1, P2, and P3 resolved. It added P4 and S3 abov
 ### Adjudication A1
 
 The 1000 ms no-reply backstop is accepted as genuine worker unreachability for this ticket. The 500 ms bound governs the worker-owned visual transition; recovery after a silent/dead worker is a separate safety path. Do not add a second status protocol or speculative machinery for a Chromium API promise that remains pending indefinitely. Real-Mac QA should reopen this only if a supported browser demonstrates such a hang or overlap.
+
+## Round 2 remediation review
+
+Review `ZEV2f8re` found P4 and S3 resolved. It added P5 above: the new window-scoped `tabs.onUpdated` backstop does not distinguish the inactive wake preload from the visible nap tab and can clear truthful nap state before replacement.
