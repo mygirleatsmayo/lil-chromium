@@ -75,6 +75,10 @@ export function createChrome(options = {}) {
   let lastError = undefined;
   let nextWindowId = 1;
   let nextTabId = 1;
+  // Settle-race injection: `options.settleMisses` maps a creation URL to the
+  // number of initial tabs.get calls that reject for the resulting tab,
+  // simulating Chromium's transient post-spawn state before the tab settles.
+  const tabGetMisses = new Map();
 
   const events = {
     runtime: { onMessage: makeEvent(), onStartup: makeEvent(), onInstalled: makeEvent() },
@@ -133,6 +137,8 @@ export function createChrome(options = {}) {
       sessionHistory: [url],
     };
     tabs.set(id, tab);
+    const misses = options.settleMisses && options.settleMisses[url];
+    if (misses) tabGetMisses.set(id, misses);
     applyNapDocument(tab);
     return tab;
   }
@@ -203,7 +209,13 @@ export function createChrome(options = {}) {
       win.tabIds.push(tab.id);
       await closeWindowIfEmpty(oldId);
     } else if (typeof opts.url === "string") {
-      createdTab = addTab({ windowId: id, url: opts.url, active: true, incognito: win.incognito });
+      createdTab = addTab({
+        windowId: id,
+        url: opts.url,
+        active: true,
+        incognito: win.incognito,
+        openerTabId: opts.openerTabId, // window.open gives the popup its opener
+      });
       win.tabIds.push(createdTab.id);
     }
 
@@ -326,6 +338,11 @@ export function createChrome(options = {}) {
     },
     tabs: {
       async get(id) {
+        const misses = tabGetMisses.get(id) || 0;
+        if (misses > 0) {
+          tabGetMisses.set(id, misses - 1);
+          return rejectMissing("tab", id);
+        }
         const tab = tabs.get(id);
         if (!tab) return rejectMissing("tab", id);
         return snapshotTab(tab);

@@ -1482,6 +1482,472 @@ test("a cascaded lil records its source lil despite incidental normal-window foc
 });
 
 // ---------------------------------------------------------------------------
+// New-window link classification (issue #16). The configured New-window Links
+// behavior applies to every genuine requested browsing target — including
+// opener-less (`rel="noopener"`) spawns — while native popup windows and
+// guarded authentication flows stay native.
+// ---------------------------------------------------------------------------
+
+test("an opener-less requested target follows the configured new-lil behavior", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+
+  // Chromium raises the spawn's normal window before the navigation claim.
+  await env.chrome.windows.update(normal.id, { focused: true });
+  // A rel="noopener" target=_blank: a genuine requested target with no opener.
+  const spawned = await env.chrome.tabs.create({
+    windowId: normal.id,
+    url: "https://noopener.example/",
+    active: true,
+  });
+  await env.createdNavigationTarget({
+    tabId: spawned.id,
+    sourceTabId: source.tabs[0].id,
+    url: "https://noopener.example/",
+  });
+
+  const cascaded = env.windows().find((w) => w.type === "popup" && w.id !== source.id);
+  assert.ok(cascaded, "a missing opener alone must not preserve a normal-window spawn");
+  assert.equal(cascaded.focused, true);
+  assert.equal(cascaded.tabs[0].id, spawned.id);
+  assert.equal(
+    env.journal().filter((e) => e.op === "windows.create" && e.create.tabId === spawned.id).length,
+    1,
+    "exactly one flow re-parents the spawn"
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(env.registry()[String(cascaded.id)].priorContext)), {
+    kind: "lil",
+    windowId: source.id,
+  });
+  assert.equal(
+    env.windows().find((w) => w.id === source.id).tabs[0].url,
+    "https://lil.example/",
+    "the source lil is not navigated"
+  );
+  assert.equal(
+    env.windows().find((w) => w.id === normal.id).tabs.some((t) => t.id === spawned.id),
+    false,
+    "the spawn left the normal window"
+  );
+});
+
+test("a native popup window keeps its window and opener when it hosts a link target", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+
+  // Featureful window.open: Chromium gives the flow its own popup window.
+  const popup = await env.chrome.windows.create({
+    url: "https://popup.example/",
+    type: "popup",
+    openerTabId: source.tabs[0].id,
+  });
+  const before = env.journal().length;
+
+  await env.createdNavigationTarget({
+    tabId: popup.tabs[0].id,
+    sourceTabId: source.tabs[0].id,
+    url: "https://popup.example/",
+  });
+
+  const after = env.journal().slice(before);
+  assert.equal(after.some((e) => e.op === "windows.create"), false, "no re-parent");
+  assert.equal(after.some((e) => e.op === "tabs.update"), false, "no navigation");
+  assert.equal(after.some((e) => e.op === "tabs.remove"), false, "nothing removed");
+  const popupNow = env.windows().find((w) => w.id === popup.id);
+  assert.ok(popupNow, "the native popup window stays");
+  assert.equal(popupNow.tabs[0].openerTabId, source.tabs[0].id, "the opener relationship survives intact");
+  assert.equal(env.registry()[String(popup.id)], undefined, "no registry entry");
+  assert.deepEqual(Object.keys(env.registry()), [String(source.id)]);
+});
+
+test("a popup window without an opener is still preserved as a native popup", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+
+  // The popup window type alone preserves the flow; no opener is required.
+  const popup = await env.chrome.windows.create({ url: "https://popup.example/", type: "popup" });
+  const before = env.journal().length;
+
+  await env.createdNavigationTarget({
+    tabId: popup.tabs[0].id,
+    sourceTabId: source.tabs[0].id,
+    url: "https://popup.example/",
+  });
+
+  const after = env.journal().slice(before);
+  assert.equal(after.some((e) => e.op === "windows.create"), false);
+  assert.equal(after.some((e) => e.op === "tabs.update"), false);
+  assert.equal(after.some((e) => e.op === "tabs.remove"), false);
+  assert.ok(env.windows().find((w) => w.id === popup.id));
+  assert.deepEqual(Object.keys(env.registry()), [String(source.id)]);
+});
+
+test("a guarded auth target in a normal window keeps its native tab and opener", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+
+  const spawned = await env.chrome.tabs.create({
+    windowId: normal.id,
+    url: "https://accounts.google.com/o/oauth2/auth?client_id=example",
+    openerTabId: source.tabs[0].id,
+    active: true,
+  });
+  const before = env.journal().length;
+
+  await env.createdNavigationTarget({
+    tabId: spawned.id,
+    sourceTabId: source.tabs[0].id,
+    url: "https://accounts.google.com/o/oauth2/auth?client_id=example",
+  });
+
+  const after = env.journal().slice(before);
+  assert.equal(after.some((e) => e.op === "windows.create"), false, "an auth flow is never re-parented");
+  assert.equal(after.some((e) => e.op === "tabs.update"), false, "the source lil is not navigated");
+  assert.equal(after.some((e) => e.op === "tabs.remove"), false, "the auth tab is never closed");
+  const spawnedNow = env.windows().find((w) => w.id === normal.id).tabs.find((t) => t.id === spawned.id);
+  assert.ok(spawnedNow, "the auth tab keeps its native window");
+  assert.equal(spawnedNow.openerTabId, source.tabs[0].id, "the auth tab keeps its opener");
+  assert.deepEqual(Object.keys(env.registry()), [String(source.id)]);
+});
+
+test("a guarded auth host-suffix target is preserved", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+
+  const spawned = await env.chrome.tabs.create({
+    windowId: normal.id,
+    url: "https://lil-chromium.auth0.com/authorize?client_id=example",
+    openerTabId: source.tabs[0].id,
+    active: true,
+  });
+
+  await env.createdNavigationTarget({
+    tabId: spawned.id,
+    sourceTabId: source.tabs[0].id,
+    url: "https://lil-chromium.auth0.com/authorize?client_id=example",
+  });
+
+  assert.equal(
+    journalHas(env, "windows.create", (e) => e.create.tabId === spawned.id),
+    false,
+    "an auth0-hosted flow is never re-parented"
+  );
+  assert.ok(env.windows().find((w) => w.id === normal.id).tabs.some((t) => t.id === spawned.id));
+  assert.equal(env.windows().find((w) => w.id === source.id).tabs[0].url, "https://lil.example/");
+  assert.deepEqual(Object.keys(env.registry()), [String(source.id)]);
+});
+
+test("an ordinary same-target link navigates the current lil without creating another window", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const lil = env.windows()[0];
+  const before = env.journal().length;
+
+  // An ordinary in-place navigation raises no navigation-target event.
+  await env.chrome.tabs.update(lil.tabs[0].id, { url: "https://lil.example/next" });
+  await env.flush();
+
+  const after = env.journal().slice(before);
+  assert.equal(after.some((e) => e.op === "windows.create"), false, "no new window");
+  assert.equal(after.some((e) => e.op === "tabs.remove"), false, "no tab removed");
+  assert.equal(env.windows().length, 1);
+  assert.equal(env.windows()[0].id, lil.id);
+  assert.equal(env.windows()[0].tabs[0].url, "https://lil.example/next");
+  assert.equal(
+    env.registry()[String(lil.id)].url,
+    "https://lil.example/next",
+    "the registry follows the in-place navigation"
+  );
+});
+
+test("same-lil handling navigates the source, removes the spawned target, and restores focus", async () => {
+  const env = await boot();
+  await env.deliver({ ...fixture("message-context"), linkBehavior: "same-lil" });
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+  const spawned = await env.chrome.tabs.create({
+    windowId: normal.id,
+    url: "https://spawned.example/",
+    openerTabId: source.tabs[0].id,
+    active: true,
+  });
+  // The spawn raised its normal host window.
+  await env.chrome.windows.update(normal.id, { focused: true });
+  await env.flush();
+  const before = env.journal().length;
+
+  await env.createdNavigationTarget({
+    tabId: spawned.id,
+    sourceTabId: source.tabs[0].id,
+    url: "https://spawned.example/",
+  });
+
+  const sourceNow = env.windows().find((w) => w.id === source.id);
+  assert.equal(sourceNow.tabs[0].url, "https://spawned.example/", "the source lil navigates");
+  await assert.rejects(() => env.chrome.tabs.get(spawned.id), /No tab with id/, "the spawned target is removed");
+  assert.equal(env.windows().filter((w) => w.type === "popup").length, 1, "no new window is created");
+  assert.equal(sourceNow.focused, true, "focus is explicitly restored to the source lil");
+
+  const after = env.journal().slice(before);
+  const navigated = after.findIndex(
+    (e) => e.op === "tabs.update" && e.tabId === source.tabs[0].id && e.update.url === "https://spawned.example/"
+  );
+  const removed = after.findIndex((e) => e.op === "tabs.remove" && e.tabId === spawned.id);
+  const refocused = after.findIndex(
+    (e) => e.op === "windows.update" && e.windowId === source.id && e.update.focused === true
+  );
+  assert.ok(navigated >= 0 && removed > navigated && refocused > removed, "navigate → remove → refocus, in that order");
+  assert.equal(after.some((e) => e.op === "windows.create"), false);
+  assert.deepEqual(Object.keys(env.registry()), [String(source.id)]);
+});
+
+test("a requested target follows the live hot-applied linkBehavior", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context")); // new-lil
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+
+  // A native Settings write flips the behavior without any reload (issue #12).
+  await env.deliver(fixture("message-config-update")); // same-lil
+  const spawned = await env.chrome.tabs.create({
+    windowId: normal.id,
+    url: "https://spawned.example/",
+    openerTabId: source.tabs[0].id,
+    active: true,
+  });
+  await env.createdNavigationTarget({
+    tabId: spawned.id,
+    sourceTabId: source.tabs[0].id,
+    url: "https://spawned.example/",
+  });
+
+  const sourceNow = env.windows().find((w) => w.id === source.id);
+  assert.equal(sourceNow.tabs[0].url, "https://spawned.example/", "same-lil applies from the live config");
+  await assert.rejects(() => env.chrome.tabs.get(spawned.id), /No tab with id/);
+  assert.equal(env.windows().filter((w) => w.type === "popup").length, 1);
+});
+
+test("a Command-click flips the configured new-lil behavior for that target only", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context")); // new-lil
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+
+  await env.message({ action: "clickHint", url: "https://spawned.example/", meta: true, ts: Date.now() });
+  const spawned = await env.chrome.tabs.create({
+    windowId: normal.id,
+    url: "https://spawned.example/",
+    openerTabId: source.tabs[0].id,
+    active: true,
+  });
+  await env.createdNavigationTarget({
+    tabId: spawned.id,
+    sourceTabId: source.tabs[0].id,
+    url: "https://spawned.example/",
+  });
+
+  const sourceNow = env.windows().find((w) => w.id === source.id);
+  assert.equal(sourceNow.tabs[0].url, "https://spawned.example/", "⌘-click collapses into the source lil");
+  await assert.rejects(() => env.chrome.tabs.get(spawned.id), /No tab with id/);
+  assert.equal(env.windows().filter((w) => w.type === "popup").length, 1);
+
+  // The hint was consumed: the same target without a new hint follows the config.
+  const again = await env.chrome.tabs.create({
+    windowId: normal.id,
+    url: "https://spawned.example/",
+    openerTabId: source.tabs[0].id,
+    active: true,
+  });
+  await env.createdNavigationTarget({
+    tabId: again.id,
+    sourceTabId: source.tabs[0].id,
+    url: "https://spawned.example/",
+  });
+  const cascaded = env.windows().find((w) => w.type === "popup" && w.id !== source.id);
+  assert.ok(cascaded, "the next spawn without a hint follows the configured new-lil behavior");
+  assert.equal(cascaded.tabs[0].id, again.id);
+});
+
+test("a Command-click flips the configured same-lil behavior for that target only", async () => {
+  const env = await boot();
+  await env.deliver({ ...fixture("message-context"), linkBehavior: "same-lil" });
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+
+  await env.message({ action: "clickHint", url: "https://spawned.example/", meta: true, ts: Date.now() });
+  const spawned = await env.chrome.tabs.create({
+    windowId: normal.id,
+    url: "https://spawned.example/",
+    openerTabId: source.tabs[0].id,
+    active: true,
+  });
+  await env.createdNavigationTarget({
+    tabId: spawned.id,
+    sourceTabId: source.tabs[0].id,
+    url: "https://spawned.example/",
+  });
+
+  const cascaded = env.windows().find((w) => w.type === "popup" && w.id !== source.id);
+  assert.ok(cascaded, "⌘-click cascades into a new lil despite same-lil config");
+  assert.equal(cascaded.tabs[0].id, spawned.id);
+  assert.equal(
+    env.windows().find((w) => w.id === source.id).tabs[0].url,
+    "https://lil.example/",
+    "the source lil is not navigated"
+  );
+});
+
+test("classification waits for the spawned tab to settle and reads its final navigation state", async () => {
+  const env = await boot({ settleMisses: { "https://redirector.example/": 1 } });
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+  const spawned = await env.chrome.tabs.create({
+    windowId: normal.id,
+    url: "https://redirector.example/",
+    openerTabId: source.tabs[0].id,
+    active: true,
+  });
+
+  // The target redirects onto a guarded auth URL while the worker settles.
+  const fired = env.createdNavigationTarget({
+    tabId: spawned.id,
+    sourceTabId: source.tabs[0].id,
+    url: "https://redirector.example/",
+  });
+  await env.chrome.tabs.update(spawned.id, {
+    url: "https://accounts.google.com/o/oauth2/auth?client_id=example",
+  });
+  await fired;
+
+  assert.equal(
+    journalHas(env, "windows.create", (e) => e.create.tabId === spawned.id),
+    false,
+    "a guarded final URL is preserved even though the requested URL was innocent"
+  );
+  assert.ok(env.windows().find((w) => w.id === normal.id).tabs.some((t) => t.id === spawned.id));
+  assert.equal(env.windows().find((w) => w.id === source.id).tabs[0].url, "https://lil.example/");
+  assert.deepEqual(Object.keys(env.registry()), [String(source.id)]);
+});
+
+test("a spawned tab that settles late is still classified and cascaded", async () => {
+  const env = await boot({ settleMisses: { "https://spawned.example/": 2 } });
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+  const spawned = await env.chrome.tabs.create({
+    windowId: normal.id,
+    url: "https://spawned.example/",
+    openerTabId: source.tabs[0].id,
+    active: true,
+  });
+
+  await env.createdNavigationTarget({
+    tabId: spawned.id,
+    sourceTabId: source.tabs[0].id,
+    url: "https://spawned.example/",
+  });
+
+  const cascaded = env.windows().find((w) => w.type === "popup" && w.id !== source.id);
+  assert.ok(cascaded, "the settle wait still reaches the configured behavior");
+  assert.equal(cascaded.tabs[0].id, spawned.id);
+  assert.ok(env.registry()[String(cascaded.id)]);
+});
+
+test("a spawned tab that never settles is left untouched", async () => {
+  const env = await boot({ settleMisses: { "https://ghost.example/": 99 } });
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+  const spawned = await env.chrome.tabs.create({
+    windowId: normal.id,
+    url: "https://ghost.example/",
+    openerTabId: source.tabs[0].id,
+    active: true,
+  });
+  const before = env.journal().length;
+
+  await env.createdNavigationTarget({
+    tabId: spawned.id,
+    sourceTabId: source.tabs[0].id,
+    url: "https://ghost.example/",
+  });
+
+  const after = env.journal().slice(before);
+  assert.equal(after.some((e) => e.op === "windows.create"), false, "no classification without settled state");
+  assert.equal(after.some((e) => e.op === "tabs.update"), false);
+  assert.equal(after.some((e) => e.op === "tabs.remove"), false);
+  assert.ok(env.windows().find((w) => w.id === normal.id).tabs.some((t) => t.id === spawned.id));
+  assert.equal(env.windows().find((w) => w.id === source.id).tabs[0].url, "https://lil.example/");
+  assert.deepEqual(Object.keys(env.registry()), [String(source.id)]);
+});
+
+test("new-lil handling focuses only the new lil and never raises the host window", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+  const spawned = await env.chrome.tabs.create({
+    windowId: normal.id,
+    url: "https://spawned.example/",
+    openerTabId: source.tabs[0].id,
+    active: true,
+  });
+  // Chromium raises the spawn's normal host window for the active new tab.
+  await env.chrome.windows.update(normal.id, { focused: true });
+  await env.flush();
+  const before = env.journal().length;
+
+  await env.createdNavigationTarget({
+    tabId: spawned.id,
+    sourceTabId: source.tabs[0].id,
+    url: "https://spawned.example/",
+  });
+
+  const cascaded = env.windows().find((w) => w.type === "popup" && w.id !== source.id);
+  assert.ok(cascaded);
+  assert.equal(cascaded.focused, true, "only the new lil ends focused");
+  assert.equal(env.windows().find((w) => w.id === normal.id).focused, false);
+  const after = env.journal().slice(before);
+  assert.equal(
+    after.some((e) => e.op === "windows.update" && e.windowId === normal.id && e.update.focused === true),
+    false,
+    "the incidental host window is never raised"
+  );
+  assert.equal(
+    after.some((e) => e.op === "windows.update" && e.windowId === source.id && e.update.focused === true),
+    false,
+    "the source lil is not re-raised either"
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(env.registry()[String(cascaded.id)].priorContext)), {
+    kind: "lil",
+    windowId: source.id,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Lifecycle entry paths (issue #5). Every create / adopt / restore path and the
 // registry + focus effects it is required to produce.
 // ---------------------------------------------------------------------------
@@ -1863,7 +2329,7 @@ async function linkSpawnFromLil(env, { windowId, url, sourceTabId }) {
   return entry.tabId;
 }
 
-test("an opener-less link spawn is left alone even when tabs.onCreated runs before the navigation claim", async () => {
+test("an opener-less link spawn is owned by the link flow even when tabs.onCreated runs first", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));
   const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
@@ -1872,24 +2338,30 @@ test("an opener-less link spawn is left alone even when tabs.onCreated runs befo
   assert.equal(source.focused, true);
 
   // rel="noopener" style spawn: no openerTabId, so only the
-  // onCreatedNavigationTarget event ties it to the link flow.
+  // onCreatedNavigationTarget event ties it to the link flow. The claim wins
+  // over the in-flight new-tab flow regardless of listener order (issue #18).
   const spawnedId = await linkSpawnFromLil(env, {
     windowId: normal.id,
     url: "https://noopener.example/",
     sourceTabId: source.tabs[0].id,
   });
 
-  assert.equal(env.windows().filter((w) => w.type === "popup").length, 1, "the new-tab flow never converted the spawn");
   assert.equal(
-    journalHas(env, "windows.create", (e) => e.create.tabId === spawnedId),
-    false,
-    "the spawn was never re-parented into a lil"
+    env.journal().filter((e) => e.op === "windows.create" && e.create.tabId === spawnedId).length,
+    1,
+    "exactly one flow re-parents the claimed spawn — never both"
   );
+  const cascaded = env.windows().find((w) => w.type === "popup" && w.id !== source.id);
+  assert.ok(cascaded, "the link flow cascades a genuine requested target (issue #16)");
+  assert.equal(cascaded.tabs[0].id, spawnedId);
+  assert.deepEqual(JSON.parse(JSON.stringify(env.registry()[String(cascaded.id)].priorContext)), {
+    kind: "lil",
+    windowId: source.id,
+  });
   const hostNow = env.windows().find((w) => w.id === normal.id);
-  assert.ok(hostNow.tabs.some((t) => t.id === spawnedId), "the spawn stayed in its normal window");
+  assert.equal(hostNow.tabs.some((t) => t.id === spawnedId), false, "the spawn left its normal window");
   const sourceNow = env.windows().find((w) => w.id === source.id);
-  assert.equal(sourceNow.tabs[0].url, "https://lil.example/", "the link flow's leave-alone rule held");
-  assert.deepEqual(Object.keys(env.registry()), [String(source.id)]);
+  assert.equal(sourceNow.tabs[0].url, "https://lil.example/", "the source lil is not navigated");
 });
 
 test("an OAuth link spawn is left alone even when tabs.onCreated runs before the navigation claim", async () => {
