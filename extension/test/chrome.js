@@ -82,6 +82,8 @@ export function createChrome(options = {}) {
   // true ⇒ the call rejects.
   const rejectTabUpdate = options.rejectTabUpdate || (() => false);
   const rejectTabRemove = options.rejectTabRemove || (() => false);
+  // Fault injection: predicate over the tabs.query filter; true ⇒ the call rejects.
+  const rejectTabQuery = options.rejectTabQuery || (() => false);
   let lastError = undefined;
   let nextWindowId = 1;
   let nextTabId = 1;
@@ -366,6 +368,7 @@ export function createChrome(options = {}) {
         return snapshotTab(tab);
       },
       async query(q = {}) {
+        if (rejectTabQuery(q)) return Promise.reject(new Error("tabs.query failed"));
         let list = [...tabs.values()];
         if (q.windowId !== undefined) list = list.filter((t) => t.windowId === q.windowId);
         if (q.active !== undefined) list = list.filter((t) => t.active === q.active);

@@ -1697,6 +1697,115 @@ test("when an inactive same-window wake preload reports its original URL, nap st
   assert.ok(env.captures().has(captureKey), "the capture stays referenced, not orphaned");
 });
 
+test("a redirect on the fresh document mid-swap cannot clear nap state before the nap tab is gone", async () => {
+  const REDIRECTED_URL = "https://example.com/docs?ref=redirect";
+  let napTabId = null;
+  let freshTabId = null;
+  const env = await boot({
+    clock: true,
+    // The nap tab refuses to close at the one moment the fresh document is
+    // already active — and the fresh page finishes a redirect right then, so
+    // the leftover-nap backstop sees an active tab off the nap URL while the
+    // swap is still reversible.
+    rejectTabRemove: (id) => {
+      if (id !== napTabId) return false;
+      void env.chrome.tabs.update(freshTabId, { url: REDIRECTED_URL });
+      return true;
+    },
+  });
+  const lil = await openTitledLil(env);
+  const originalUrl = lil.tabs[0].url;
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+  napTabId = napping.tabs[0].id;
+  const captureKey = env.registry()[String(lil.id)].sleepCaptureKey;
+
+  const reply = env.messageLater({ action: "wakeLil" }, sender(napping));
+  await env.flush();
+  freshTabId = env.windows().find((w) => w.id === lil.id).tabs.find((t) => t.id !== napTabId).id;
+  await env.setTabState(freshTabId, { status: "complete" });
+  await env.clock.advance(180);
+  await env.flush();
+
+  assert.equal((await reply).ok, false, "the nap document was never replaced, so wake failed");
+
+  // The nap document is back in front, alone, and every nap fact still holds.
+  const win = env.windows().find((w) => w.id === lil.id);
+  assert.deepEqual(win.tabs.map((t) => t.id), [napTabId], "the preload is dropped");
+  assert.equal(win.tabs[0].active, true);
+  assert.match(win.tabs[0].url, NAP_PAGE);
+  const entry = env.registry()[String(lil.id)];
+  assert.ok(entry, "the lil stays registered");
+  assert.equal(entry.slept, true);
+  assert.equal(entry.sleepCaptureKey, captureKey);
+  assert.equal(entry.originalUrl, originalUrl);
+  assert.equal(entry.originalTitle, ORIGINAL_PAGE_TITLE);
+  assert.ok(env.captures().has(captureKey), "the capture stays referenced, not orphaned");
+});
+
+test("a mid-swap redirect handled only after the rollback still cannot clear nap state", async () => {
+  const REDIRECTED_URL = "https://example.com/docs?ref=redirect";
+  let napTabId = null;
+  const env = await boot({ clock: true, rejectTabRemove: (id) => id === napTabId });
+  const lil = await openTitledLil(env);
+  const originalUrl = lil.tabs[0].url;
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+  napTabId = napping.tabs[0].id;
+  const captureKey = env.registry()[String(lil.id)].sleepCaptureKey;
+
+  const reply = env.messageLater({ action: "wakeLil" }, sender(napping));
+  await env.flush();
+  const freshTabId = env.windows().find((w) => w.id === lil.id).tabs.find((t) => t.id !== napTabId).id;
+  await env.setTabState(freshTabId, { status: "complete" });
+  await env.clock.advance(180);
+  await env.flush();
+  assert.equal((await reply).ok, false, "removal failed, so the swap rolled back");
+
+  // Chrome queued this redirect while the fresh document was active and the
+  // swap was still reversible, but the worker only reaches the listener now —
+  // after the rollback. Anything the swap sampled about itself is already gone,
+  // so the decision has to rest on what is true of the window right now.
+  await env.chrome.tabs.onUpdated.fire(
+    freshTabId,
+    { url: REDIRECTED_URL },
+    { id: freshTabId, windowId: lil.id, active: true, url: REDIRECTED_URL }
+  );
+  await env.flush();
+
+  const entry = env.registry()[String(lil.id)];
+  assert.ok(entry, "the lil stays registered");
+  assert.equal(entry.slept, true, "the nap document is still in front, so nap state is not leftover");
+  assert.equal(entry.sleepCaptureKey, captureKey);
+  assert.equal(entry.originalUrl, originalUrl);
+  assert.equal(entry.originalTitle, ORIGINAL_PAGE_TITLE);
+  assert.ok(env.captures().has(captureKey), "the capture stays referenced, not orphaned");
+});
+
+test("when the worker cannot tell whether a nap document remains, nap state stays truthful", async () => {
+  // Only the leftover check asks for a window's tabs without an active filter.
+  const env = await boot({ rejectTabQuery: (q) => q.windowId !== undefined && q.active === undefined });
+  const lil = await openTitledLil(env);
+  const originalUrl = lil.tabs[0].url;
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+  const captureKey = env.registry()[String(lil.id)].sleepCaptureKey;
+  assert.ok(env.captures().has(captureKey));
+
+  // The visible document left the nap URL, but the worker cannot find out
+  // whether a nap document is still around. Clearing would be a guess, and a
+  // wrong guess destroys the capture the nap still needs.
+  await env.chrome.tabs.update(napping.tabs[0].id, { url: originalUrl });
+  await env.flush();
+
+  const entry = env.registry()[String(lil.id)];
+  assert.ok(entry, "the lil stays registered");
+  assert.equal(entry.slept, true, "uncertainty leaves the nap truth alone");
+  assert.equal(entry.sleepCaptureKey, captureKey);
+  assert.equal(entry.originalUrl, originalUrl);
+  assert.ok(env.captures().has(captureKey), "the capture is not deleted on a guess");
+});
+
 test("unknown config fields are not required for the worker to apply known ones", async () => {
   const cfg = fixture("config-with-unknown-fields");
   const env = await boot();

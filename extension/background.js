@@ -820,9 +820,10 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     // If the active, user-visible document has left the nap URL (page fallback
     // whose own cleanup hung), finish the leftover registry/capture work.
     // An inactive same-window wake preload reporting the original URL is not
-    // a completed wake and must not clear nap state.
+    // a completed wake and must not clear nap state; neither is the fresh
+    // document of a swap that still has a nap document to fall back to.
     if (reg[key].slept) {
-      if (tab.active && !isSleepPageUrl(changeInfo.url)) {
+      if (tab.active && !isSleepPageUrl(changeInfo.url) && !(await napDocumentMayRemain(tab.windowId))) {
         await clearNapState(
           tab.windowId,
           reg[key].originalUrl || changeInfo.url,
@@ -1150,6 +1151,18 @@ function isSleepPageUrl(url) {
   if (typeof url !== "string" || !url) return false;
   const nap = chrome.runtime.getURL("sleep.html");
   return url === nap || url.startsWith(nap + "?");
+}
+
+// Might a nap document still exist anywhere in this lil window? Nap state is
+// only leftover once none does: while one remains — a wake swap still in
+// flight, a rollback that put it back in front — the registry is telling the
+// truth. Asked at the moment of clearing, so a stale event cannot act on a
+// window that has since changed. An unanswerable query counts as "may remain":
+// clearing on a guess would delete a capture the nap still needs, while
+// keeping it costs only a later event or the sweep's orphan pass.
+async function napDocumentMayRemain(windowId) {
+  const tabs = await safe(chrome.tabs.query({ windowId }), "tabs.query nap leftover");
+  return !tabs || tabs.some((t) => isSleepPageUrl(t.url) || isSleepPageUrl(t.pendingUrl));
 }
 
 // Release the original document by replacing the current history entry so the

@@ -190,9 +190,13 @@ if (typeof window !== "undefined" && window.SLEEPING_LIL_DATA) {
     }
   }
 
-  // Hung storage/IDB must not hold the document. Cleanup may still finish
-  // after this bound (and the worker reconciles leftovers on URL change).
-  const CLEANUP_BOUND_MS = 0;
+  // Long enough for storage and IndexedDB to answer — they cross a process
+  // boundary, so a zero bound would leave every time and abandon the cleanup
+  // it just started — but short enough that a hung call cannot hold the
+  // document: it fits inside the worker's own 180 ms image floor. Leftovers
+  // past this bound belong to the worker's URL-change backstop and the sweep's
+  // orphan-capture pass.
+  const CLEANUP_BOUND_MS = 150;
 
   function leaveNap() {
     if (!originalUrl) return;
