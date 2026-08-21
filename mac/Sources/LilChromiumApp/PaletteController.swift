@@ -362,11 +362,11 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         guard let flags = NSApp.currentEvent?.modifierFlags else {
             return currentReturnChord
         }
-        return returnChord(from: flags)
+        return Self.returnChord(from: flags)
     }
 
     /// Lock state and key-origin metadata are intentionally not chord keys.
-    private func returnChord(from flags: NSEvent.ModifierFlags) -> PaletteReturnChord {
+    static func returnChord(from flags: NSEvent.ModifierFlags) -> PaletteReturnChord {
         var chord: PaletteReturnChord = .plain
         if flags.contains(.shift) { chord.insert(.shift) }
         if flags.contains(.command) { chord.insert(.command) }
@@ -378,7 +378,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// Called by PalettePanel for each flagsChanged event while it is key.
     /// Reconfiguring the selected row makes its hint follow held modifiers.
     func modifierFlagsDidChange(_ flags: NSEvent.ModifierFlags) {
-        let chord = returnChord(from: flags)
+        let chord = Self.returnChord(from: flags)
         guard chord != currentReturnChord else { return }
         currentReturnChord = chord
         refreshSelectionHighlight()
