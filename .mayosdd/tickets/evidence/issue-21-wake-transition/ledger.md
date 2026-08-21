@@ -49,3 +49,7 @@ Review `GZd8CjNa` found P5 resolved with no new fix-delta defects.
 ## Chrome-extension skill review
 
 Claude Opus 5 High reviewed the completed issue #21 implementation against `/chrome-extension`. F1 and F3 are owed. F2 is evidence-gated; F4, F5, O1, and O2 are settled as above so remediation and final reviewers do not expand scope.
+
+## Chrome-extension remediation review
+
+Review `MU178iy8` found F1 and F3 resolved with no new fix-delta defects or ledger regressions.
