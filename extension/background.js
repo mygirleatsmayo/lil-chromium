@@ -1339,7 +1339,7 @@ async function openLinkInThisLil(windowId, url) {
   const tabs = await safe(chrome.tabs.query({ windowId, active: true }), "tabs.query lil");
   const tab = tabs && tabs[0];
   if (tab && tab.id !== undefined) {
-    await safe(chrome.tabs.update(tab.id, { url }), "tabs.update ctxmenu same-lil");
+    await safe(chrome.tabs.update(tab.id, { url }), "tabs.update ctxmenu this-lil");
   }
 }
 
@@ -1364,7 +1364,7 @@ async function openLinkInNewLil(tab, url) {
 async function openLinkInIncognitoLil(tab, url) {
   if (typeof url !== "string" || !url || !tab || tab.windowId === undefined) return null;
   const explain = () => {
-    queueIncognitoHint(tab.windowId);
+    broadcastToWindow(tab.windowId, { action: "incognitoHint" });
     return null;
   };
   const allowed = await safe(chrome.extension.isAllowedIncognitoAccess(), "isAllowedIncognitoAccess");
@@ -1732,7 +1732,7 @@ chrome.commands.onCommand.addListener(async (command) => {
 // ===========================================================================
 
 const CTX_NEW_LIL = "open-link-new-lil";
-const CTX_SAME_LIL = "open-link-same-lil";
+const CTX_THIS_LIL = "open-link-this-lil";
 const CTX_INCOGNITO_LIL = "open-link-incognito-lil";
 const CTX_SLEEP = "sleep-this-lil";
 const CTX_WHITELIST = "toggle-whitelist";
@@ -1756,7 +1756,7 @@ function contextActionSnapshot(tab, registeredLil) {
 
 function contextActionAllowed(menuItemId, snap) {
   switch (menuItemId) {
-    case CTX_SAME_LIL:
+    case CTX_THIS_LIL:
       return snap.registeredLil;
     case CTX_NEW_LIL:
       return snap.registeredLil || snap.normalPage;
@@ -1778,27 +1778,55 @@ function createContextMenus() {
   chrome.contextMenus.removeAll(() => {
     void chrome.runtime.lastError;
     try {
-      chrome.contextMenus.create({ id: CTX_NEW_LIL, title: "Open link in new lil", contexts: ["link"] });
-      chrome.contextMenus.create({ id: CTX_SAME_LIL, title: "Open link in this lil", contexts: ["link"] });
+      // Hidden until the shared policy runs; Chrome otherwise shows every item.
+      chrome.contextMenus.create({
+        id: CTX_NEW_LIL,
+        title: "Open link in new lil",
+        contexts: ["link"],
+        visible: false,
+      });
+      chrome.contextMenus.create({
+        id: CTX_THIS_LIL,
+        title: "Open link in this lil",
+        contexts: ["link"],
+        visible: false,
+      });
       chrome.contextMenus.create({
         id: CTX_INCOGNITO_LIL,
         title: "Open link in incognito lil",
         contexts: ["link"],
+        visible: false,
       });
-      chrome.contextMenus.create({ id: CTX_SLEEP, title: "Sleep this lil", contexts: ["page"] });
-      chrome.contextMenus.create({ id: CTX_WHITELIST, title: "Never sleep this site", contexts: ["page"] });
-      chrome.contextMenus.create({ id: CTX_SEND_TO_LIL, title: "Send to lil", contexts: ["page"] });
+      chrome.contextMenus.create({
+        id: CTX_SLEEP,
+        title: "Sleep this lil",
+        contexts: ["page"],
+        visible: false,
+      });
+      chrome.contextMenus.create({
+        id: CTX_WHITELIST,
+        title: "Never sleep this site",
+        contexts: ["page"],
+        visible: false,
+      });
+      chrome.contextMenus.create({
+        id: CTX_SEND_TO_LIL,
+        title: "Send to lil",
+        contexts: ["page"],
+        visible: false,
+      });
     } catch (err) {
       log("contextMenus.create error", err && err.message ? err.message : err);
     }
     createTabStripSend();
+    void applyContextMenusForFocusedTab();
   });
 }
 
 function createTabStripSend() {
   try {
     chrome.contextMenus.create(
-      { id: CTX_SEND_TAB_TO_LIL, title: "Send Tab to Lil", contexts: ["tab"] },
+      { id: CTX_SEND_TAB_TO_LIL, title: "Send Tab to Lil", contexts: ["tab"], visible: false },
       () => {
         const err = chrome.runtime.lastError;
         if (err) log("Send Tab to Lil omitted", err.message);
@@ -1822,7 +1850,7 @@ async function updateContextMenusForTab(tab) {
     chrome.contextMenus.update(id, props, () => void chrome.runtime.lastError);
   };
 
-  setItem(CTX_SAME_LIL, { visible: contextActionAllowed(CTX_SAME_LIL, snap) });
+  setItem(CTX_THIS_LIL, { visible: contextActionAllowed(CTX_THIS_LIL, snap) });
   setItem(CTX_NEW_LIL, { visible: contextActionAllowed(CTX_NEW_LIL, snap) });
   setItem(CTX_INCOGNITO_LIL, { visible: contextActionAllowed(CTX_INCOGNITO_LIL, snap) });
   setItem(CTX_SLEEP, { visible: contextActionAllowed(CTX_SLEEP, snap) });
@@ -1869,7 +1897,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       case CTX_NEW_LIL:
         if (info.linkUrl) await openLinkInNewLil(tab, info.linkUrl);
         return;
-      case CTX_SAME_LIL:
+      case CTX_THIS_LIL:
         if (info.linkUrl) await openLinkInThisLil(tab.windowId, info.linkUrl);
         return;
       case CTX_INCOGNITO_LIL:
@@ -1903,10 +1931,19 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // LIFECYCLE
 // ===========================================================================
 
+async function applyContextMenusForFocusedTab() {
+  const tabs = await safe(
+    chrome.tabs.query({ active: true, lastFocusedWindow: true }),
+    "tabs.query menu policy"
+  );
+  if (tabs && tabs[0]) await updateContextMenusForTab(tabs[0]);
+}
+
 chrome.runtime.onStartup.addListener(async () => {
   connectNative();
   await ensureSweepAlarm();
   await restoreWindows();
+  await applyContextMenusForFocusedTab();
 });
 
 chrome.runtime.onInstalled.addListener(async () => {

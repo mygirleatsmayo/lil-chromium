@@ -419,6 +419,22 @@ test("Open link in incognito lil without access explains and does not de-privati
   );
 });
 
+test("context-menu incognito explain does not leave a pending mount hint", async () => {
+  const env = await boot({ incognitoAllowed: false });
+  await env.deliver(fixture("message-context"));
+  await env.installed();
+  const normal = await env.chrome.windows.create({ url: "https://mail.example/", type: "normal" });
+  const tab = { id: normal.tabs[0].id, windowId: normal.id, url: normal.tabs[0].url };
+
+  await env.clickMenu("open-link-incognito-lil", tab, { linkUrl: "https://secret.example/" });
+
+  assert.ok(
+    journalHas(env, "tabs.sendMessage", (e) => e.tabId === tab.id && e.message.action === "incognitoHint")
+  );
+  const pending = await env.message({ action: "pendingIncognitoHint" }, sender(env.windows()[0]));
+  assert.equal(pending.hint, false);
+});
+
 test("Open link in incognito lil from a normal tab creates an unregistered incognito lil", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));
@@ -479,6 +495,37 @@ test("Open link in new lil from a normal tab creates a focused registered lil", 
   assert.ok(journalHas(env, "windows.update", (e) => e.windowId === lil.id && e.update.focused === true));
 });
 
+test("install does not show context-dependent menus until policy decides", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.installed();
+
+  for (const id of [
+    "open-link-this-lil",
+    "open-link-new-lil",
+    "open-link-incognito-lil",
+    "sleep-this-lil",
+    "toggle-whitelist",
+    "send-to-lil",
+    "send-tab-to-lil",
+  ]) {
+    assert.equal(menu(env, id).visible, false, `${id} must stay hidden before the first policy decision`);
+  }
+});
+
+test("install with an existing page applies the shared policy before any item can appear", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.chrome.windows.create({ url: "https://mail.example/", type: "normal" });
+  await env.installed();
+
+  assert.equal(menu(env, "open-link-this-lil").visible, false);
+  assert.equal(menu(env, "send-to-lil").visible, true);
+  assert.equal(menu(env, "open-link-new-lil").visible, true);
+  assert.equal(menu(env, "open-link-incognito-lil").visible, true);
+  assert.equal(menu(env, "sleep-this-lil").visible, false);
+});
+
 test("Open link in new lil and incognito lil are offered on normal and registered-lil pages", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));
@@ -487,13 +534,13 @@ test("Open link in new lil and incognito lil are offered on normal and registere
   const normal = await env.chrome.windows.create({ url: "https://mail.example/", type: "normal" });
   assert.equal(menu(env, "open-link-new-lil").visible, true);
   assert.equal(menu(env, "open-link-incognito-lil").visible, true);
-  assert.equal(menu(env, "open-link-same-lil").visible, false);
+  assert.equal(menu(env, "open-link-this-lil").visible, false);
   assert.equal(menu(env, "send-to-lil").visible, true);
 
   await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
   assert.equal(menu(env, "open-link-new-lil").visible, true);
   assert.equal(menu(env, "open-link-incognito-lil").visible, true);
-  assert.equal(menu(env, "open-link-same-lil").visible, true);
+  assert.equal(menu(env, "open-link-this-lil").visible, true);
   assert.equal(menu(env, "send-to-lil").visible, false);
   assert.equal(menu(env, "sleep-this-lil").visible, true);
   assert.ok(env.windows().some((w) => w.id === normal.id));
@@ -507,9 +554,9 @@ test("Open link in this lil navigates the current registered lil", async () => {
   const lil = env.windows()[0];
   const tab = { id: lil.tabs[0].id, windowId: lil.id, url: lil.tabs[0].url };
 
-  assert.equal(menu(env, "open-link-same-lil").visible, true);
+  assert.equal(menu(env, "open-link-this-lil").visible, true);
 
-  await env.clickMenu("open-link-same-lil", tab, { linkUrl: "https://next.example/" });
+  await env.clickMenu("open-link-this-lil", tab, { linkUrl: "https://next.example/" });
   assert.equal(env.windows().find((w) => w.id === lil.id).tabs[0].url, "https://next.example/");
   assert.equal(env.windows().length, 1);
   assert.ok(env.registry()[String(lil.id)]);
@@ -522,9 +569,9 @@ test("Open link in this lil is hidden and inert outside a registered lil", async
   const normal = await env.chrome.windows.create({ url: "https://mail.example/", type: "normal" });
   const tab = { id: normal.tabs[0].id, windowId: normal.id, url: normal.tabs[0].url };
 
-  assert.equal(menu(env, "open-link-same-lil").visible, false);
+  assert.equal(menu(env, "open-link-this-lil").visible, false);
 
-  await env.clickMenu("open-link-same-lil", tab, { linkUrl: "https://other.example/" });
+  await env.clickMenu("open-link-this-lil", tab, { linkUrl: "https://other.example/" });
   assert.equal(env.windows().find((w) => w.id === normal.id).tabs[0].url, "https://mail.example/");
   assert.equal(
     env.windows().some((w) => w.tabs.some((t) => t.url === "https://other.example/")),
@@ -548,7 +595,7 @@ test("incognito menus omit this-lil, new-lil, and send so the URL stays private"
     url: privateWin.tabs[0].url,
     incognito: true,
   };
-  assert.equal(menu(env, "open-link-same-lil").visible, false);
+  assert.equal(menu(env, "open-link-this-lil").visible, false);
   assert.equal(menu(env, "open-link-new-lil").visible, false);
   assert.equal(menu(env, "send-to-lil").visible, false);
   assert.equal(menu(env, "send-tab-to-lil").visible, false);
@@ -565,7 +612,7 @@ test("incognito menus omit this-lil, new-lil, and send so the URL stays private"
   await env.deliver({ type: "open", url: "https://secret-lil.example/", incognito: true, left: 10, top: 10 });
   const secretLil = env.windows().find((w) => w.type === "popup" && w.incognito);
   assert.ok(secretLil);
-  assert.equal(menu(env, "open-link-same-lil").visible, false);
+  assert.equal(menu(env, "open-link-this-lil").visible, false);
   assert.equal(menu(env, "open-link-new-lil").visible, false);
   assert.equal(menu(env, "send-to-lil").visible, false);
   assert.equal(menu(env, "sleep-this-lil").visible, false);
@@ -577,7 +624,7 @@ test("incognito menus omit this-lil, new-lil, and send so the URL stays private"
     url: secretLil.tabs[0].url,
     incognito: true,
   };
-  await env.clickMenu("open-link-same-lil", secretTab, { linkUrl: "https://elsewhere.example/" });
+  await env.clickMenu("open-link-this-lil", secretTab, { linkUrl: "https://elsewhere.example/" });
   assert.equal(env.windows().find((w) => w.id === secretLil.id).tabs[0].url, "https://secret-lil.example/");
 });
 
@@ -590,7 +637,7 @@ test("a throwing tab-context create still loads the other menus", async () => {
   assert.equal(menu(env, "send-tab-to-lil"), undefined);
   assert.ok(menu(env, "send-to-lil"));
   assert.ok(menu(env, "open-link-new-lil"));
-  assert.ok(menu(env, "open-link-same-lil"));
+  assert.ok(menu(env, "open-link-this-lil"));
   assert.ok(menu(env, "sleep-this-lil"));
 });
 
