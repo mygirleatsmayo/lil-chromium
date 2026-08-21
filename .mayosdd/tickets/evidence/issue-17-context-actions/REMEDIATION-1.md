@@ -1,7 +1,7 @@
 # Remediation round 1 — issue #17
 
-Frozen ledger: `.mayosdd/tickets/evidence/issue-17-context-actions/ledger.md`  
-Pre-fix point: `bce7b7ec02d911f8d8fdac09966a22c79f8125d0`  
+Frozen ledger: `.mayosdd/tickets/evidence/issue-17-context-actions/ledger.md`
+Pre-fix point: `bce7b7ec02d911f8d8fdac09966a22c79f8125d0`
 Worktree only. No live install/launch/reload.
 
 Seam: production `extension/background.js` in the Node MV3 harness (`boot()`). Visibility via `env.menus()`, clicks via `clickMenu`, mount hints via `pendingIncognitoHint`.
