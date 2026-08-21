@@ -1,4 +1,3 @@
-import AppKit
 import Testing
 @testable import LilChromiumApp
 @testable import LilShared
@@ -360,11 +359,12 @@ struct PaletteOrderingTests {
 }
 
 /// Return chooses a concrete palette action at the native model boundary.
-/// AppKit event handling and row rendering stay outside these behavior tests.
+/// The controller strips lock/key-origin metadata before this seam, leaving
+/// only Command, Shift, Option, and Control in the finite chord domain.
 struct PaletteActionTests {
 
-    @Test("Return opens the selected action", .bug(id: 14))
-    func returnOpensTheSelectedAction() throws {
+    @Test("Return chord opens the selected action after event metadata is ignored", .bug(id: 14))
+    func returnChordOpensTheSelectedActionAfterEventMetadataIsIgnored() throws {
         let model = PaletteModel()
         let input = "example.com/pricing"
         let selectedRow = try #require(model.rows(for: input).first)
@@ -372,7 +372,7 @@ struct PaletteActionTests {
         let action = try #require(model.action(
             for: input,
             selectedRow: selectedRow,
-            modifiers: []
+            chord: .plain
         ))
 
         #expect(action.kind == .open)
@@ -381,8 +381,8 @@ struct PaletteActionTests {
         #expect(action.hint == "⏎ Open")
     }
 
-    @Test("Shift-Return forces the current text through search", .bug(id: 14))
-    func shiftReturnForcesTheCurrentTextThroughSearch() throws {
+    @Test("Shift-Return forces search after event metadata is ignored", .bug(id: 14))
+    func shiftReturnForcesSearchAfterEventMetadataIsIgnored() throws {
         let model = PaletteModel()
         model.searchEngine = SearchEngineConfig(
             name: "Kagi",
@@ -394,7 +394,7 @@ struct PaletteActionTests {
         let action = try #require(model.action(
             for: "privacy news",
             selectedRow: selectedRow,
-            modifiers: [.shift]
+            chord: [.shift]
         ))
 
         #expect(action.kind == .search)
@@ -403,8 +403,8 @@ struct PaletteActionTests {
         #expect(action.hint == "⇧⏎ Search")
     }
 
-    @Test("Command-Return opens the selected action incognito", .bug(id: 14))
-    func commandReturnOpensTheSelectedActionIncognito() throws {
+    @Test("Command-Return opens incognito after event metadata is ignored", .bug(id: 14))
+    func commandReturnOpensIncognitoAfterEventMetadataIsIgnored() throws {
         let model = PaletteModel()
         let input = "example.com/private"
         let selectedRow = try #require(model.rows(for: input).first)
@@ -412,7 +412,7 @@ struct PaletteActionTests {
         let action = try #require(model.action(
             for: input,
             selectedRow: selectedRow,
-            modifiers: [.command]
+            chord: [.command]
         ))
 
         #expect(action.kind == .open)
@@ -421,8 +421,8 @@ struct PaletteActionTests {
         #expect(action.hint == "⌘⏎ Open Incognito")
     }
 
-    @Test("Command-Shift-Return forces search incognito", .bug(id: 14))
-    func commandShiftReturnForcesSearchIncognito() throws {
+    @Test("Command-Shift-Return forces incognito search after event metadata is ignored", .bug(id: 14))
+    func commandShiftReturnForcesIncognitoSearchAfterEventMetadataIsIgnored() throws {
         let model = PaletteModel()
         model.searchEngine = SearchEngineConfig(
             name: "Kagi",
@@ -434,7 +434,7 @@ struct PaletteActionTests {
         let action = try #require(model.action(
             for: "secret cats",
             selectedRow: selectedRow,
-            modifiers: [.command, .shift]
+            chord: [.command, .shift]
         ))
 
         #expect(action.kind == .search)
@@ -453,7 +453,7 @@ struct PaletteActionTests {
         let action = try #require(model.action(
             for: input,
             selectedRow: selectedSearchRow,
-            modifiers: []
+            chord: .plain
         ))
 
         #expect(action.kind == .search)
@@ -466,24 +466,21 @@ struct PaletteActionTests {
         "Extra modifiers never submit an action",
         .bug(id: 14),
         arguments: [
-            NSEvent.ModifierFlags.option.rawValue,
-            NSEvent.ModifierFlags.control.rawValue,
-            NSEvent.ModifierFlags.capsLock.rawValue,
-            NSEvent.ModifierFlags.function.rawValue,
-            NSEvent.ModifierFlags.numericPad.rawValue,
-            NSEvent.ModifierFlags([.shift, .option]).rawValue,
-            NSEvent.ModifierFlags([.command, .option]).rawValue,
-            NSEvent.ModifierFlags([.command, .shift, .control]).rawValue,
+            PaletteReturnChord.option,
+            PaletteReturnChord.control,
+            PaletteReturnChord([.shift, .option]),
+            PaletteReturnChord([.command, .option]),
+            PaletteReturnChord([.command, .shift, .control]),
         ]
     )
-    func extraModifiersNeverSubmitAnAction(_ rawModifiers: UInt) throws {
+    func extraModifiersNeverSubmitAnAction(_ chord: PaletteReturnChord) throws {
         let model = PaletteModel()
         let selectedRow = try #require(model.rows(for: "example.com/private").first)
 
         let action = model.action(
             for: "private search",
             selectedRow: selectedRow,
-            modifiers: NSEvent.ModifierFlags(rawValue: rawModifiers)
+            chord: chord
         )
 
         #expect(action == nil)

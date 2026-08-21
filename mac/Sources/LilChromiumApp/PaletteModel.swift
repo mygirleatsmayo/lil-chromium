@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import LilShared
 
@@ -34,6 +33,18 @@ struct PaletteAction: Equatable {
     let hint: String
 }
 
+/// The only modifier keys that participate in a palette Return chord.
+/// AppKit lock state and key-origin metadata never cross this boundary.
+struct PaletteReturnChord: OptionSet, Equatable, Sendable {
+    let rawValue: UInt8
+
+    static let shift = Self(rawValue: 1 << 0)
+    static let command = Self(rawValue: 1 << 1)
+    static let option = Self(rawValue: 1 << 2)
+    static let control = Self(rawValue: 1 << 3)
+    static let plain: Self = []
+}
+
 /// Owns the in-memory history snapshot (as a prebuilt `Ranking.HistoryIndex`)
 /// and turns a query string into ordered rows.
 ///
@@ -61,12 +72,11 @@ final class PaletteModel {
     func action(
         for query: String,
         selectedRow: PaletteRow?,
-        modifiers: NSEvent.ModifierFlags
+        chord: PaletteReturnChord
     ) -> PaletteAction? {
-        let exactModifiers = modifiers.intersection(.deviceIndependentFlagsMask)
-        if exactModifiers == [.shift] || exactModifiers == [.command, .shift] {
+        if chord == [.shift] || chord == [.command, .shift] {
             let row = searchRow(query.trimmingCharacters(in: .whitespacesAndNewlines))
-            let incognito = exactModifiers == [.command, .shift]
+            let incognito = chord == [.command, .shift]
             return PaletteAction(
                 kind: .search,
                 url: row.actionURL,
@@ -75,8 +85,8 @@ final class PaletteModel {
             )
         }
         let incognito: Bool
-        switch exactModifiers {
-        case []:
+        switch chord {
+        case .plain:
             incognito = false
         case [.command]:
             incognito = true
