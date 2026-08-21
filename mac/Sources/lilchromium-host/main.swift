@@ -143,6 +143,13 @@ final class Relay {
                 enqueueOpen(line)
             }
 
+        case MessageType.configUpdate.rawValue:
+            // Hot-apply (issue #12): the app published the normalized full
+            // config; forward it to the extension verbatim. Never queued —
+            // if the port is down this host is exiting anyway, and the
+            // extension's reconnect get-context re-reads config.json fresh.
+            forwardToExtension(line, kind: "config-update")
+
         default:
             // Unknown from socket -> forward to extension verbatim.
             forwardToExtension(line, kind: "unknown(\(env.type))")

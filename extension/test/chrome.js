@@ -89,7 +89,12 @@ export function createChrome(options = {}) {
       for (const fn of native.incoming) await fn(copy);
     },
     disconnectPort() {
-      for (const fn of native.disconnect) fn();
+      // A dead port takes its listeners with it: a later reconnectNative gets
+      // a fresh port whose listeners are the only ones deliver() reaches.
+      const fns = native.disconnect;
+      native.disconnect = [];
+      native.incoming = [];
+      for (const fn of fns) fn();
     },
   };
 

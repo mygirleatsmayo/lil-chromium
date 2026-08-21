@@ -10,6 +10,7 @@ const SHARED = [
   "config-v2-complete",
   "config-v3-complete",
   "config-with-unknown-fields",
+  "message-config-update",
   "message-context",
   "message-history-result",
   "message-open-legacy",

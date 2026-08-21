@@ -22,7 +22,8 @@
   },
   "hoverBar": {
     "style": "solid",
-    "tint": "#112233"
+    "tint": "#112233",
+    "revealHeight": 24
   },
   "knownBrowsers": [
     {"slug": "helium", "name": "Helium", "installed": true},

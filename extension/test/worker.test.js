@@ -106,6 +106,7 @@ test("v1 config fixture yields the same additive defaults as the native suite", 
   assert.equal(context.searchEngine.template, "https://www.startpage.com/sp/search?query=%s");
   assert.equal(context.hoverBar.style, "glass");
   assert.equal(context.hoverBar.tint, null);
+  assert.equal(context.hoverBar.revealHeight, 15, "additive v0.4 default (issue #12)");
 });
 
 test("v3 complete config fixture matches the context wire's config objects", async () => {
@@ -114,6 +115,7 @@ test("v3 complete config fixture matches the context wire's config objects", asy
   assert.equal(cfg.sleep.afterMinutes, wire.sleep.afterMinutes);
   assert.equal(cfg.searchEngine.name, wire.searchEngine.name);
   assert.equal(cfg.hoverBar.style, wire.hoverBar.style);
+  assert.equal(cfg.hoverBar.revealHeight, wire.hoverBar.revealHeight);
 
   const env = await boot();
   await env.deliver(wire);
@@ -121,6 +123,7 @@ test("v3 complete config fixture matches the context wire's config objects", asy
   assert.equal(context.sleep.afterMinutes, cfg.sleep.afterMinutes);
   assert.equal(context.searchEngine.template, cfg.searchEngine.template);
   assert.equal(context.hoverBar.tint, cfg.hoverBar.tint);
+  assert.equal(context.hoverBar.revealHeight, cfg.hoverBar.revealHeight);
 });
 
 test("legacy open fixture creates a focused popup lil and registers it", async () => {
@@ -443,6 +446,120 @@ test("unknown config fields are not required for the worker to apply known ones"
   assert.equal(context.sleep.whitelist.length, 1);
   assert.equal(context.sleep.whitelist[0], "Mail.Google.com");
   assert.equal(context.unknownSectionProbe, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// Hot-apply (issue #12). A native Settings write reaches this worker as a
+// config-update forwarded by the host; the worker replaces the config half of
+// its cached context (its own browser identity is not the app's to change)
+// and pushes the result to every live lil's overlay.
+// ---------------------------------------------------------------------------
+
+test("config-update replaces the cached config but keeps the host identity", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver(fixture("message-config-update"));
+
+  const { context } = await env.message({ action: "getContext" });
+  assert.equal(context.primaryBrowser, "vivaldi");
+  assert.equal(context.primaryBrowserName, "Vivaldi");
+  assert.equal(context.fallbackBrowser, "chrome");
+  assert.equal(context.linkBehavior, "same-lil");
+  assert.equal(context.ephemeralDefault, 12, "normalized from the wire's 12h");
+  assert.equal(context.sleep.afterMinutes, 60);
+  assert.equal(context.sleep.audioGuard, false);
+  assert.deepEqual(context.sleep.whitelist, ["example.com", "mail.google.com"]);
+  assert.equal(context.searchEngine.name, "Bing");
+  assert.equal(context.hoverBar.style, "glass");
+  assert.equal(context.hoverBar.tint, "#4455ff");
+  assert.equal(context.hoverBar.revealHeight, 8);
+  assert.deepEqual(
+    context.knownBrowsers.map((b) => b.slug),
+    ["vivaldi", "chrome"]
+  );
+  // Host identity belongs to this worker's host, not to the app's config.
+  assert.equal(context.browser, "brave");
+  assert.equal(context.browserName, "Brave");
+});
+
+test("a config update is pushed to every live lil, including incognito ones", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver({ type: "open", url: "https://a.example/", left: 10, top: 10 });
+  await env.deliver({ type: "open", url: "https://b.example/", left: 20, top: 20 });
+  await env.deliver({ type: "open", url: "https://c.example/", incognito: true, left: 30, top: 30 });
+  const lils = env.windows().filter((w) => w.type === "popup");
+  assert.equal(lils.length, 3);
+
+  await env.deliver(fixture("message-config-update"));
+
+  for (const lil of lils) {
+    const pushes = env.journal().filter(
+      (e) => e.op === "tabs.sendMessage" && e.tabId === lil.tabs[0].id && e.message.action === "contextUpdate"
+    );
+    assert.equal(pushes.length, 1, `lil ${lil.id} received exactly one context push`);
+    const pushed = pushes[0].message.context;
+    assert.equal(pushed.hoverBar.tint, "#4455ff");
+    assert.equal(pushed.hoverBar.revealHeight, 8);
+    assert.equal(pushed.primaryBrowser, "vivaldi");
+    assert.equal(
+      JSON.stringify(pushed).includes("bundleId"),
+      false,
+      "lil-facing context never carries bundle ids"
+    );
+  }
+});
+
+test("future lils seed from the new config without overwriting per-lil overrides", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context")); // ephemeralDefault "6h"
+  await env.deliver({ type: "open", url: "https://a.example/", left: 10, top: 10 });
+  const first = env.windows()[0];
+  assert.equal(env.registry()[String(first.id)].expiry, 6);
+
+  // The hover bar's Keep menu sets a per-lil override.
+  await env.message({ action: "setExpiry", expiry: "never" }, sender(first));
+
+  await env.deliver(fixture("message-config-update")); // ephemeralDefault "12h"
+  await env.deliver({ type: "open", url: "https://b.example/", left: 20, top: 20 });
+  const second = env.windows().find((w) => w.id !== first.id);
+
+  assert.equal(
+    env.registry()[String(first.id)].expiry,
+    "never",
+    "the per-lil override survives the broadcast"
+  );
+  assert.equal(env.registry()[String(second.id)].expiry, 12, "the new lil seeds from the new default");
+});
+
+test("a relay that missed the broadcast catches up from the file on reconnect", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver(fixture("message-open-legacy"));
+  const lil = env.windows()[0];
+  const tabId = lil.tabs[0].id;
+  const asksBefore = env.outgoing().filter((m) => m.type === "get-context").length;
+
+  // The relay goes down (the app's config-update never reached it) and the
+  // worker reconnects: it must ask the host for fresh context again.
+  await env.disconnect();
+  await new Promise((resolve) => setTimeout(resolve, 400)); // reconnect backoff starts at 250ms
+  await env.flush();
+  const asksAfter = env.outgoing().filter((m) => m.type === "get-context").length;
+  assert.ok(asksAfter > asksBefore, "the reconnecting worker asks for fresh context");
+
+  // The host's reply comes from a fresh read of the config.json the app wrote
+  // while this relay was down (same payload the broadcast would have carried).
+  await env.deliver({ ...fixture("message-config-update"), type: "context", id: "ctx-reconnect" });
+
+  const { context } = await env.message({ action: "getContext" });
+  assert.equal(context.primaryBrowser, "vivaldi");
+  assert.equal(context.hoverBar.revealHeight, 8);
+  const pushes = env.journal().filter(
+    (e) => e.op === "tabs.sendMessage" && e.tabId === tabId && e.message.action === "contextUpdate"
+  );
+  assert.equal(pushes.length, 1, "the live lil converges after the catch-up");
+  assert.equal(pushes[0].message.context.hoverBar.tint, "#4455ff");
 });
 
 test("new-window target from a lil is re-parented into a cascaded lil", async () => {

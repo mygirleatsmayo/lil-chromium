@@ -29,7 +29,9 @@
   const REVEAL_DELAY_MS = 80;
   const HIDE_DELAY_MS = 300;
   const SLIDE_MS = 160;
-  const HOVER_STRIP_PX = 24;
+  // Fallback only until the worker's context arrives; the live value is
+  // config hoverBar.revealHeight, clamped 0..48 by the writer (PROTOCOL.md).
+  const DEFAULT_REVEAL_PX = 15;
   const POLL_MS = 500;
   const OMNIBOX_DEBOUNCE_MS = 120;
   const COPY_TICK_MS = 1200;
@@ -233,7 +235,7 @@
       ephemeralDefault: "never",
       sleep: { whitelist: [] },
       searchEngine: { name: "Startpage", template: "https://www.startpage.com/sp/search?query=%s" },
-      hoverBar: { style: "glass", tint: null },
+      hoverBar: { style: "glass", tint: null, revealHeight: DEFAULT_REVEAL_PX },
       knownBrowsers: [],
     };
     let lilExpiry = "never"; // per-lil override
@@ -620,11 +622,22 @@
       }
     }
 
+    // Live reveal zone (issue #12): read the current config value on every
+    // mousemove so a Settings write applies to this overlay immediately. Zero
+    // disables mouse reveal (treated as never-near-top, so an already-shown
+    // bar still hides on the way out); ⌘L reveals regardless — focusAddress
+    // never consults the zone.
+    function revealZonePx() {
+      const hb = context.hoverBar || {};
+      return typeof hb.revealHeight === "number" ? hb.revealHeight : DEFAULT_REVEAL_PX;
+    }
+
     let inStrip = false;
     document.addEventListener(
       "mousemove",
       (e) => {
-        const nearTop = e.clientY <= HOVER_STRIP_PX;
+        const zone = revealZonePx();
+        const nearTop = zone > 0 && e.clientY <= zone;
         if (nearTop && !inStrip) {
           inStrip = true;
           scheduleReveal();
@@ -1156,6 +1169,21 @@
       } catch (_) {
         /* older browsers */
       }
+    }
+
+    // Hot-apply (issue #12): the worker pushes its freshly replaced context to
+    // every live lil. Swap it in and re-derive everything the overlay shows:
+    // style/tint, the promote label, and the reveal zone (read live by the
+    // mousemove handler above).
+    try {
+      chrome.runtime.onMessage.addListener((msg) => {
+        if (!msg || msg.action !== "contextUpdate" || !msg.context) return;
+        context = msg.context;
+        applyContextLabels();
+        applyStyle();
+      });
+    } catch (_) {
+      /* context invalidated */
     }
 
     // Initial context fetch.
