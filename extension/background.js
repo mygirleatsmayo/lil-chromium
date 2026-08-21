@@ -687,6 +687,11 @@ async function restoreWindows() {
 
   await setRegistry({});
 
+  // Nap pages are rebuilt with the current configured tint; the normalized
+  // context already carries the built-in default when configuration has none.
+  const ctx = await getContext();
+  const tint = ctx.sleep && ctx.sleep.tint ? ctx.sleep.tint : DEFAULT_SLEEP.tint;
+
   let restored = 0;
   const restoredWindowIds = new Map();
   for (const [oldWindowId, entry] of entries) {
@@ -698,7 +703,14 @@ async function restoreWindows() {
     const slept = entry.slept && entry.sleepCaptureKey && entry.originalUrl;
 
     const win = await openLil({
-      url: slept ? sleepPageUrl(entry.sleepCaptureKey, entry.originalUrl, undefined, entry.originalTitle) : entry.url,
+      url: slept
+        ? sleepPageUrl({
+            captureKey: entry.sleepCaptureKey,
+            originalUrl: entry.originalUrl,
+            originalTitle: entry.originalTitle,
+            tint,
+          })
+        : entry.url,
       recordUrl: entry.url,
       left: b.left,
       top: b.top,
@@ -981,8 +993,11 @@ function idbKeys() {
   );
 }
 
-// Build the sleep-page URL for a given capture key + original URL + tint.
-function sleepPageUrl(captureKey, originalUrl, tint, originalTitle) {
+// Build the sleep-page URL from the nap-page inputs. Capture identity,
+// original URL/title, and tint travel as one named value so none can shift or
+// be silently omitted between entry and restore. Wire params (k/u/t/tint) and
+// the sleep.html page name are unchanged.
+function sleepPageUrl({ captureKey, originalUrl, originalTitle, tint }) {
   const params = new URLSearchParams();
   params.set("k", captureKey);
   params.set("u", originalUrl || "");
@@ -992,24 +1007,24 @@ function sleepPageUrl(captureKey, originalUrl, tint, originalTitle) {
 }
 
 // Release the original document by replacing the current history entry so the
-// nap URL does not sit on top of the live page in back/forward.
+// nap URL does not sit on top of the live page in back/forward. Replacement is
+// the only truthful release: when scripting is unavailable or fails, return
+// false and leave the live document untouched — never degrade to
+// history-pushing navigation.
 async function replaceTabDocument(tabId, url) {
   const execute = chrome.scripting && chrome.scripting.executeScript;
-  if (typeof execute === "function") {
-    const injected = await safe(
-      execute.call(chrome.scripting, {
-        target: { tabId },
-        func: (nextUrl) => {
-          location.replace(nextUrl);
-        },
-        args: [url],
-      }),
-      "scripting.executeScript replace"
-    );
-    if (injected) return true;
-  }
-  await safe(chrome.tabs.update(tabId, { url }), "tabs.update sleep");
-  return false;
+  if (typeof execute !== "function") return false;
+  const injected = await safe(
+    execute.call(chrome.scripting, {
+      target: { tabId },
+      func: (nextUrl) => {
+        location.replace(nextUrl);
+      },
+      args: [url],
+    }),
+    "scripting.executeScript replace"
+  );
+  return !!injected;
 }
 
 // Global capture throttle: serialize captures with a min gap so we never exceed
@@ -1093,7 +1108,27 @@ async function sleepLil(windowId) {
     await setRegistry(reg2);
   }
 
-  await replaceTabDocument(tab.id, sleepPageUrl(captureKey, originalUrl, tint, originalTitle));
+  const released = await replaceTabDocument(
+    tab.id,
+    sleepPageUrl({ captureKey, originalUrl, originalTitle, tint })
+  );
+  if (!released) {
+    // The live document was never released, so the nap never happened: roll
+    // back this entry's nap-only registry fields and the freshly stored
+    // capture rather than claim a nap the user cannot see.
+    const reg3 = await getRegistry();
+    const pending = reg3[String(windowId)];
+    if (pending && pending.sleepCaptureKey === captureKey) {
+      delete pending.slept;
+      delete pending.sleepCaptureKey;
+      delete pending.originalUrl;
+      delete pending.originalTitle;
+      await setRegistry(reg3);
+    }
+    await safe(idbDelete(captureKey), "idbDelete nap rollback");
+    log("sleepLil: document replacement failed for", windowId);
+    return false;
+  }
   log("slept lil", windowId);
   return true;
 }
@@ -1645,8 +1680,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return;
         }
         case "sleepThisLil": {
-          if (senderWindowId !== undefined) await sleepLil(senderWindowId);
-          sendResponse({ ok: true });
+          const slept = senderWindowId !== undefined ? await sleepLil(senderWindowId) : false;
+          sendResponse({ ok: slept });
           return;
         }
         case "reopenIncognito": {
@@ -1708,7 +1743,7 @@ chrome.commands.onCommand.addListener(async (command) => {
 // CONTEXT MENUS (v3) — recreated cleanly in onInstalled (removeAll first).
 //
 // link (lil windows):   Open link in new lil / this lil / incognito lil
-// page (lil windows):   Let This Lil Nap, Never sleep {host} / Allow sleeping {host}
+// page (lil windows):   Let This Lil Nap, Never nap {host} / Allow napping {host}
 // page (NORMAL windows): Send to lil
 // onClicked handlers verify window context and no-op gracefully.
 // ===========================================================================
@@ -1732,7 +1767,7 @@ function createContextMenus() {
         contexts: ["link"],
       });
       chrome.contextMenus.create({ id: CTX_SLEEP, title: "Let This Lil Nap", contexts: ["page"] });
-      chrome.contextMenus.create({ id: CTX_WHITELIST, title: "Never sleep this site", contexts: ["page"] });
+      chrome.contextMenus.create({ id: CTX_WHITELIST, title: "Never nap this site", contexts: ["page"] });
       chrome.contextMenus.create({ id: CTX_SEND_TO_LIL, title: "Send to lil", contexts: ["page"] });
     } catch (err) {
       log("contextMenus.create error", err && err.message ? err.message : err);
@@ -1756,7 +1791,7 @@ async function updateContextMenusForTab(tab) {
   setTitle(CTX_SLEEP, "Let This Lil Nap", isLil && !incognitoLils.has(tab.windowId));
   setTitle(
     CTX_WHITELIST,
-    host ? (whitelisted ? "Allow sleeping " + host : "Never sleep " + host) : "Never sleep this site",
+    host ? (whitelisted ? "Allow napping " + host : "Never nap " + host) : "Never nap this site",
     isLil && !!host
   );
   setTitle(CTX_SEND_TO_LIL, "Send to lil", !isLil);

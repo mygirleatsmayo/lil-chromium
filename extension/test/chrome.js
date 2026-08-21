@@ -68,6 +68,10 @@ export function createChrome(options = {}) {
   let incognitoAllowed = options.incognitoAllowed !== false;
   // Fault injection: predicate over windows.create options; true ⇒ the call rejects.
   const rejectWindowCreate = options.rejectWindowCreate || (() => false);
+  // Fault injection: `scripting: false` omits chrome.scripting (permission absent);
+  // rejectScripting predicate over tabId; true ⇒ executeScript rejects.
+  const scriptingAvailable = options.scripting !== false;
+  const rejectScripting = options.rejectScripting || (() => false);
   let lastError = undefined;
   let nextWindowId = 1;
   let nextTabId = 1;
@@ -539,44 +543,49 @@ export function createChrome(options = {}) {
     commands: {
       onCommand: events.commands.onCommand,
     },
-    scripting: {
-      async executeScript({ target = {}, func, args = [] } = {}) {
-        const tabId = target.tabId;
-        const tab = tabs.get(tabId);
-        if (!tab) return rejectMissing("tab", tabId);
-        record("scripting.executeScript", { tabId, args: [...args] });
-        if (typeof func !== "function") return [];
+    scripting: scriptingAvailable
+      ? {
+          async executeScript({ target = {}, func, args = [] } = {}) {
+            const tabId = target.tabId;
+            const tab = tabs.get(tabId);
+            if (!tab) return rejectMissing("tab", tabId);
+            if (rejectScripting(tabId)) {
+              return Promise.reject(new Error("scripting.executeScript blocked"));
+            }
+            record("scripting.executeScript", { tabId, args: [...args] });
+            if (typeof func !== "function") return [];
 
-        const changeInfo = {};
-        const location = {
-          get href() {
-            return tab.url;
+            const changeInfo = {};
+            const location = {
+              get href() {
+                return tab.url;
+              },
+              replace(nextUrl) {
+                navigateTab(tab, nextUrl, { replace: true });
+                changeInfo.url = nextUrl;
+                if (tab.title) changeInfo.title = tab.title;
+              },
+            };
+            vm.runInNewContext(`(${func.toString()})(...__args)`, {
+              location,
+              document: {
+                get title() {
+                  return tab.title || "";
+                },
+                set title(value) {
+                  tab.title = value;
+                  changeInfo.title = value;
+                },
+              },
+              __args: args,
+            });
+            if (Object.keys(changeInfo).length) {
+              await events.tabs.onUpdated.fire(tabId, changeInfo, snapshotTab(tab));
+            }
+            return [{ result: undefined }];
           },
-          replace(nextUrl) {
-            navigateTab(tab, nextUrl, { replace: true });
-            changeInfo.url = nextUrl;
-            if (tab.title) changeInfo.title = tab.title;
-          },
-        };
-        vm.runInNewContext(`(${func.toString()})(...__args)`, {
-          location,
-          document: {
-            get title() {
-              return tab.title || "";
-            },
-            set title(value) {
-              tab.title = value;
-              changeInfo.title = value;
-            },
-          },
-          __args: args,
-        });
-        if (Object.keys(changeInfo).length) {
-          await events.tabs.onUpdated.fire(tabId, changeInfo, snapshotTab(tab));
         }
-        return [{ result: undefined }];
-      },
-    },
+      : undefined,
     tabGroups: {
       async query() {
         return tabGroups.map((g) => ({ ...g }));

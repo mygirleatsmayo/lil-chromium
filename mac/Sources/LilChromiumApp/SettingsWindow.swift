@@ -330,7 +330,7 @@ struct SettingsRoot: View {
             }
         }
         HStack {
-            TextField("Add domain (never sleep)", text: $newWhitelistDomain)
+            TextField("Add domain (never nap)", text: $newWhitelistDomain)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { addWhitelistDomain() }
             Button("Add") { addWhitelistDomain() }

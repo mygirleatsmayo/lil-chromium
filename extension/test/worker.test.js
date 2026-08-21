@@ -467,6 +467,7 @@ test("entering Lil Nap captures the visible lil and records original URL, title,
   assert.ok(captures.has(entry.sleepCaptureKey));
   assert.equal(napParams(tab.url).get("k"), entry.sleepCaptureKey);
   assert.equal(napParams(tab.url).get("u"), originalUrl);
+  assert.equal(napParams(tab.url).get("tint"), "#3311aa", "the configured tint travels with the entry inputs");
   assert.ok(journalHas(env, "tabs.captureVisibleTab"));
 
   const capturedAt = journalIndex(env, (e) => e.op === "tabs.captureVisibleTab");
@@ -504,6 +505,52 @@ test("the nap document replaces rather than pollutes back/forward history", asyn
   assert.match(tab.url, NAP_PAGE);
   assert.deepEqual(env.sessionHistory(tabId), [tab.url]);
   assert.equal(env.sessionHistory(tabId).includes(originalUrl), false);
+});
+
+// Rollback oracle: a failed entry leaves the live document truthful — original
+// URL and history untouched, no nap fields on the registry, no stored capture,
+// and no history-pushing fallback navigation.
+function assertTruthfulRollback(env, lil, reply) {
+  const originalUrl = "https://example.com/docs";
+  const tabId = lil.tabs[0].id;
+  assert.equal(reply.ok, false, "entry reports failure");
+  const tab = env.windows().find((w) => w.id === lil.id).tabs[0];
+  assert.equal(tab.url, originalUrl, "the live document is left untouched");
+  assert.equal(tab.title, ORIGINAL_PAGE_TITLE);
+  assert.deepEqual(env.sessionHistory(tabId), [originalUrl], "no nap URL sits on history");
+  const entry = env.registry()[String(lil.id)];
+  assert.ok(entry, "the lil stays registered as a live lil");
+  assert.equal(entry.slept, undefined);
+  assert.equal(entry.sleepCaptureKey, undefined);
+  assert.equal(entry.originalUrl, undefined);
+  assert.equal(entry.originalTitle, undefined);
+  assert.equal(entry.url, originalUrl);
+  assert.equal(env.captures().size, 0, "the fresh capture is rolled back");
+  assert.equal(
+    journalHas(env, "tabs.update", (e) => String(e.update && e.update.url).includes("sleep.html")),
+    false,
+    "entry never degrades to history-pushing navigation"
+  );
+}
+
+test("when document replacement is unavailable, Lil Nap entry fails truthfully and rolls back nap state", async () => {
+  const env = await boot({ scripting: false }); // scripting permission absent
+  const lil = await openTitledLil(env);
+
+  const reply = await env.message({ action: "sleepThisLil" }, sender(lil));
+
+  assert.ok(journalHas(env, "tabs.captureVisibleTab"), "capture was prepared before release");
+  assertTruthfulRollback(env, lil, reply);
+});
+
+test("when document replacement fails, Lil Nap entry fails truthfully and rolls back nap state", async () => {
+  const env = await boot({ rejectScripting: () => true });
+  const lil = await openTitledLil(env);
+
+  const reply = await env.message({ action: "sleepThisLil" }, sender(lil));
+
+  assert.ok(journalHas(env, "tabs.captureVisibleTab"), "capture was prepared before release");
+  assertTruthfulRollback(env, lil, reply);
 });
 
 test("incognito lils are never captured or placed into Lil Nap", async () => {
@@ -568,6 +615,36 @@ test("a browser restart restores a napping lil as a nap document without live-lo
   assert.equal(tab.frozen, false);
 });
 
+test("a browser restart rebuilds the nap page with the current configured tint, defaulting only when none is configured", async () => {
+  const parked = {
+    43: {
+      url: "https://napping.example/",
+      bounds: { left: 300, top: 250, width: 900, height: 700 },
+      expiry: "never",
+      lastInteraction: 1,
+      slept: true,
+      sleepCaptureKey: "43-1",
+      originalUrl: "https://napping.example/",
+      originalTitle: "Napping Example",
+    },
+  };
+
+  // The configured tint survives the restart via the cached context.
+  const configured = await boot({ storage: { ephemeralWindows: parked } });
+  await configured.deliver(fixture("message-context")); // sleep.tint "#3311aa"
+  await configured.startup();
+  const configuredTab = configured.windows()[0].tabs[0];
+  assert.match(configuredTab.url, NAP_PAGE);
+  assert.equal(napParams(configuredTab.url).get("tint"), "#3311aa");
+
+  // Configuration supplies no tint: the existing default applies.
+  const unconfigured = await boot({ storage: { ephemeralWindows: parked } });
+  await unconfigured.startup();
+  const defaultTab = unconfigured.windows()[0].tabs[0];
+  assert.match(defaultTab.url, NAP_PAGE);
+  assert.equal(napParams(defaultTab.url).get("tint"), "purple");
+});
+
 test("registry and capture state distinguish Lil Nap from native discard and freeze", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));
@@ -624,6 +701,21 @@ test("the page context menu action is Let This Lil Nap", async () => {
   assert.ok(item);
   assert.equal(item.title, "Let This Lil Nap");
   assert.equal(item.visible, true);
+});
+
+test("the whitelist context menu uses napping language", async () => {
+  const env = await boot();
+  await env.installed();
+  const item = () => env.menus().find((m) => m.id === "toggle-whitelist");
+  assert.equal(item().title, "Never nap this site");
+
+  const lil = await openTitledLil(env);
+  await env.chrome.windows.update(lil.id, { focused: true });
+  await env.flush();
+  assert.equal(item().title, "Never nap example.com");
+
+  await env.clickMenu("toggle-whitelist", { id: lil.tabs[0].id, windowId: lil.id, url: lil.tabs[0].url });
+  assert.equal(item().title, "Allow napping example.com");
 });
 
 test("automatic Lil Nap records the same capture and registry truth as a manual entry", async () => {
