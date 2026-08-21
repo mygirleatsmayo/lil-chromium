@@ -858,7 +858,18 @@ async function cascadeTabToLil(tabId, srcWindowId, fallbackUrl) {
   });
 }
 
+// Tabs named by webNavigation.onCreatedNavigationTarget. That event is the
+// public signal that a tab was created to host a navigation from another tab,
+// so the new-window link flow owns it — the new-tab conversion below must
+// never adopt it, regardless of which listener runs first (Chromium dispatches
+// tabs.onCreated for the new tab before this event). Command+T / utility opens
+// never fire it. Claimed synchronously at listener entry so the claim always
+// lands before the new-tab flow's settle-then-decide checks; tab ids are
+// session-unique, so entries are kept for the life of the service worker.
+const linkOwnedTabIds = new Set();
+
 chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
+  if (details && typeof details.tabId === "number") linkOwnedTabIds.add(details.tabId);
   try {
     const srcTab = await safe(chrome.tabs.get(details.sourceTabId), "tabs.get source");
     if (!srcTab || srcTab.windowId === undefined) return;
@@ -910,6 +921,8 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
 // onFocusChanged still names a registered lil at the onCreated event, the
 // tab is active and opener-less, and it landed in an already-populated
 // normal window. No timestamps. When that tie is missing, leave the tab.
+// A tab claimed by the link flow (linkOwnedTabIds) or matching the OAuth
+// guard is never converted — the new-window leave-alone rules always win.
 // ===========================================================================
 
 chrome.tabs.onCreated.addListener(async (tab) => {
@@ -927,7 +940,9 @@ chrome.tabs.onCreated.addListener(async (tab) => {
     const settled = await settleTabAndWindow(tab.id);
     if (!settled) return;
     const { tab: live, win } = settled;
+    if (linkOwnedTabIds.has(tab.id)) return;
     if (live.openerTabId !== undefined && live.openerTabId !== null) return;
+    if (matchesOAuthGuard(live.url || live.pendingUrl)) return;
     if (live.active !== true) return;
     if (!win || win.type !== "normal") return;
     if (await isEphemeralWindow(win.id)) return;

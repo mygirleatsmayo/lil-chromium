@@ -829,6 +829,72 @@ test("a link-spawned tab is owned by the new-window link flow, never the new-tab
   assert.equal(sourceNow.focused, true, "focus returned to the source lil");
 });
 
+// Drive a link spawn in Chromium's real pipeline order: the tab is created
+// (tabs.onCreated) and its creating navigation then starts
+// (webNavigation.onCreatedNavigationTarget) while the onCreated listener is
+// still awaiting its first API call. Ownership must come from the events
+// themselves — no clocks, no settling delays.
+async function linkSpawnFromLil(env, { windowId, url, sourceTabId }) {
+  const created = env.chrome.tabs.create({ windowId, url, active: true });
+  const entry = env.journal().find((e) => e.op === "tabs.create" && e.create.url === url);
+  await env.createdNavigationTarget({ tabId: entry.tabId, sourceTabId, url });
+  await created;
+  await env.flush();
+  return entry.tabId;
+}
+
+test("an opener-less link spawn is left alone even when tabs.onCreated runs before the navigation claim", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+  assert.equal(source.focused, true);
+
+  // rel="noopener" style spawn: no openerTabId, so only the
+  // onCreatedNavigationTarget event ties it to the link flow.
+  const spawnedId = await linkSpawnFromLil(env, {
+    windowId: normal.id,
+    url: "https://noopener.example/",
+    sourceTabId: source.tabs[0].id,
+  });
+
+  assert.equal(env.windows().filter((w) => w.type === "popup").length, 1, "the new-tab flow never converted the spawn");
+  assert.equal(
+    journalHas(env, "windows.create", (e) => e.create.tabId === spawnedId),
+    false,
+    "the spawn was never re-parented into a lil"
+  );
+  const hostNow = env.windows().find((w) => w.id === normal.id);
+  assert.ok(hostNow.tabs.some((t) => t.id === spawnedId), "the spawn stayed in its normal window");
+  const sourceNow = env.windows().find((w) => w.id === source.id);
+  assert.equal(sourceNow.tabs[0].url, "https://lil.example/", "the link flow's leave-alone rule held");
+  assert.deepEqual(Object.keys(env.registry()), [String(source.id)]);
+});
+
+test("an OAuth link spawn is left alone even when tabs.onCreated runs before the navigation claim", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+  assert.equal(source.focused, true);
+
+  const spawnedId = await linkSpawnFromLil(env, {
+    windowId: normal.id,
+    url: "https://accounts.google.com/o/oauth2/auth?client_id=example",
+    sourceTabId: source.tabs[0].id,
+  });
+
+  assert.equal(env.windows().filter((w) => w.type === "popup").length, 1, "the OAuth spawn was never converted");
+  assert.equal(
+    journalHas(env, "windows.create", (e) => e.create.tabId === spawnedId),
+    false
+  );
+  assert.ok(env.windows().find((w) => w.id === normal.id).tabs.some((t) => t.id === spawnedId));
+  assert.deepEqual(Object.keys(env.registry()), [String(source.id)]);
+});
+
 test("a new tab after focus has already left the lil is left untouched", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));
