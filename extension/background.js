@@ -466,6 +466,11 @@ async function deregisterWindow(windowId) {
 async function isEphemeralWindow(windowId) {
   if (windowId === undefined || windowId === null) return false;
   if (incognitoLils.has(windowId)) return true;
+  return isRegisteredLil(windowId);
+}
+
+async function isRegisteredLil(windowId) {
+  if (windowId === undefined || windowId === null) return false;
   const reg = await getRegistry();
   return Object.prototype.hasOwnProperty.call(reg, String(windowId));
 }
@@ -645,6 +650,7 @@ async function openLil(spec) {
   if (spec.incognito) {
     incognitoLils.add(win.id);
     if (priorContext) incognitoPriorContexts.set(win.id, priorContext);
+    if (focus) await refreshMenusForWindow(win);
     return win;
   }
 
@@ -658,7 +664,13 @@ async function openLil(spec) {
       spec.registration
     )
   );
+  if (focus) await refreshMenusForWindow(win);
   return win;
+}
+
+async function refreshMenusForWindow(win) {
+  const tab = win && win.tabs && win.tabs[0];
+  if (tab) await updateContextMenusForTab(tab);
 }
 
 // Top-left for a lil cascaded off `windowId`. `unpositionedCoord` is used per
@@ -1360,22 +1372,55 @@ async function promoteTab(tabId, dest, groupId, browser) {
   return handOffToBrowser(tabId, ctx.primaryBrowser || DEFAULT_CONTEXT.primaryBrowser);
 }
 
-// Open a URL into a lil already living in `windowId` per link behavior. Used by
-// context-menu handlers.
-async function openLinkForLil(windowId, url, mode) {
+// Open a URL into a lil already living in `windowId`. Used by "Open link in this lil".
+async function openLinkInThisLil(windowId, url) {
   if (typeof url !== "string" || !url) return;
-  if (mode === "same-lil") {
-    const tabs = await safe(chrome.tabs.query({ windowId, active: true }), "tabs.query lil");
-    const tab = tabs && tabs[0];
-    if (tab && tab.id !== undefined) {
-      await safe(chrome.tabs.update(tab.id, { url }), "tabs.update ctxmenu same-lil");
-    }
-    return;
+  const tabs = await safe(chrome.tabs.query({ windowId, active: true }), "tabs.query lil");
+  const tab = tabs && tabs[0];
+  if (tab && tab.id !== undefined) {
+    await safe(chrome.tabs.update(tab.id, { url }), "tabs.update ctxmenu this-lil");
   }
-  const created = await safe(chrome.tabs.create({ windowId, url, active: false }), "tabs.create ctxmenu");
-  if (created && created.id !== undefined) {
-    await cascadeTabToLil(created.id, windowId, url);
-  }
+}
+
+// Fresh lil for a link. Names the invoking window as predecessor so a normal
+// tab's "new lil" action does not pretend the source was already a lil.
+async function openLinkInNewLil(tab, url) {
+  if (typeof url !== "string" || !url || !tab || tab.windowId === undefined) return null;
+  const { left, top } = await cascadeOrigin(tab.windowId);
+  const registered = await isRegisteredLil(tab.windowId);
+  return openLil({
+    url,
+    left,
+    top,
+    priorContext: registered
+      ? { kind: "lil", windowId: tab.windowId }
+      : { kind: "normal-window", windowId: tab.windowId },
+  });
+}
+
+// Context-menu incognito: never load the URL into a normal lil. If Chromium
+// blocks incognito access, explain on the source page and leave the URL there.
+async function openLinkInIncognitoLil(tab, url) {
+  if (typeof url !== "string" || !url || !tab || tab.windowId === undefined) return null;
+  const explain = () => {
+    broadcastToWindow(tab.windowId, { action: "incognitoHint" });
+    return null;
+  };
+  const allowed = await safe(chrome.extension.isAllowedIncognitoAccess(), "isAllowedIncognitoAccess");
+  if (!allowed) return explain();
+  const { left, top } = await cascadeOrigin(tab.windowId);
+  const fromLil = (await isRegisteredLil(tab.windowId)) || incognitoLils.has(tab.windowId);
+  const win =
+    (await openLil({
+      url,
+      left,
+      top,
+      incognito: true,
+      priorContext: fromLil
+        ? { kind: "lil", windowId: tab.windowId }
+        : { kind: "normal-window", windowId: tab.windowId },
+    })) || explain();
+  return win;
 }
 
 // ===========================================================================
@@ -1725,61 +1770,142 @@ chrome.commands.onCommand.addListener(async (command) => {
 });
 
 // ===========================================================================
-// CONTEXT MENUS (v3) — recreated cleanly in onInstalled (removeAll first).
+// CONTEXT MENUS — recreated cleanly in onInstalled (removeAll first).
 //
-// link (lil windows):   Open link in new lil / this lil / incognito lil
-// page (lil windows):   Sleep this lil, Never sleep {host} / Allow sleeping {host}
-// page (NORMAL windows): Send to lil
-// onClicked handlers verify window context and no-op gracefully.
+// Visibility and click authorization share one policy: a label is shown only
+// where its action would be true. Tab-strip registration is isolated so an
+// unsupported `tab` context cannot prevent the other menus from loading.
 // ===========================================================================
 
 const CTX_NEW_LIL = "open-link-new-lil";
-const CTX_SAME_LIL = "open-link-same-lil";
+const CTX_THIS_LIL = "open-link-this-lil";
 const CTX_INCOGNITO_LIL = "open-link-incognito-lil";
 const CTX_SLEEP = "sleep-this-lil";
 const CTX_WHITELIST = "toggle-whitelist";
 const CTX_SEND_TO_LIL = "send-to-lil";
+const CTX_SEND_TAB_TO_LIL = "send-tab-to-lil";
+
+// One snapshot of the invoking tab. Visibility and click authorization both
+// read this so a label cannot appear where its action would no-op, or run
+// where its label would be a lie.
+function contextActionSnapshot(tab, registeredLil) {
+  const incognitoLil = !!(tab && incognitoLils.has(tab.windowId));
+  const incognito = !!(tab && tab.incognito) || incognitoLil;
+  return {
+    registeredLil: !!registeredLil,
+    incognitoLil,
+    incognito,
+    normalPage: !registeredLil && !incognito,
+    host: hostOf(tab && tab.url),
+  };
+}
+
+function contextActionAllowed(menuItemId, snap) {
+  switch (menuItemId) {
+    case CTX_THIS_LIL:
+      return snap.registeredLil;
+    case CTX_NEW_LIL:
+      return snap.registeredLil || snap.normalPage;
+    case CTX_INCOGNITO_LIL:
+      return snap.registeredLil || snap.normalPage || snap.incognito;
+    case CTX_SEND_TO_LIL:
+    case CTX_SEND_TAB_TO_LIL:
+      return snap.normalPage;
+    case CTX_SLEEP:
+      return snap.registeredLil;
+    case CTX_WHITELIST:
+      return (snap.registeredLil || snap.incognitoLil) && !!snap.host;
+    default:
+      return false;
+  }
+}
 
 function createContextMenus() {
   chrome.contextMenus.removeAll(() => {
     void chrome.runtime.lastError;
     try {
-      chrome.contextMenus.create({ id: CTX_NEW_LIL, title: "Open link in new lil", contexts: ["link"] });
-      chrome.contextMenus.create({ id: CTX_SAME_LIL, title: "Open link in this lil", contexts: ["link"] });
+      // Hidden until the shared policy runs; Chrome otherwise shows every item.
+      chrome.contextMenus.create({
+        id: CTX_NEW_LIL,
+        title: "Open link in new lil",
+        contexts: ["link"],
+        visible: false,
+      });
+      chrome.contextMenus.create({
+        id: CTX_THIS_LIL,
+        title: "Open link in this lil",
+        contexts: ["link"],
+        visible: false,
+      });
       chrome.contextMenus.create({
         id: CTX_INCOGNITO_LIL,
         title: "Open link in incognito lil",
         contexts: ["link"],
+        visible: false,
       });
-      chrome.contextMenus.create({ id: CTX_SLEEP, title: "Sleep this lil", contexts: ["page"] });
-      chrome.contextMenus.create({ id: CTX_WHITELIST, title: "Never sleep this site", contexts: ["page"] });
-      chrome.contextMenus.create({ id: CTX_SEND_TO_LIL, title: "Send to lil", contexts: ["page"] });
+      chrome.contextMenus.create({
+        id: CTX_SLEEP,
+        title: "Sleep this lil",
+        contexts: ["page"],
+        visible: false,
+      });
+      chrome.contextMenus.create({
+        id: CTX_WHITELIST,
+        title: "Never sleep this site",
+        contexts: ["page"],
+        visible: false,
+      });
+      chrome.contextMenus.create({
+        id: CTX_SEND_TO_LIL,
+        title: "Send to lil",
+        contexts: ["page"],
+        visible: false,
+      });
     } catch (err) {
       log("contextMenus.create error", err && err.message ? err.message : err);
     }
+    createTabStripSend();
+    void applyContextMenusForFocusedTab();
   });
 }
 
-// Keep the whitelist menu title in sync with the active tab's host + lil status.
+function createTabStripSend() {
+  try {
+    chrome.contextMenus.create(
+      { id: CTX_SEND_TAB_TO_LIL, title: "Send Tab to Lil", contexts: ["tab"], visible: false },
+      () => {
+        const err = chrome.runtime.lastError;
+        if (err) log("Send Tab to Lil omitted", err.message);
+      }
+    );
+  } catch (err) {
+    log("Send Tab to Lil omitted", err && err.message ? err.message : err);
+  }
+}
+
+// Keep titles and visibility in lockstep with the click policy for this tab.
 async function updateContextMenusForTab(tab) {
   if (!tab || tab.windowId === undefined) return;
-  const isLil = await isEphemeralWindow(tab.windowId);
-  const host = hostOf(tab.url);
+  const registeredLil = await isRegisteredLil(tab.windowId);
+  const snap = contextActionSnapshot(tab, registeredLil);
+  const host = snap.host;
   const ctx = await getContext();
   const whitelisted = hostWhitelisted(host, ctx.sleep && ctx.sleep.whitelist);
 
-  const setTitle = (id, title, visible) => {
-    chrome.contextMenus.update(id, { title, visible }, () => void chrome.runtime.lastError);
+  const setItem = (id, props) => {
+    chrome.contextMenus.update(id, props, () => void chrome.runtime.lastError);
   };
 
-  // Lil-only page items visible in lils; "Send to lil" visible only in normal windows.
-  setTitle(CTX_SLEEP, "Sleep this lil", isLil && !incognitoLils.has(tab.windowId));
-  setTitle(
-    CTX_WHITELIST,
-    host ? (whitelisted ? "Allow sleeping " + host : "Never sleep " + host) : "Never sleep this site",
-    isLil && !!host
-  );
-  setTitle(CTX_SEND_TO_LIL, "Send to lil", !isLil);
+  setItem(CTX_THIS_LIL, { visible: contextActionAllowed(CTX_THIS_LIL, snap) });
+  setItem(CTX_NEW_LIL, { visible: contextActionAllowed(CTX_NEW_LIL, snap) });
+  setItem(CTX_INCOGNITO_LIL, { visible: contextActionAllowed(CTX_INCOGNITO_LIL, snap) });
+  setItem(CTX_SLEEP, { visible: contextActionAllowed(CTX_SLEEP, snap) });
+  setItem(CTX_WHITELIST, {
+    title: host ? (whitelisted ? "Allow sleeping " + host : "Never sleep " + host) : "Never sleep this site",
+    visible: contextActionAllowed(CTX_WHITELIST, snap),
+  });
+  setItem(CTX_SEND_TO_LIL, { visible: contextActionAllowed(CTX_SEND_TO_LIL, snap) });
+  setItem(CTX_SEND_TAB_TO_LIL, { visible: contextActionAllowed(CTX_SEND_TAB_TO_LIL, snap) });
 }
 
 chrome.tabs.onActivated.addListener(async (info) => {
@@ -1809,26 +1935,24 @@ async function sendTabToLil(tabId, srcWindowId) {
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   try {
     if (!tab || tab.windowId === undefined) return;
-    const isLil = await isEphemeralWindow(tab.windowId);
+    const registeredLil = await isRegisteredLil(tab.windowId);
+    const snap = contextActionSnapshot(tab, registeredLil);
+    if (!contextActionAllowed(info.menuItemId, snap)) return;
 
     switch (info.menuItemId) {
       case CTX_NEW_LIL:
-        if (isLil && info.linkUrl) await openLinkForLil(tab.windowId, info.linkUrl, "new-lil");
+        if (info.linkUrl) await openLinkInNewLil(tab, info.linkUrl);
         return;
-      case CTX_SAME_LIL:
-        if (isLil && info.linkUrl) await openLinkForLil(tab.windowId, info.linkUrl, "same-lil");
+      case CTX_THIS_LIL:
+        if (info.linkUrl) await openLinkInThisLil(tab.windowId, info.linkUrl);
         return;
       case CTX_INCOGNITO_LIL:
-        if (isLil && info.linkUrl) {
-          const { left, top } = await cascadeOrigin(tab.windowId);
-          await openIncognitoLil(info.linkUrl, left, top);
-        }
+        if (info.linkUrl) await openLinkInIncognitoLil(tab, info.linkUrl);
         return;
       case CTX_SLEEP:
-        if (isLil && !incognitoLils.has(tab.windowId)) await sleepLil(tab.windowId);
+        await sleepLil(tab.windowId);
         return;
       case CTX_WHITELIST: {
-        if (!isLil) return;
         const host = hostOf(tab.url);
         if (!host) return;
         const ctx = await getContext();
@@ -1838,7 +1962,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         return;
       }
       case CTX_SEND_TO_LIL:
-        if (!isLil && tab.id !== undefined) await sendTabToLil(tab.id, tab.windowId);
+      case CTX_SEND_TAB_TO_LIL:
+        if (tab.id !== undefined) await sendTabToLil(tab.id, tab.windowId);
         return;
       default:
         return;
@@ -1852,10 +1977,19 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // LIFECYCLE
 // ===========================================================================
 
+async function applyContextMenusForFocusedTab() {
+  const tabs = await safe(
+    chrome.tabs.query({ active: true, lastFocusedWindow: true }),
+    "tabs.query menu policy"
+  );
+  if (tabs && tabs[0]) await updateContextMenusForTab(tabs[0]);
+}
+
 chrome.runtime.onStartup.addListener(async () => {
   connectNative();
   await ensureSweepAlarm();
   await restoreWindows();
+  await applyContextMenusForFocusedTab();
 });
 
 chrome.runtime.onInstalled.addListener(async () => {

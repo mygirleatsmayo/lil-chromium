@@ -480,9 +480,20 @@ export function createChrome(options = {}) {
         record("contextMenus.removeAll", {});
         if (typeof cb === "function") queueMicrotask(cb);
       },
-      create(opts) {
+      create(opts, cb) {
+        const contexts = opts.contexts || [];
+        if (contexts.includes("tab") && options.tabContext === "unsupported") {
+          lastError = { message: "Unsupported context type: 'tab'" };
+          record("contextMenus.create", { id: opts.id, title: opts.title, contexts, error: lastError.message });
+          if (typeof cb === "function") queueMicrotask(cb);
+          return;
+        }
+        if (contexts.includes("tab") && options.tabContext === "throws") {
+          throw new Error("Invalid value for argument 1. Property 'contexts': Unsupported context type: 'tab'.");
+        }
         menus.set(opts.id, { visible: true, ...opts });
-        record("contextMenus.create", { id: opts.id, title: opts.title });
+        record("contextMenus.create", { id: opts.id, title: opts.title, contexts });
+        if (typeof cb === "function") queueMicrotask(cb);
         return opts.id;
       },
       update(id, props, cb) {
