@@ -1623,6 +1623,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true });
           return;
         }
+        case "openSettings": {
+          // Contextual request for the native Settings window. Posts the
+          // dedicated host command; never creates or focuses a browser window.
+          const posted = postToHost({ type: "open-settings" });
+          sendResponse({ ok: posted });
+          return;
+        }
         case "reopenIncognito": {
           // Caret-menu "Reopen in incognito lil": open same URL incognito, close current.
           const url = msg.url || (sender && sender.tab ? sender.tab.url : "");

@@ -7,7 +7,7 @@
 // mounts a HOVER-REVEAL top bar in a closed shadow DOM with: back, editable
 // address field with an omnibox suggestions dropdown, reload, copy-URL,
 // "Open in {Primary browser}" promote, and a caret menu (promote targets, host
-// groups, other browsers, Keep/expiry, Sleep, Reopen incognito, Close).
+// groups, other browsers, Keep/expiry, Sleep, Reopen incognito, Settings, Close).
 
 (() => {
   // Guard against double injection (SPA re-inject, doc replacement, etc.).
@@ -996,6 +996,11 @@
         });
       }
 
+      addSep(menu);
+      addItem(menu, "Settings…", "", () => {
+        closeMenu();
+        send({ action: "openSettings" });
+      });
       addSep(menu);
       addItem(menu, "Close lil", "⌘W", () => {
         closeMenu();

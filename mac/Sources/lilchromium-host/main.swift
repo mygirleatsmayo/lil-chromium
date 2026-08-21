@@ -216,6 +216,9 @@ final class Relay {
         case MessageType.restoreFocus.rawValue:
             handleRestoreFocus(data)
 
+        case MessageType.openSettings.rawValue:
+            handleOpenSettings()
+
         default:
             // Unknown from extension -> drop (per PROTOCOL.md).
             hlog("extension: dropping unforwarded type \(env.type)")
@@ -334,6 +337,20 @@ final class Relay {
             hlog("host: open-external \(msg.browser) \(msg.url)")
         } catch {
             hlog("host: open-external launch failed: \(error)")
+        }
+    }
+
+    /// Launch Lil Chromium's dedicated Settings URL targeted at this app —
+    /// never at a browser. Fire-and-forget; failures are logged.
+    private func handleOpenSettings() {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        proc.arguments = SettingsAction.openArguments
+        do {
+            try proc.run()
+            hlog("host: open-settings \(SettingsAction.urlString)")
+        } catch {
+            hlog("host: open-settings launch failed: \(error)")
         }
     }
 

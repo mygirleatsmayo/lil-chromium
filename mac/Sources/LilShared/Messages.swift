@@ -21,6 +21,8 @@ public enum MessageType: String, Codable, Sendable {
     case restoreFocus = "restore-focus"
     // v3: extension -> host, edits sleep.whitelist in config.json.
     case whitelistOp = "whitelist-op"
+    // v4: extension -> host, open native Settings (never forwarded).
+    case openSettings = "open-settings"
 }
 
 /// The exact context that was active before one lil took focus. Browser window
@@ -350,6 +352,18 @@ public struct WhitelistOpMessage: Codable, Sendable {
         self.type = (try? c.decode(String.self, forKey: .type)) ?? MessageType.whitelistOp.rawValue
         self.op = (try? c.decode(String.self, forKey: .op)) ?? ""
         self.domain = (try? c.decode(String.self, forKey: .domain)) ?? ""
+    }
+}
+
+/// extension -> host: open Lil Chromium's native Settings window.
+/// Fire-and-forget; no extra fields. The host launches the dedicated
+/// app-owned Settings URL targeted at Lil Chromium and never forwards
+/// this to a browser.
+public struct OpenSettingsMessage: Codable, Sendable {
+    public let type: String
+
+    public init() {
+        self.type = MessageType.openSettings.rawValue
     }
 }
 
