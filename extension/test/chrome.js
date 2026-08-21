@@ -27,6 +27,10 @@ function makeEvent() {
     addListener(fn) {
       listeners.push(fn);
     },
+    removeListener(fn) {
+      const i = listeners.indexOf(fn);
+      if (i >= 0) listeners.splice(i, 1);
+    },
     async fire(...args) {
       await Promise.all(listeners.map((fn) => Promise.resolve().then(() => fn(...args))));
     },
@@ -72,9 +76,14 @@ export function createChrome(options = {}) {
   // rejectScripting predicate over tabId; true ⇒ executeScript rejects.
   const scriptingAvailable = options.scripting !== false;
   const rejectScripting = options.rejectScripting || (() => false);
+  // Fault injection: predicate over tabs.create options; true ⇒ the call rejects.
+  const rejectTabCreate = options.rejectTabCreate || (() => false);
   let lastError = undefined;
   let nextWindowId = 1;
   let nextTabId = 1;
+  // Document identity: every navigation assigns a fresh id, so tests can tell a
+  // newly loaded document apart from a resumed one.
+  let nextDocumentId = 1;
 
   const events = {
     runtime: { onMessage: makeEvent(), onStartup: makeEvent(), onInstalled: makeEvent() },
@@ -130,6 +139,10 @@ export function createChrome(options = {}) {
       discarded: false,
       frozen: false,
       incognito,
+      // Tabs load deterministically: readiness arrives only when a test fires
+      // it through setTabState(tabId, {status: "complete"}).
+      status: "loading",
+      documentId: nextDocumentId++,
       sessionHistory: [url],
     };
     tabs.set(id, tab);
@@ -152,6 +165,7 @@ export function createChrome(options = {}) {
 
   function navigateTab(tab, url, { replace = false } = {}) {
     tab.url = url;
+    tab.documentId = nextDocumentId++;
     if (replace) {
       tab.sessionHistory[tab.sessionHistory.length - 1] = url;
     } else {
@@ -239,7 +253,7 @@ export function createChrome(options = {}) {
       const tab = tabs.get(id);
       if (!tab) return rejectMissing("tab", id);
       const changeInfo = {};
-      for (const key of ["title", "discarded", "frozen", "audible"]) {
+      for (const key of ["title", "discarded", "frozen", "audible", "status"]) {
         if (patch[key] !== undefined) {
           tab[key] = patch[key];
           changeInfo[key] = patch[key];
@@ -374,6 +388,7 @@ export function createChrome(options = {}) {
         await closeWindowIfEmpty(windowId);
       },
       async create(opts = {}) {
+        if (rejectTabCreate(opts)) return Promise.reject(new Error("tabs.create failed"));
         const windowId = opts.windowId ?? [...windows.keys()].at(-1);
         if (windowId === undefined) {
           const win = await createWindow({ url: opts.url, type: "normal", focused: !!opts.active });

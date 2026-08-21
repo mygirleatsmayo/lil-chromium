@@ -11,7 +11,9 @@ if (typeof window !== "undefined" && window.SLEEPING_LIL_DATA) {
 // IndexedDB. Reads the capture key + original URL + original title + tint from
 // the query string, paints the screenshot full-bleed under a tinted overlay,
 // titles the document with the sleeping symbol, and wakes the lil on any click
-// (SW navigates the tab back to the original URL and deletes the capture).
+// (the SW runs the bounded wake transition — the original URL loads behind this
+// static image, the swap lands within 180–500 ms, and the capture is deleted —
+// with a hard fallback here if the worker fails or is unreachable).
 // See PROTOCOL.md Lil Nap.
 
 (() => {
@@ -112,24 +114,26 @@ if (typeof window !== "undefined" && window.SLEEPING_LIL_DATA) {
     if (objectUrl) URL.revokeObjectURL(objectUrl);
   });
 
-  // ---- Wake on any click. Ask the SW to restore, with a hard fallback so the
-  // page never stays stuck if the SW is unreachable. ----
+  // ---- Wake on any click. The worker owns the bounded transition (see
+  // PROTOCOL.md Lil Nap); a hard fallback keeps the page from stranding when
+  // the worker fails or is unreachable. ----
   let waking = false;
   function wake() {
     if (waking) return;
     waking = true;
-    let handled = false;
+    let owned = false; // the worker confirmed it owns the wake transition
     try {
-      chrome.runtime.sendMessage({ action: "wakeLil" }, () => {
-        void chrome.runtime.lastError;
-        handled = true;
+      chrome.runtime.sendMessage({ action: "wakeLil" }, (reply) => {
+        // Only a successful reply suppresses the fallback: a failed or
+        // unreachable worker must not leave the nap page stuck.
+        owned = !chrome.runtime.lastError && !!(reply && reply.ok);
       });
     } catch (_) {
-      /* context invalidated — fall through to fallback */
+      /* context invalidated — the fallback below still fires */
     }
-    // Fallback: if the SW doesn't navigate us within 500ms, go directly.
+    // Fallback: if the worker hasn't owned the wake within 500ms, go directly.
     setTimeout(() => {
-      if (!handled && originalUrl) {
+      if (!owned && originalUrl) {
         try {
           location.replace(originalUrl);
         } catch (_) {

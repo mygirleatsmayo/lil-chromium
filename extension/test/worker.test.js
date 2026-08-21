@@ -1079,6 +1079,241 @@ test("automatic Lil Nap records the same capture and registry truth as a manual 
   assert.deepEqual(env.sessionHistory(tab.id), [tab.url]);
 });
 
+test("wake loads the original URL behind the nap image and swaps to the fresh document once it is ready after the 180ms floor", async () => {
+  const env = await boot({ clock: true });
+  const lil = await openTitledLil(env);
+  const originalUrl = lil.tabs[0].url;
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+  const napTabId = napping.tabs[0].id;
+  assert.match(napping.tabs[0].url, NAP_PAGE);
+  const captureKey = env.registry()[String(lil.id)].sleepCaptureKey;
+  assert.ok(env.captures().has(captureKey));
+
+  const reply = env.messageLater({ action: "wakeLil" }, sender(napping));
+  await env.flush();
+
+  // The load begins while the nap image remains visible: an inactive fresh
+  // tab loads the original URL inside the same lil window.
+  const mid = env.windows().find((w) => w.id === lil.id);
+  assert.equal(mid.tabs.length, 2);
+  const fresh = mid.tabs.find((t) => t.id !== napTabId);
+  assert.equal(fresh.url, originalUrl);
+  assert.equal(fresh.active, false);
+  assert.equal(mid.tabs.find((t) => t.id === napTabId).active, true, "the nap document stays visible");
+
+  // The fresh page signals readiness before the floor: the swap still waits.
+  await env.setTabState(fresh.id, { status: "complete" });
+  await env.clock.advance(179);
+  await env.flush();
+  const held = env.windows().find((w) => w.id === lil.id);
+  assert.equal(held.tabs.length, 2, "the nap image remains for at least 180ms");
+  assert.equal(held.tabs.find((t) => t.id === napTabId).active, true);
+  assert.equal(env.registry()[String(lil.id)].slept, true);
+  assert.ok(env.captures().has(captureKey));
+
+  await env.clock.advance(1);
+  await env.flush();
+
+  const woken = env.windows().find((w) => w.id === lil.id);
+  assert.deepEqual(
+    woken.tabs.map((t) => t.id),
+    [fresh.id],
+    "the nap page is gone"
+  );
+  assert.equal(woken.tabs[0].active, true);
+  assert.equal(woken.tabs[0].url, originalUrl);
+
+  const entry = env.registry()[String(lil.id)];
+  assert.ok(entry, "the lil stays registered");
+  assert.equal(entry.url, originalUrl);
+  assert.equal(entry.slept, undefined);
+  assert.equal(entry.sleepCaptureKey, undefined);
+  assert.equal(entry.originalUrl, undefined);
+  assert.equal(entry.originalTitle, undefined);
+  assert.equal(env.captures().has(captureKey), false, "the capture is removed");
+  assert.equal((await reply).ok, true);
+});
+
+test("after the 180ms floor the wake transition completes as soon as the fresh page is ready", async () => {
+  const env = await boot({ clock: true });
+  const lil = await openTitledLil(env);
+  const originalUrl = lil.tabs[0].url;
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+  const napTabId = napping.tabs[0].id;
+
+  const reply = env.messageLater({ action: "wakeLil" }, sender(napping));
+  await env.flush();
+  const fresh = env.windows().find((w) => w.id === lil.id).tabs.find((t) => t.id !== napTabId);
+
+  // Past the floor with no readiness signal, the nap image keeps waiting.
+  await env.clock.advance(250);
+  await env.flush();
+  assert.equal(env.windows().find((w) => w.id === lil.id).tabs.length, 2);
+
+  // Readiness after the floor completes the transition immediately.
+  await env.setTabState(fresh.id, { status: "complete" });
+  await env.flush();
+  const woken = env.windows().find((w) => w.id === lil.id);
+  assert.deepEqual(woken.tabs.map((t) => t.id), [fresh.id]);
+  assert.equal(woken.tabs[0].url, originalUrl);
+  assert.equal(woken.tabs[0].active, true);
+  assert.equal((await reply).ok, true);
+});
+
+test("the wake transition stops waiting and swaps no later than 500ms", async () => {
+  const env = await boot({ clock: true });
+  const lil = await openTitledLil(env);
+  const originalUrl = lil.tabs[0].url;
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+  const napTabId = napping.tabs[0].id;
+
+  const reply = env.messageLater({ action: "wakeLil" }, sender(napping));
+  await env.flush();
+  const fresh = env.windows().find((w) => w.id === lil.id).tabs.find((t) => t.id !== napTabId);
+
+  // The fresh page never signals readiness: the nap image is still up at 499ms.
+  await env.clock.advance(499);
+  await env.flush();
+  assert.equal(env.windows().find((w) => w.id === lil.id).tabs.length, 2);
+
+  // ...and the transition proceeds at the cap, not one tick later.
+  await env.clock.advance(1);
+  await env.flush();
+  const woken = env.windows().find((w) => w.id === lil.id);
+  assert.deepEqual(woken.tabs.map((t) => t.id), [fresh.id]);
+  assert.equal(woken.tabs[0].url, originalUrl);
+  assert.equal(env.registry()[String(lil.id)].slept, undefined);
+  assert.equal(env.captures().size, 0);
+  assert.equal((await reply).ok, true);
+});
+
+test("wake produces a fresh document identity rather than resuming the released document", async () => {
+  const env = await boot({ clock: true });
+  const lil = await openTitledLil(env);
+  const originalDocId = lil.tabs[0].documentId;
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+  const napDocId = napping.tabs[0].documentId;
+  assert.notEqual(napDocId, originalDocId, "entry already released the original document");
+
+  const reply = env.messageLater({ action: "wakeLil" }, sender(napping));
+  await env.flush();
+  const fresh = env.windows().find((w) => w.id === lil.id).tabs.find((t) => t.id !== napping.tabs[0].id);
+  await env.setTabState(fresh.id, { status: "complete" });
+  await env.clock.advance(180);
+  await env.flush();
+  assert.equal((await reply).ok, true);
+
+  const wokenTab = env.windows().find((w) => w.id === lil.id).tabs[0];
+  assert.notEqual(wokenTab.documentId, napDocId);
+  assert.notEqual(wokenTab.documentId, originalDocId, "a newly loaded document, not the released one resumed");
+});
+
+test("back/forward history holds no stale internal nap destination after wake", async () => {
+  const env = await boot({ clock: true });
+  const lil = await openTitledLil(env);
+  const originalUrl = lil.tabs[0].url;
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+
+  const reply = env.messageLater({ action: "wakeLil" }, sender(napping));
+  await env.flush();
+  const fresh = env.windows().find((w) => w.id === lil.id).tabs.find((t) => t.id !== napping.tabs[0].id);
+  await env.setTabState(fresh.id, { status: "complete" });
+  await env.clock.advance(180);
+  await env.flush();
+  assert.equal((await reply).ok, true);
+
+  assert.deepEqual(env.sessionHistory(fresh.id), [originalUrl]);
+  for (const win of env.windows()) {
+    for (const tab of win.tabs) {
+      assert.equal(
+        env.sessionHistory(tab.id).some((url) => NAP_PAGE.test(url)),
+        false,
+        "no nap URL survives in any tab's history"
+      );
+    }
+  }
+});
+
+test("when the wake preload is unavailable, wake holds the floor and replaces the nap document in place", async () => {
+  const env = await boot({ clock: true, rejectTabCreate: () => true });
+  const lil = await openTitledLil(env);
+  const originalUrl = lil.tabs[0].url;
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+  const napTabId = napping.tabs[0].id;
+  const captureKey = env.registry()[String(lil.id)].sleepCaptureKey;
+
+  const reply = env.messageLater({ action: "wakeLil" }, sender(napping));
+  await env.flush();
+
+  // No fresh tab could be created; the nap image is still held to the floor.
+  await env.clock.advance(179);
+  await env.flush();
+  const held = env.windows().find((w) => w.id === lil.id);
+  assert.equal(held.tabs.length, 1);
+  assert.match(held.tabs[0].url, NAP_PAGE);
+
+  await env.clock.advance(1);
+  await env.flush();
+
+  // The nap document is replaced in place: same tab, fresh document, clean history.
+  const woken = env.windows().find((w) => w.id === lil.id);
+  assert.equal(woken.tabs.length, 1);
+  assert.equal(woken.tabs[0].id, napTabId);
+  assert.equal(woken.tabs[0].url, originalUrl);
+  assert.deepEqual(env.sessionHistory(napTabId), [originalUrl]);
+  const entry = env.registry()[String(lil.id)];
+  assert.ok(entry, "the lil stays registered");
+  assert.equal(entry.url, originalUrl);
+  assert.equal(entry.slept, undefined);
+  assert.equal(entry.sleepCaptureKey, undefined);
+  assert.equal(entry.originalUrl, undefined);
+  assert.equal(entry.originalTitle, undefined);
+  assert.equal(env.captures().has(captureKey), false, "the capture is removed");
+  assert.equal((await reply).ok, true);
+});
+
+test("when wake cannot navigate at all, it reports failure and leaves nap state truthful", async () => {
+  let scriptingBlocked = false;
+  const env = await boot({
+    clock: true,
+    rejectTabCreate: () => true,
+    rejectScripting: () => scriptingBlocked,
+  });
+  const lil = await openTitledLil(env);
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+  const napTabId = napping.tabs[0].id;
+  const captureKey = env.registry()[String(lil.id)].sleepCaptureKey;
+  assert.ok(env.captures().has(captureKey));
+
+  // The worker can reach the window but cannot produce any fresh navigation.
+  scriptingBlocked = true;
+  const reply = env.messageLater({ action: "wakeLil" }, sender(napping));
+  await env.flush();
+  await env.clock.advance(500);
+  await env.flush();
+  assert.equal((await reply).ok, false, "failure is reported so the nap page's own fallback can fire");
+
+  // Nothing is stranded or leaked: the nap page, its registry truth, and the
+  // capture are exactly as they were before the failed wake.
+  const tab = env.windows().find((w) => w.id === lil.id).tabs[0];
+  assert.equal(tab.id, napTabId);
+  assert.match(tab.url, NAP_PAGE);
+  const entry = env.registry()[String(lil.id)];
+  assert.ok(entry, "the lil stays registered");
+  assert.equal(entry.slept, true);
+  assert.equal(entry.sleepCaptureKey, captureKey);
+  assert.equal(entry.originalUrl, "https://example.com/docs");
+  assert.equal(entry.originalTitle, ORIGINAL_PAGE_TITLE);
+  assert.ok(env.captures().has(captureKey), "the capture stays referenced, not orphaned");
+});
+
 test("unknown config fields are not required for the worker to apply known ones", async () => {
   const cfg = fixture("config-with-unknown-fields");
   const env = await boot();
