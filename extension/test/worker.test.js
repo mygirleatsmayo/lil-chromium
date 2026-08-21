@@ -173,15 +173,21 @@ test("promoting a lil into a host tab moves it and drops the registry entry", as
   const env = await boot();
   await env.deliver(fixture("message-context"));
   const host = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
-  await env.deliver(fixture("message-open-legacy"));
+  await env.blurBrowser();
+  await env.deliver(fixture("message-open-prior-context"));
   const lil = env.windows().find((w) => w.type === "popup");
   await env.message({ action: "promote", dest: "host-tab" }, sender(lil));
 
   assert.ok(journalHas(env, "tabs.move", (e) => e.move.windowId === host.id));
   assert.equal(Object.keys(env.registry()).length, 0);
   const hostNow = env.windows().find((w) => w.id === host.id);
-  assert.ok(hostNow.tabs.some((t) => t.url === "https://example.com/docs"));
+  assert.ok(hostNow.tabs.some((t) => t.url === "https://example.com/from-mail"));
   assert.equal(env.windows().some((w) => w.type === "popup"), false);
+  assert.equal(
+    env.outgoing().some((message) => message.type === "restore-focus"),
+    false,
+    "promotion is a lifecycle transfer, not a close"
+  );
 });
 
 test("closing a focused lil removes it and focuses the prior window", async () => {
