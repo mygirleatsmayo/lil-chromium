@@ -111,6 +111,14 @@ export async function boot(options = {}) {
     menus() {
       return [...state.menus.values()];
     },
+    sessionHistory(tabId) {
+      return state.sessionHistory(tabId);
+    },
+    async setTabState(tabId, patch) {
+      const tab = await state.setTabState(tabId, patch);
+      await flush();
+      return tab;
+    },
     captures() {
       return indexedDB.store("lil-sleep", "captures");
     },

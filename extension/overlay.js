@@ -2,12 +2,13 @@
 //
 // Runs on every http/https page. Asks the SW whether this tab lives in a lil
 // (ephemeral popup window); if not, it does almost nothing (normal browsing must
-// stay untouched, aside from silent form-dirty tracking which the sleep sweep
+// stay untouched, aside from silent form-dirty tracking which the Lil Nap sweep
 // needs — reported only for lils via the SW's per-tab flag). If it is a lil, it
 // mounts a HOVER-REVEAL top bar in a closed shadow DOM with: back, editable
 // address field with an omnibox suggestions dropdown, reload, copy-URL,
 // "Open in {Primary browser}" promote, and a caret menu (promote targets, host
-// groups, other browsers, Keep/expiry, Sleep, Reopen incognito, Settings, Close).
+// groups, other browsers, Keep/expiry, Let This Lil Nap, Reopen incognito,
+// Settings, Close).
 
 (() => {
   // Guard against double injection (SPA re-inject, doc replacement, etc.).
@@ -996,10 +997,9 @@
         });
       }
 
-      // ---- Sleep + incognito. ----
       addSep(menu);
       if (!isIncognito) {
-        addItem(menu, "Sleep this lil", "", () => {
+        addItem(menu, "Let This Lil Nap", "", () => {
           closeMenu();
           send({ action: "sleepThisLil" });
         });

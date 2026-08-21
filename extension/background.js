@@ -20,7 +20,7 @@ const NATIVE_HOST = "com.lilchromium.relay";
 //   { url, bounds:{left,top,width,height},
 //     expiry: "never"|"quit"|<hoursNumber>, lastInteraction: ts,
 //     priorContext?: {kind,...},
-//     slept?: bool, sleepCaptureKey?: string, originalUrl?: string }
+//     slept?: bool, sleepCaptureKey?: string, originalUrl?: string, originalTitle?: string }
 const REGISTRY_KEY = "ephemeralWindows";
 const LAST_SIZE_KEY = "lastSize"; // {width, height} — last user-resized lil size
 const CONTEXT_KEY = "hostContext"; // cached `context` reply (stale-but-usable)
@@ -734,7 +734,7 @@ async function broadcastToWindow(windowId, message) {
 
 // ===========================================================================
 // RESTORE — parked lils survive restart. Skips "quit"-expiry lils; slept lils
-// reopen as their sleep page.
+// reopen as their nap page.
 // ===========================================================================
 
 async function restoreWindows() {
@@ -743,6 +743,11 @@ async function restoreWindows() {
   if (!entries.length) return;
 
   await setRegistry({});
+
+  // Nap pages are rebuilt with the current configured tint; the normalized
+  // context already carries the built-in default when configuration has none.
+  const ctx = await getContext();
+  const tint = ctx.sleep && ctx.sleep.tint ? ctx.sleep.tint : DEFAULT_SLEEP.tint;
 
   let restored = 0;
   const restoredWindowIds = new Map();
@@ -755,7 +760,14 @@ async function restoreWindows() {
     const slept = entry.slept && entry.sleepCaptureKey && entry.originalUrl;
 
     const win = await openLil({
-      url: slept ? sleepPageUrl(entry.sleepCaptureKey, entry.originalUrl) : entry.url,
+      url: slept
+        ? sleepPageUrl({
+            captureKey: entry.sleepCaptureKey,
+            originalUrl: entry.originalUrl,
+            originalTitle: entry.originalTitle,
+            tint,
+          })
+        : entry.url,
       recordUrl: entry.url,
       left: b.left,
       top: b.top,
@@ -769,6 +781,7 @@ async function restoreWindows() {
         slept: !!entry.slept,
         sleepCaptureKey: entry.sleepCaptureKey,
         originalUrl: entry.originalUrl,
+        originalTitle: entry.originalTitle,
       },
     });
     if (win) {
@@ -1018,8 +1031,9 @@ chrome.tabs.onCreated.addListener(async (tab) => {
 // SLEEP SYSTEM (v3).
 //
 // Pipeline: captureVisibleTab (throttled ≤2/sec) → dataURL→Blob→IndexedDB →
-// mark registry {slept, sleepCaptureKey, originalUrl} → navigate the tab to
-// sleep.html. Wake: sleep page click → wakeLil → navigate back + delete capture.
+// mark registry {slept, sleepCaptureKey, originalUrl, originalTitle} →
+// replace the tab document with sleep.html. Wake: sleep page click → wakeLil
+// → navigate back + delete capture.
 // ===========================================================================
 
 const IDB_NAME = "lil-sleep";
@@ -1097,13 +1111,38 @@ function idbKeys() {
   );
 }
 
-// Build the sleep-page URL for a given capture key + original URL + tint.
-function sleepPageUrl(captureKey, originalUrl, tint) {
+// Build the sleep-page URL from the nap-page inputs. Capture identity,
+// original URL/title, and tint travel as one named value so none can shift or
+// be silently omitted between entry and restore. Wire params (k/u/t/tint) and
+// the sleep.html page name are unchanged.
+function sleepPageUrl({ captureKey, originalUrl, originalTitle, tint }) {
   const params = new URLSearchParams();
   params.set("k", captureKey);
   params.set("u", originalUrl || "");
+  params.set("t", originalTitle || "");
   if (tint) params.set("tint", tint);
   return chrome.runtime.getURL("sleep.html") + "?" + params.toString();
+}
+
+// Release the original document by replacing the current history entry so the
+// nap URL does not sit on top of the live page in back/forward. Replacement is
+// the only truthful release: when scripting is unavailable or fails, return
+// false and leave the live document untouched — never degrade to
+// history-pushing navigation.
+async function replaceTabDocument(tabId, url) {
+  const execute = chrome.scripting && chrome.scripting.executeScript;
+  if (typeof execute !== "function") return false;
+  const injected = await safe(
+    execute.call(chrome.scripting, {
+      target: { tabId },
+      func: (nextUrl) => {
+        location.replace(nextUrl);
+      },
+      args: [url],
+    }),
+    "scripting.executeScript replace"
+  );
+  return !!injected;
 }
 
 // Global capture throttle: serialize captures with a min gap so we never exceed
@@ -1159,6 +1198,7 @@ async function sleepLil(windowId) {
   const tab = tabs && tabs[0];
   if (!tab || tab.id === undefined) return false;
   const originalUrl = tab.url || entry.url || "";
+  const originalTitle = typeof tab.title === "string" ? tab.title : "";
   if (!originalUrl || /^chrome-extension:\/\//i.test(originalUrl)) return false; // already a lil page
 
   const dataUrl = await throttledCapture(windowId);
@@ -1182,10 +1222,31 @@ async function sleepLil(windowId) {
     reg2[String(windowId)].slept = true;
     reg2[String(windowId)].sleepCaptureKey = captureKey;
     reg2[String(windowId)].originalUrl = originalUrl;
+    reg2[String(windowId)].originalTitle = originalTitle;
     await setRegistry(reg2);
   }
 
-  await safe(chrome.tabs.update(tab.id, { url: sleepPageUrl(captureKey, originalUrl, tint) }), "tabs.update sleep");
+  const released = await replaceTabDocument(
+    tab.id,
+    sleepPageUrl({ captureKey, originalUrl, originalTitle, tint })
+  );
+  if (!released) {
+    // The live document was never released, so the nap never happened: roll
+    // back this entry's nap-only registry fields and the freshly stored
+    // capture rather than claim a nap the user cannot see.
+    const reg3 = await getRegistry();
+    const pending = reg3[String(windowId)];
+    if (pending && pending.sleepCaptureKey === captureKey) {
+      delete pending.slept;
+      delete pending.sleepCaptureKey;
+      delete pending.originalUrl;
+      delete pending.originalTitle;
+      await setRegistry(reg3);
+    }
+    await safe(idbDelete(captureKey), "idbDelete nap rollback");
+    log("sleepLil: document replacement failed for", windowId);
+    return false;
+  }
   log("slept lil", windowId);
   return true;
 }
@@ -1770,8 +1831,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return;
         }
         case "sleepThisLil": {
-          if (senderWindowId !== undefined) await sleepLil(senderWindowId);
-          sendResponse({ ok: true });
+          const slept = senderWindowId !== undefined ? await sleepLil(senderWindowId) : false;
+          sendResponse({ ok: slept });
           return;
         }
         case "openSettings": {
@@ -1842,6 +1903,10 @@ chrome.commands.onCommand.addListener(async (command) => {
 // Visibility and click authorization share one policy: a label is shown only
 // where its action would be true. Tab-strip registration is isolated so an
 // unsupported `tab` context cannot prevent the other menus from loading.
+// link (lil windows):   Open link in new lil / this lil / incognito lil
+// page (lil windows):   Let This Lil Nap, Never nap {host} / Allow napping {host}
+// page (NORMAL windows): Send to lil
+// onClicked handlers verify window context and no-op gracefully.
 // ===========================================================================
 
 const CTX_NEW_LIL = "open-link-new-lil";
@@ -1912,13 +1977,13 @@ function createContextMenus() {
       });
       chrome.contextMenus.create({
         id: CTX_SLEEP,
-        title: "Sleep this lil",
+        title: "Let This Lil Nap",
         contexts: ["page"],
         visible: false,
       });
       chrome.contextMenus.create({
         id: CTX_WHITELIST,
-        title: "Never sleep this site",
+        title: "Never nap this site",
         contexts: ["page"],
         visible: false,
       });
@@ -1966,9 +2031,12 @@ async function updateContextMenusForTab(tab) {
   setItem(CTX_THIS_LIL, { visible: contextActionAllowed(CTX_THIS_LIL, snap) });
   setItem(CTX_NEW_LIL, { visible: contextActionAllowed(CTX_NEW_LIL, snap) });
   setItem(CTX_INCOGNITO_LIL, { visible: contextActionAllowed(CTX_INCOGNITO_LIL, snap) });
-  setItem(CTX_SLEEP, { visible: contextActionAllowed(CTX_SLEEP, snap) });
+  setItem(CTX_SLEEP, {
+    title: "Let This Lil Nap",
+    visible: contextActionAllowed(CTX_SLEEP, snap),
+  });
   setItem(CTX_WHITELIST, {
-    title: host ? (whitelisted ? "Allow sleeping " + host : "Never sleep " + host) : "Never sleep this site",
+    title: host ? (whitelisted ? "Allow napping " + host : "Never nap " + host) : "Never nap this site",
     visible: contextActionAllowed(CTX_WHITELIST, snap),
   });
   setItem(CTX_SEND_TO_LIL, { visible: contextActionAllowed(CTX_SEND_TO_LIL, snap) });

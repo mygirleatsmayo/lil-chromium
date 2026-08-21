@@ -8,10 +8,11 @@ if (typeof window !== "undefined" && window.SLEEPING_LIL_DATA) {
 }
 //
 // Runs in the extension's own origin (chrome-extension://) so it shares the SW's
-// IndexedDB. Reads the capture key + original URL + tint from the query string,
-// paints the screenshot full-bleed under a tinted overlay, and wakes the lil on
-// any click (SW navigates the tab back to the original URL and deletes the
-// capture). See PROTOCOL.md §Sleep.
+// IndexedDB. Reads the capture key + original URL + original title + tint from
+// the query string, paints the screenshot full-bleed under a tinted overlay,
+// titles the document with the sleeping symbol, and wakes the lil on any click
+// (SW navigates the tab back to the original URL and deletes the capture).
+// See PROTOCOL.md Lil Nap.
 
 (() => {
   const IDB_NAME = "lil-sleep";
@@ -20,7 +21,10 @@ if (typeof window !== "undefined" && window.SLEEPING_LIL_DATA) {
   const params = new URLSearchParams(location.search);
   const captureKey = params.get("k") || "";
   const originalUrl = params.get("u") || "";
+  const originalTitle = params.get("t") || "";
   const tintParam = params.get("tint") || "purple";
+
+  document.title = "💤 " + originalTitle;
 
   const shot = document.getElementById("shot");
   const tintEl = document.getElementById("tint");

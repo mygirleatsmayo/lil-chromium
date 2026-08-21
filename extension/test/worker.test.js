@@ -19,6 +19,35 @@ function menu(env, id) {
   return env.menus().find((item) => item.id === id);
 }
 
+const NAP_PAGE = /^chrome-extension:\/\/oofeehjoocddelicpmnpbafmbalaakge\/sleep\.html\?/;
+const ORIGINAL_PAGE_TITLE = "Example Docs";
+
+function napParams(url) {
+  return new URL(url).searchParams;
+}
+
+function journalIndex(env, pred) {
+  return env.journal().findIndex(pred);
+}
+
+async function openTitledLil(env, { url, title = ORIGINAL_PAGE_TITLE, incognito = false } = {}) {
+  await env.deliver(fixture("message-context"));
+  if (url || incognito) {
+    await env.deliver({
+      type: "open",
+      url: url || "https://example.com/docs",
+      left: 10,
+      top: 10,
+      ...(incognito ? { incognito: true } : {}),
+    });
+  } else {
+    await env.deliver(fixture("message-open-legacy"));
+  }
+  const lil = env.windows().find((w) => (incognito ? w.incognito : w.type === "popup")) || env.windows()[0];
+  await env.setTabState(lil.tabs[0].id, { title });
+  return lil;
+}
+
 test("boots the production service worker, not a copy", async () => {
   const env = await boot();
   assert.equal(path.basename(WORKER_PATH), "background.js");
@@ -753,17 +782,301 @@ test("automatic expiry of a focused lil restores prior context before cleanup", 
   assert.deepEqual(Object.keys(env.registry()), []);
 });
 
-test("sleeping a lil stores a capture in IndexedDB and navigates to the sleep page", async () => {
+test("entering Lil Nap captures the visible lil and records original URL, title, and capture identity before releasing the document", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env);
+  const originalUrl = lil.tabs[0].url;
+
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+
+  const tab = env.windows()[0].tabs[0];
+  const entry = env.registry()[String(lil.id)];
+  const captures = env.captures();
+
+  assert.equal(originalUrl, "https://example.com/docs");
+  assert.match(tab.url, NAP_PAGE);
+  assert.notEqual(tab.url, originalUrl);
+  assert.equal(entry.slept, true);
+  assert.equal(entry.originalUrl, originalUrl);
+  assert.equal(entry.originalTitle, ORIGINAL_PAGE_TITLE);
+  assert.equal(typeof entry.sleepCaptureKey, "string");
+  assert.ok(entry.sleepCaptureKey.length > 0);
+  assert.equal(captures.size, 1);
+  assert.ok(captures.has(entry.sleepCaptureKey));
+  assert.equal(napParams(tab.url).get("k"), entry.sleepCaptureKey);
+  assert.equal(napParams(tab.url).get("u"), originalUrl);
+  assert.equal(napParams(tab.url).get("tint"), "#3311aa", "the configured tint travels with the entry inputs");
+  assert.ok(journalHas(env, "tabs.captureVisibleTab"));
+
+  const capturedAt = journalIndex(env, (e) => e.op === "tabs.captureVisibleTab");
+  const releasedAt = journalIndex(
+    env,
+    (e) =>
+      (e.op === "tabs.update" && String(e.update && e.update.url).includes("sleep.html")) ||
+      (e.op === "scripting.executeScript" && (e.args || []).some((a) => String(a).includes("sleep.html")))
+  );
+  assert.ok(capturedAt >= 0 && releasedAt > capturedAt, "capture is stored before the original document is released");
+});
+
+test("the napping document title is the original page title prefixed with the sleeping symbol", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env);
+
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+
+  const tab = env.windows()[0].tabs[0];
+  assert.match(tab.url, NAP_PAGE);
+  assert.equal(napParams(tab.url).get("t"), ORIGINAL_PAGE_TITLE);
+  assert.equal(tab.title, "💤 Example Docs");
+});
+
+test("the nap document replaces rather than pollutes back/forward history", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env);
+  const tabId = lil.tabs[0].id;
+  const originalUrl = lil.tabs[0].url;
+  assert.deepEqual(env.sessionHistory(tabId), [originalUrl]);
+
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+
+  const tab = env.windows()[0].tabs[0];
+  assert.match(tab.url, NAP_PAGE);
+  assert.deepEqual(env.sessionHistory(tabId), [tab.url]);
+  assert.equal(env.sessionHistory(tabId).includes(originalUrl), false);
+});
+
+// Rollback oracle: a failed entry leaves the live document truthful — original
+// URL and history untouched, no nap fields on the registry, no stored capture,
+// and no history-pushing fallback navigation.
+function assertTruthfulRollback(env, lil, reply) {
+  const originalUrl = "https://example.com/docs";
+  const tabId = lil.tabs[0].id;
+  assert.equal(reply.ok, false, "entry reports failure");
+  const tab = env.windows().find((w) => w.id === lil.id).tabs[0];
+  assert.equal(tab.url, originalUrl, "the live document is left untouched");
+  assert.equal(tab.title, ORIGINAL_PAGE_TITLE);
+  assert.deepEqual(env.sessionHistory(tabId), [originalUrl], "no nap URL sits on history");
+  const entry = env.registry()[String(lil.id)];
+  assert.ok(entry, "the lil stays registered as a live lil");
+  assert.equal(entry.slept, undefined);
+  assert.equal(entry.sleepCaptureKey, undefined);
+  assert.equal(entry.originalUrl, undefined);
+  assert.equal(entry.originalTitle, undefined);
+  assert.equal(entry.url, originalUrl);
+  assert.equal(env.captures().size, 0, "the fresh capture is rolled back");
+  assert.equal(
+    journalHas(env, "tabs.update", (e) => String(e.update && e.update.url).includes("sleep.html")),
+    false,
+    "entry never degrades to history-pushing navigation"
+  );
+}
+
+test("when document replacement is unavailable, Lil Nap entry fails truthfully and rolls back nap state", async () => {
+  const env = await boot({ scripting: false }); // scripting permission absent
+  const lil = await openTitledLil(env);
+
+  const reply = await env.message({ action: "sleepThisLil" }, sender(lil));
+
+  assert.ok(journalHas(env, "tabs.captureVisibleTab"), "capture was prepared before release");
+  assertTruthfulRollback(env, lil, reply);
+});
+
+test("when document replacement fails, Lil Nap entry fails truthfully and rolls back nap state", async () => {
+  const env = await boot({ rejectScripting: () => true });
+  const lil = await openTitledLil(env);
+
+  const reply = await env.message({ action: "sleepThisLil" }, sender(lil));
+
+  assert.ok(journalHas(env, "tabs.captureVisibleTab"), "capture was prepared before release");
+  assertTruthfulRollback(env, lil, reply);
+});
+
+test("incognito lils are never captured or placed into Lil Nap", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "https://private.example/", title: "Secret", incognito: true });
+  assert.equal(lil.incognito, true);
+  assert.equal(lil.tabs[0].url, "https://private.example/");
+
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+
+  const tab = env.windows().find((w) => w.incognito).tabs[0];
+  assert.equal(tab.url, "https://private.example/");
+  assert.equal(tab.title, "Secret");
+  assert.equal(env.captures().size, 0);
+  assert.equal(env.registry()[String(lil.id)], undefined);
+  assert.equal(journalHas(env, "tabs.captureVisibleTab"), false);
+  assert.equal(
+    journalHas(env, "scripting.executeScript", (e) => (e.args || []).some((a) => String(a).includes("sleep.html"))),
+    false
+  );
+});
+
+test("a browser restart restores a napping lil as a nap document without live-loading the original page", async () => {
+  const parked = {
+    43: {
+      url: "https://napping.example/",
+      bounds: { left: 300, top: 250, width: 900, height: 700 },
+      expiry: "never",
+      lastInteraction: 1,
+      slept: true,
+      sleepCaptureKey: "43-1",
+      originalUrl: "https://napping.example/",
+      originalTitle: "Napping Example",
+    },
+  };
+  const env = await boot({ storage: { ephemeralWindows: parked } });
+  await env.startup();
+
+  const wins = env.windows();
+  assert.equal(wins.length, 1);
+  const tab = wins[0].tabs[0];
+  assert.match(tab.url, NAP_PAGE);
+  assert.equal(napParams(tab.url).get("k"), "43-1");
+  assert.equal(napParams(tab.url).get("u"), "https://napping.example/");
+  assert.equal(napParams(tab.url).get("t"), "Napping Example");
+  assert.equal(tab.title, "💤 Napping Example");
+  assert.deepEqual(env.sessionHistory(tab.id), [tab.url]);
+  assert.equal(
+    journalHas(env, "windows.create", (e) => e.create.url === "https://napping.example/"),
+    false,
+    "restore must not live-load the original page"
+  );
+  assert.ok(journalHas(env, "windows.create", (e) => String(e.create && e.create.url).includes("sleep.html")));
+
+  const entry = env.registry()[String(wins[0].id)];
+  assert.equal(entry.url, "https://napping.example/");
+  assert.equal(entry.originalUrl, "https://napping.example/");
+  assert.equal(entry.originalTitle, "Napping Example");
+  assert.equal(entry.slept, true);
+  assert.equal(entry.sleepCaptureKey, "43-1");
+  assert.equal(tab.discarded, false);
+  assert.equal(tab.frozen, false);
+});
+
+test("a browser restart rebuilds the nap page with the current configured tint, defaulting only when none is configured", async () => {
+  const parked = {
+    43: {
+      url: "https://napping.example/",
+      bounds: { left: 300, top: 250, width: 900, height: 700 },
+      expiry: "never",
+      lastInteraction: 1,
+      slept: true,
+      sleepCaptureKey: "43-1",
+      originalUrl: "https://napping.example/",
+      originalTitle: "Napping Example",
+    },
+  };
+
+  // The configured tint survives the restart via the cached context.
+  const configured = await boot({ storage: { ephemeralWindows: parked } });
+  await configured.deliver(fixture("message-context")); // sleep.tint "#3311aa"
+  await configured.startup();
+  const configuredTab = configured.windows()[0].tabs[0];
+  assert.match(configuredTab.url, NAP_PAGE);
+  assert.equal(napParams(configuredTab.url).get("tint"), "#3311aa");
+
+  // Configuration supplies no tint: the existing default applies.
+  const unconfigured = await boot({ storage: { ephemeralWindows: parked } });
+  await unconfigured.startup();
+  const defaultTab = unconfigured.windows()[0].tabs[0];
+  assert.match(defaultTab.url, NAP_PAGE);
+  assert.equal(napParams(defaultTab.url).get("tint"), "purple");
+});
+
+test("registry and capture state distinguish Lil Nap from native discard and freeze", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));
-  await env.deliver(fixture("message-open-legacy"));
-  const lil = env.windows()[0];
-  await env.message({ action: "sleepThisLil" }, sender(lil));
-  const tab = env.windows()[0].tabs[0];
-  assert.match(tab.url, /^chrome-extension:\/\/oofeehjoocddelicpmnpbafmbalaakge\/sleep\.html\?/);
-  assert.equal(env.registry()[String(lil.id)].slept, true);
-  assert.equal(env.captures().size, 1);
-  assert.ok(journalHas(env, "tabs.captureVisibleTab"));
+
+  await env.deliver({ type: "open", url: "https://nap.example/", left: 10, top: 10 });
+  const nappingLil = env.windows()[0];
+  await env.setTabState(nappingLil.tabs[0].id, { title: "Nap Me" });
+  await env.message({ action: "sleepThisLil" }, sender(nappingLil));
+
+  await env.deliver({ type: "open", url: "https://discard.example/", left: 40, top: 40 });
+  const discardedLil = env.windows().find((w) => w.tabs[0].url === "https://discard.example/");
+  await env.setTabState(discardedLil.tabs[0].id, { discarded: true, title: "Discarded Page" });
+
+  await env.deliver({ type: "open", url: "https://frozen.example/", left: 70, top: 70 });
+  const frozenLil = env.windows().find((w) => w.tabs[0].url === "https://frozen.example/");
+  await env.setTabState(frozenLil.tabs[0].id, { frozen: true, title: "Frozen Page" });
+
+  const napTab = env.windows().find((w) => w.id === nappingLil.id).tabs[0];
+  const napEntry = env.registry()[String(nappingLil.id)];
+  assert.match(napTab.url, NAP_PAGE);
+  assert.equal(napTab.discarded, false);
+  assert.equal(napTab.frozen, false);
+  assert.equal(napEntry.slept, true);
+  assert.equal(napEntry.originalUrl, "https://nap.example/");
+  assert.ok(env.captures().has(napEntry.sleepCaptureKey));
+
+  const discardedTab = env.windows().find((w) => w.id === discardedLil.id).tabs[0];
+  const discardedEntry = env.registry()[String(discardedLil.id)];
+  assert.equal(discardedTab.url, "https://discard.example/");
+  assert.equal(discardedTab.discarded, true);
+  assert.equal(discardedTab.frozen, false);
+  assert.equal(discardedEntry.slept, undefined);
+  assert.equal(discardedEntry.sleepCaptureKey, undefined);
+  assert.match(discardedTab.url, /^https:\/\/discard\.example\//);
+
+  const frozenTab = env.windows().find((w) => w.id === frozenLil.id).tabs[0];
+  const frozenEntry = env.registry()[String(frozenLil.id)];
+  assert.equal(frozenTab.url, "https://frozen.example/");
+  assert.equal(frozenTab.frozen, true);
+  assert.equal(frozenTab.discarded, false);
+  assert.equal(frozenEntry.slept, undefined);
+  assert.notEqual(frozenTab.url, napTab.url);
+  assert.equal(journalHas(env, "tabs.discard"), false);
+});
+
+test("the page context menu action is Let This Lil Nap", async () => {
+  const env = await boot();
+  await env.installed();
+  const lil = await openTitledLil(env);
+  await env.chrome.windows.update(lil.id, { focused: true });
+  await env.flush();
+
+  const item = env.menus().find((m) => m.id === "sleep-this-lil");
+  assert.ok(item);
+  assert.equal(item.title, "Let This Lil Nap");
+  assert.equal(item.visible, true);
+});
+
+test("the whitelist context menu uses napping language", async () => {
+  const env = await boot();
+  await env.installed();
+  const item = () => env.menus().find((m) => m.id === "toggle-whitelist");
+  assert.equal(item().title, "Never nap this site");
+
+  const lil = await openTitledLil(env);
+  await env.chrome.windows.update(lil.id, { focused: true });
+  await env.flush();
+  assert.equal(item().title, "Never nap example.com");
+
+  await env.clickMenu("toggle-whitelist", { id: lil.tabs[0].id, windowId: lil.id, url: lil.tabs[0].url });
+  assert.equal(item().title, "Allow napping example.com");
+});
+
+test("automatic Lil Nap records the same capture and registry truth as a manual entry", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "https://idle.example/", title: "Idle Docs" });
+  await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+
+  const registry = env.registry();
+  registry[String(lil.id)].lastInteraction = Date.now() - 46 * 60 * 1000;
+  await env.chrome.storage.local.set({ ephemeralWindows: registry });
+
+  await env.alarm();
+
+  const tab = env.windows().find((w) => w.id === lil.id).tabs[0];
+  const entry = env.registry()[String(lil.id)];
+  assert.match(tab.url, NAP_PAGE);
+  assert.equal(entry.slept, true);
+  assert.equal(entry.originalUrl, "https://idle.example/");
+  assert.equal(entry.originalTitle, "Idle Docs");
+  assert.equal(napParams(tab.url).get("t"), "Idle Docs");
+  assert.equal(tab.title, "💤 Idle Docs");
+  assert.ok(env.captures().has(entry.sleepCaptureKey));
+  assert.deepEqual(env.sessionHistory(tab.id), [tab.url]);
 });
 
 test("unknown config fields are not required for the worker to apply known ones", async () => {
