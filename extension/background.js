@@ -861,11 +861,13 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
 });
 
 // ===========================================================================
-// NEW-WINDOW LINK HANDLING (v3) — the auth-popup fix + focus discipline.
+// NEW-WINDOW LINK HANDLING (v3, classification refined in v4 by issue #16).
 //
 // On onCreatedNavigationTarget from a lil, WAIT for the tab to settle, then:
-//   - window.type === "popup" OR openerTabId missing OR OAuth-guard URL
-//       → do NOTHING (preserve the native popup: window.opener/postMessage).
+//   - window.type === "popup" OR OAuth-guard URL (requested or settled)
+//       → do NOTHING (preserve the native popup/auth flow: window.opener /
+//         postMessage). A missing openerTabId alone is NOT decisive: a
+//         rel="noopener" target=_blank spawn is a genuine requested target.
 //   - landed as a tab in a NORMAL window
 //       → effective behavior = config linkBehavior flipped by ⌘ clickHint:
 //         new-lil  → re-parent into a new cascaded lil (create → focus)
@@ -944,12 +946,16 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
     if (!settled) return; // tab vanished — nothing to do
     const { tab, win } = settled;
 
-    // ---- Branch 1: native popup / auth window → LEAVE UNTOUCHED. ----
+    // ---- Branch 1: native popup / guarded auth flow → LEAVE UNTOUCHED. ----
+    // Preservation is decided by the settled state together: a genuine popup
+    // window (a featureful window.open keeps window.opener/postMessage alive)
+    // or an OAuth-guard URL, requested or final. A missing opener alone is
+    // NOT decisive (issue #16): an opener-less spawn in a normal window is a
+    // genuine requested browsing target and follows the configured behavior.
     const isPopupWindow = win.type === "popup";
-    const noOpener = tab.openerTabId === undefined || tab.openerTabId === null;
     const authUrl = matchesOAuthGuard(details.url) || matchesOAuthGuard(tab.url);
-    if (isPopupWindow || noOpener || authUrl) {
-      log("new-window: preserving native popup", win.type, "opener=" + tab.openerTabId);
+    if (isPopupWindow || authUrl) {
+      log("new-window: preserving native popup/auth", win.type, "opener=" + tab.openerTabId);
       return; // no re-parent, no navigate, no registry
     }
 
