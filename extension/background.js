@@ -817,7 +817,18 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (reg[key]) {
     // Don't overwrite the "real" url with the sleep-page URL — slept entries
     // keep their originalUrl and are managed by sleep/wake directly.
-    if (reg[key].slept) return;
+    // If the visible document has already left the nap URL (page fallback
+    // whose own cleanup hung), finish the leftover registry/capture work.
+    if (reg[key].slept) {
+      if (!isSleepPageUrl(changeInfo.url)) {
+        await clearNapState(
+          tab.windowId,
+          reg[key].originalUrl || changeInfo.url,
+          reg[key].sleepCaptureKey
+        );
+      }
+      return;
+    }
     reg[key].url = changeInfo.url;
     await setRegistry(reg);
   }
@@ -1133,6 +1144,12 @@ function sleepPageUrl({ captureKey, originalUrl, originalTitle, tint }) {
   return chrome.runtime.getURL("sleep.html") + "?" + params.toString();
 }
 
+function isSleepPageUrl(url) {
+  if (typeof url !== "string" || !url) return false;
+  const nap = chrome.runtime.getURL("sleep.html");
+  return url === nap || url.startsWith(nap + "?");
+}
+
 // Release the original document by replacing the current history entry so the
 // nap URL does not sit on top of the live page in back/forward. Replacement is
 // the only truthful release: when scripting is unavailable or fails, return
@@ -1309,8 +1326,8 @@ function waitForWakeSwap(tabId, startedAt) {
 }
 
 // Clear every nap-only registry field while keeping the lil registered, and
-// delete the stored capture. Called only once a fresh active document has
-// actually replaced the nap document.
+// delete the stored capture. Used after a successful wake replacement, and as
+// the event-driven backstop when the nap document is already gone.
 async function clearNapState(windowId, originalUrl, captureKey) {
   const reg = await getRegistry();
   const entry = reg[String(windowId)];

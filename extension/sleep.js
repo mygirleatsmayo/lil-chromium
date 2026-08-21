@@ -13,8 +13,8 @@ if (typeof window !== "undefined" && window.SLEEPING_LIL_DATA) {
 // titles the document with the sleeping symbol, and wakes the lil on any click
 // (the SW runs the bounded wake transition — the original URL loads behind this
 // static image, the swap lands within 180–500 ms, and the capture is deleted —
-// with a fallback here, only if the worker fails or is unreachable, that clears
-// nap state and navigates directly).
+// with a fallback here, only if the worker fails or is unreachable, that
+// starts cleanup then navigates even if storage/IDB never settles).
 // See PROTOCOL.md Lil Nap.
 
 (() => {
@@ -157,10 +157,10 @@ if (typeof window !== "undefined" && window.SLEEPING_LIL_DATA) {
   // worker's bounded path. ----
   let waking = false;
 
-  // Leaving the nap document directly must finish what the worker could not:
+  // Leaving the nap document directly must start what the worker could not:
   // clear this lil's nap-only registry fields (the lil stays registered) and
-  // delete the capture, then navigate. Best effort throughout — a dead
-  // extension context must not stop the page from waking itself.
+  // delete the capture. Best effort, and bounded — a hung storage/IDB call
+  // must not stop the page from waking itself.
   async function reconcileNapState() {
     try {
       const obj = await chrome.storage.local.get(REGISTRY_KEY);
@@ -190,10 +190,18 @@ if (typeof window !== "undefined" && window.SLEEPING_LIL_DATA) {
     }
   }
 
+  // Hung storage/IDB must not hold the document. Cleanup may still finish
+  // after this bound (and the worker reconciles leftovers on URL change).
+  const CLEANUP_BOUND_MS = 0;
+
   function leaveNap() {
     if (!originalUrl) return;
     (async () => {
-      await reconcileNapState();
+      const cleanup = reconcileNapState();
+      await Promise.race([
+        cleanup,
+        new Promise((resolve) => setTimeout(resolve, CLEANUP_BOUND_MS)),
+      ]);
       try {
         location.replace(originalUrl);
       } catch (_) {

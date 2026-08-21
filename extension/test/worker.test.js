@@ -1636,6 +1636,31 @@ test("when the nap tab cannot be removed, wake puts it back in front, reports fa
   assert.ok(env.captures().has(captureKey), "the capture stays referenced, not orphaned");
 });
 
+test("when a napping lil leaves the nap document without a worker wake, leftover nap state is still reconciled", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env);
+  const originalUrl = lil.tabs[0].url;
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+  const captureKey = env.registry()[String(lil.id)].sleepCaptureKey;
+  assert.match(napping.tabs[0].url, NAP_PAGE);
+  assert.ok(env.captures().has(captureKey));
+
+  // The page's own fallback replaced the nap document; cleanup APIs may still
+  // be outstanding. The worker sees the URL leave sleep.html.
+  await env.chrome.tabs.update(napping.tabs[0].id, { url: originalUrl });
+  await env.flush();
+
+  const entry = env.registry()[String(lil.id)];
+  assert.ok(entry, "the lil stays registered");
+  assert.equal(entry.url, originalUrl);
+  assert.equal(entry.slept, undefined);
+  assert.equal(entry.sleepCaptureKey, undefined);
+  assert.equal(entry.originalUrl, undefined);
+  assert.equal(entry.originalTitle, undefined);
+  assert.equal(env.captures().has(captureKey), false, "the capture is not left behind");
+});
+
 test("unknown config fields are not required for the worker to apply known ones", async () => {
   const cfg = fixture("config-with-unknown-fields");
   const env = await boot();

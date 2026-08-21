@@ -40,6 +40,7 @@ export async function flush(turns = 8) {
  *   captureKey / originalUrl / originalTitle / tint — nap URL query inputs
  *   windowId — registry key of the napping lil (its entry is seeded napping)
  *   reply — "ok" | "fail" | "error" | "hang" | "throw": the worker's answer
+ *   hangStorage — storage.local.get never settles (P4 bound)
  */
 export async function mountSleepPage(options = {}) {
   const captureKey = options.captureKey || "7-1700000000000";
@@ -48,6 +49,7 @@ export async function mountSleepPage(options = {}) {
   const tint = options.tint || "purple";
   const windowId = options.windowId || 7;
   const replyMode = options.reply || "ok";
+  const hangStorage = !!options.hangStorage;
 
   const window = parseHTML(fs.readFileSync(SLEEP_HTML_PATH, "utf8"));
   const document = window.document;
@@ -106,6 +108,7 @@ export async function mountSleepPage(options = {}) {
     storage: {
       local: {
         async get(keys) {
+          if (hangStorage) return new Promise(() => {});
           if (keys == null) return { ...storage };
           if (typeof keys === "string") return keys in storage ? { [keys]: storage[keys] } : {};
           return {};

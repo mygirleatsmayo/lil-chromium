@@ -79,3 +79,19 @@ test("a thrown send (invalidated context) runs the fallback at once with cleanup
   assert.equal(page.registry()[WINDOW_KEY].slept, undefined);
   assert.equal(page.captures().has(CAPTURE_KEY), false);
 });
+
+test("a hung storage API does not strand the nap document: the page navigates after a bounded wait", async () => {
+  const page = await mountSleepPage({ reply: "fail", hangStorage: true });
+  page.click();
+  await flush();
+
+  assert.equal(page.navigatedTo(), null, "navigation waits only on the cleanup bound, not forever");
+  assert.equal(page.registry()[WINDOW_KEY].slept, true, "hung storage left nap fields in place");
+  assert.equal(page.captures().has(CAPTURE_KEY), true);
+
+  page.fireTimers((ms) => ms < 1000);
+  await flush();
+  assert.equal(page.navigatedTo(), ORIGINAL_URL, "the bound lets the page leave without cleanup settling");
+  assert.equal(page.registry()[WINDOW_KEY].slept, true, "eventual cleanup is not this page's job once hung");
+  assert.equal(page.captures().has(CAPTURE_KEY), true);
+});
