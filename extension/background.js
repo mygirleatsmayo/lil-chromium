@@ -264,6 +264,7 @@ function consumeClickHint(url) {
 // ===========================================================================
 
 let focusedWindowId = chrome.windows.WINDOW_ID_NONE;
+let lastNormalWindowId = chrome.windows.WINDOW_ID_NONE;
 
 // Explicit focus. Used after windows.create when a lil is asked to take focus.
 async function focusWindow(windowId) {
@@ -271,8 +272,13 @@ async function focusWindow(windowId) {
   await safe(chrome.windows.update(windowId, { focused: true }), "windows.update focus");
 }
 
-chrome.windows.onFocusChanged.addListener((windowId) => {
+chrome.windows.onFocusChanged.addListener(async (windowId) => {
   focusedWindowId = windowId;
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  const win = await safe(chrome.windows.get(windowId), "windows.get last-normal");
+  if (win && win.type === "normal" && focusedWindowId === windowId) {
+    lastNormalWindowId = windowId;
+  }
 });
 
 // ===========================================================================
@@ -903,7 +909,18 @@ async function cascadeTabToLil(tabId, srcWindowId, fallbackUrl) {
   });
 }
 
+// Tabs named by webNavigation.onCreatedNavigationTarget. That event is the
+// public signal that a tab was created to host a navigation from another tab,
+// so the new-window link flow owns it — the new-tab conversion below must
+// never adopt it, regardless of which listener runs first (Chromium dispatches
+// tabs.onCreated for the new tab before this event). Command+T / utility opens
+// never fire it. Claimed synchronously at listener entry so the claim always
+// lands before the new-tab flow's settle-then-decide checks; tab ids are
+// session-unique, so entries are kept for the life of the service worker.
+const linkOwnedTabIds = new Set();
+
 chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
+  if (details && typeof details.tabId === "number") linkOwnedTabIds.add(details.tabId);
   try {
     const srcTab = await safe(chrome.tabs.get(details.sourceTabId), "tabs.get source");
     if (!srcTab || srcTab.windowId === undefined) return;
@@ -944,6 +961,56 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
     await cascadeTabToLil(tab.id, srcTab.windowId, details.url);
   } catch (err) {
     log("new-window handling error", err && err.message ? err.message : err);
+  }
+});
+
+// ===========================================================================
+// NEW-TAB CONVERSION (v4, issue #18).
+//
+// A browser-created tab (Command+T, or a utility open targeted at this
+// browser) converts into a lil only when public events tie it to a lil:
+// onFocusChanged still names a registered lil at the onCreated event, the
+// tab is active and opener-less, and it landed in an already-populated
+// normal window. No timestamps. When that tie is missing, leave the tab.
+// A tab claimed by the link flow (linkOwnedTabIds) or matching the OAuth
+// guard is never converted — the new-window leave-alone rules always win.
+// ===========================================================================
+
+chrome.tabs.onCreated.addListener(async (tab) => {
+  const sourceWindowId = focusedWindowId;
+  const destWindowId = lastNormalWindowId;
+  try {
+    if (!tab || tab.id === undefined || tab.windowId === undefined) return;
+    if (tab.active !== true) return;
+    if (tab.openerTabId !== undefined && tab.openerTabId !== null) return;
+    if (sourceWindowId === chrome.windows.WINDOW_ID_NONE) return;
+    if (tab.windowId === sourceWindowId) return;
+    if (tab.windowId !== destWindowId) return;
+    if (!(await isEphemeralWindow(sourceWindowId))) return;
+
+    const settled = await settleTabAndWindow(tab.id);
+    if (!settled) return;
+    const { tab: live, win } = settled;
+    if (linkOwnedTabIds.has(tab.id)) return;
+    if (live.openerTabId !== undefined && live.openerTabId !== null) return;
+    if (matchesOAuthGuard(live.url || live.pendingUrl)) return;
+    if (live.active !== true) return;
+    if (!win || win.type !== "normal") return;
+    if (await isEphemeralWindow(win.id)) return;
+
+    const inWindow = await safe(
+      chrome.tabs.query({ windowId: live.windowId }),
+      "tabs.query new-tab siblings"
+    );
+    if (!inWindow || inWindow.filter((t) => t.id !== live.id).length === 0) return;
+
+    await cascadeTabToLil(
+      live.id,
+      sourceWindowId,
+      live.url || live.pendingUrl || tab.url || tab.pendingUrl || ""
+    );
+  } catch (err) {
+    log("new-tab conversion error", err && err.message ? err.message : err);
   }
 });
 

@@ -1197,6 +1197,318 @@ test("opening Settings from a lil posts open-settings and does not raise a brows
   assert.equal(env.windows().length, 2);
 });
 
+// ---------------------------------------------------------------------------
+// Attributable new-tab conversion (issue #18). A browser-created tab (Command+T
+// or a current-browser utility open) becomes a lil only when public events tie
+// it to a focused lil: onCreated names an active, opener-less tab in an
+// already-populated normal window, and onFocusChanged still names a registered
+// lil as the focused Chromium window at that creation event.
+// ---------------------------------------------------------------------------
+
+test("a Command+T tab created active in a normal window while a lil is focused converts into a lil chained to it", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+  assert.equal(source.focused, true);
+
+  const created = await env.chrome.tabs.create({ windowId: normal.id, active: true, url: "chrome://newtab/" });
+  await env.flush();
+
+  const converted = env.windows().find((w) => w.type === "popup" && w.id !== source.id);
+  assert.ok(converted, "the browser-created tab was adopted into a new lil");
+  assert.equal(converted.focused, true);
+  assert.equal(converted.tabs[0].id, created.id);
+  assert.ok(journalHas(env, "windows.create", (e) => e.create.tabId === created.id && e.create.type === "popup"));
+
+  const entry = env.registry()[String(converted.id)];
+  assert.ok(entry, "the converted lil is registered through the shared lifecycle");
+  assert.equal(entry.url, "chrome://newtab/");
+  assert.deepEqual(JSON.parse(JSON.stringify(entry.priorContext)), {
+    kind: "lil",
+    windowId: source.id,
+  });
+
+  const hostNow = env.windows().find((w) => w.id === normal.id);
+  assert.equal(hostNow.tabs.some((t) => t.id === created.id), false, "the tab left the normal window");
+  assert.ok(env.registry()[String(source.id)], "the source lil remains registered");
+});
+
+test("a current-browser utility open while a lil is focused converts into a lil chained to it", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+
+  const created = await env.chrome.tabs.create({
+    windowId: normal.id,
+    active: true,
+    url: "https://utility.example/search?q=hello",
+  });
+  await env.flush();
+
+  const converted = env.windows().find((w) => w.type === "popup" && w.id !== source.id);
+  assert.ok(converted, "the utility tab was adopted into a new lil");
+  assert.equal(converted.tabs[0].id, created.id);
+  assert.equal(env.registry()[String(converted.id)].url, "https://utility.example/search?q=hello");
+  assert.deepEqual(JSON.parse(JSON.stringify(env.registry()[String(converted.id)].priorContext)), {
+    kind: "lil",
+    windowId: source.id,
+  });
+  assert.equal(converted.focused, true);
+});
+
+test("a background tab creation is never captured, even with a lil focused", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+  assert.equal(source.focused, true);
+
+  const created = await env.chrome.tabs.create({ windowId: normal.id, active: false, url: "https://bg.example/" });
+  await env.flush();
+
+  assert.equal(env.windows().filter((w) => w.type === "popup").length, 1, "no second lil was created");
+  assert.equal(
+    journalHas(env, "windows.create", (e) => e.create.tabId === created.id),
+    false,
+    "the background tab was never adopted"
+  );
+  const hostNow = env.windows().find((w) => w.id === normal.id);
+  assert.ok(hostNow.tabs.some((t) => t.id === created.id), "the tab stayed in its normal window");
+  assert.deepEqual(Object.keys(env.registry()), [String(source.id)]);
+});
+
+test("a link-spawned tab is owned by the new-window link flow, never the new-tab flow", async () => {
+  const env = await boot();
+  await env.deliver({ ...fixture("message-context"), linkBehavior: "same-lil" });
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+  assert.equal(source.focused, true);
+
+  const spawned = await env.chrome.tabs.create({
+    windowId: normal.id,
+    url: "https://spawned.example/",
+    openerTabId: source.tabs[0].id,
+    active: true,
+  });
+  await env.createdNavigationTarget({
+    tabId: spawned.id,
+    sourceTabId: source.tabs[0].id,
+    url: "https://spawned.example/",
+  });
+
+  assert.equal(
+    journalHas(env, "windows.create", (e) => e.create.tabId === spawned.id),
+    false,
+    "the new-tab flow never adopts an opener-attributed tab"
+  );
+  assert.equal(
+    env.windows().filter((w) => w.type === "popup").length,
+    1,
+    "same-lil collapses the spawn into the source lil instead of converting"
+  );
+  const sourceNow = env.windows().find((w) => w.id === source.id);
+  assert.equal(sourceNow.tabs[0].url, "https://spawned.example/");
+  assert.equal(sourceNow.focused, true, "focus returned to the source lil");
+});
+
+// Drive a link spawn in Chromium's real pipeline order: the tab is created
+// (tabs.onCreated) and its creating navigation then starts
+// (webNavigation.onCreatedNavigationTarget) while the onCreated listener is
+// still awaiting its first API call. Ownership must come from the events
+// themselves — no clocks, no settling delays.
+async function linkSpawnFromLil(env, { windowId, url, sourceTabId }) {
+  const created = env.chrome.tabs.create({ windowId, url, active: true });
+  const entry = env.journal().find((e) => e.op === "tabs.create" && e.create.url === url);
+  await env.createdNavigationTarget({ tabId: entry.tabId, sourceTabId, url });
+  await created;
+  await env.flush();
+  return entry.tabId;
+}
+
+test("an opener-less link spawn is left alone even when tabs.onCreated runs before the navigation claim", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+  assert.equal(source.focused, true);
+
+  // rel="noopener" style spawn: no openerTabId, so only the
+  // onCreatedNavigationTarget event ties it to the link flow.
+  const spawnedId = await linkSpawnFromLil(env, {
+    windowId: normal.id,
+    url: "https://noopener.example/",
+    sourceTabId: source.tabs[0].id,
+  });
+
+  assert.equal(env.windows().filter((w) => w.type === "popup").length, 1, "the new-tab flow never converted the spawn");
+  assert.equal(
+    journalHas(env, "windows.create", (e) => e.create.tabId === spawnedId),
+    false,
+    "the spawn was never re-parented into a lil"
+  );
+  const hostNow = env.windows().find((w) => w.id === normal.id);
+  assert.ok(hostNow.tabs.some((t) => t.id === spawnedId), "the spawn stayed in its normal window");
+  const sourceNow = env.windows().find((w) => w.id === source.id);
+  assert.equal(sourceNow.tabs[0].url, "https://lil.example/", "the link flow's leave-alone rule held");
+  assert.deepEqual(Object.keys(env.registry()), [String(source.id)]);
+});
+
+test("an OAuth link spawn is left alone even when tabs.onCreated runs before the navigation claim", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+  assert.equal(source.focused, true);
+
+  const spawnedId = await linkSpawnFromLil(env, {
+    windowId: normal.id,
+    url: "https://accounts.google.com/o/oauth2/auth?client_id=example",
+    sourceTabId: source.tabs[0].id,
+  });
+
+  assert.equal(env.windows().filter((w) => w.type === "popup").length, 1, "the OAuth spawn was never converted");
+  assert.equal(
+    journalHas(env, "windows.create", (e) => e.create.tabId === spawnedId),
+    false
+  );
+  assert.ok(env.windows().find((w) => w.id === normal.id).tabs.some((t) => t.id === spawnedId));
+  assert.deepEqual(Object.keys(env.registry()), [String(source.id)]);
+});
+
+test("a new tab after focus has already left the lil is left untouched", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+
+  await env.chrome.windows.update(normal.id, { focused: true });
+  const created = await env.chrome.tabs.create({ windowId: normal.id, active: true, url: "chrome://newtab/" });
+  await env.flush();
+
+  assert.equal(env.windows().filter((w) => w.type === "popup").length, 1, "the later tab was not converted");
+  assert.equal(
+    journalHas(env, "windows.create", (e) => e.create.tabId === created.id),
+    false
+  );
+  const hostNow = env.windows().find((w) => w.id === normal.id);
+  assert.ok(hostNow.tabs.some((t) => t.id === created.id));
+  assert.deepEqual(Object.keys(env.registry()), [String(source.id)]);
+});
+
+test("a new tab after Chromium reports WINDOW_ID_NONE is left untouched", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+
+  await env.blurBrowser();
+  const created = await env.chrome.tabs.create({ windowId: normal.id, active: true, url: "https://stale.example/" });
+  await env.flush();
+
+  assert.equal(env.windows().filter((w) => w.type === "popup").length, 1);
+  assert.equal(
+    journalHas(env, "windows.create", (e) => e.create.tabId === created.id),
+    false,
+    "WINDOW_ID_NONE is not a lil source"
+  );
+  assert.ok(env.windows().find((w) => w.id === normal.id).tabs.some((t) => t.id === created.id));
+  assert.deepEqual(Object.keys(env.registry()), [String(source.id)]);
+});
+
+test("a competing lil is ignored; conversion chains to the focused one", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await env.deliver({ type: "open", url: "https://first.example/", left: 10, top: 10 });
+  const first = env.windows().find((w) => w.type === "popup");
+  await env.deliver({ type: "open", url: "https://second.example/", left: 40, top: 40 });
+  const second = env.windows().find((w) => w.type === "popup" && w.id !== first.id);
+  assert.equal(second.focused, true);
+
+  const created = await env.chrome.tabs.create({ windowId: normal.id, active: true, url: "chrome://newtab/" });
+  await env.flush();
+
+  const converted = env.windows().find((w) => w.type === "popup" && w.id !== first.id && w.id !== second.id);
+  assert.ok(converted);
+  assert.equal(converted.tabs[0].id, created.id);
+  assert.deepEqual(JSON.parse(JSON.stringify(env.registry()[String(converted.id)].priorContext)), {
+    kind: "lil",
+    windowId: second.id,
+  });
+  assert.notEqual(env.registry()[String(converted.id)].priorContext.windowId, first.id);
+});
+
+test("a tab in a competing normal window is left untouched even with a lil focused", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const used = await env.chrome.windows.create({ url: "https://used.example/", type: "normal" });
+  const other = await env.chrome.windows.create({ url: "https://other.example/", type: "normal" });
+  await env.chrome.windows.update(used.id, { focused: true });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+  assert.equal(source.focused, true);
+
+  const created = await env.chrome.tabs.create({
+    windowId: other.id,
+    active: true,
+    url: "https://unrelated.example/",
+  });
+  await env.flush();
+
+  assert.equal(env.windows().filter((w) => w.type === "popup").length, 1, "the competing window's tab was not converted");
+  assert.equal(
+    journalHas(env, "windows.create", (e) => e.create.tabId === created.id),
+    false
+  );
+  assert.ok(env.windows().find((w) => w.id === other.id).tabs.some((t) => t.id === created.id));
+  assert.deepEqual(Object.keys(env.registry()), [String(source.id)]);
+});
+
+test("Command+T into the last-focused normal window still converts when another normal window exists", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const used = await env.chrome.windows.create({ url: "https://used.example/", type: "normal" });
+  await env.chrome.windows.create({ url: "https://other.example/", type: "normal" });
+  await env.chrome.windows.update(used.id, { focused: true });
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+
+  const created = await env.chrome.tabs.create({ windowId: used.id, active: true, url: "chrome://newtab/" });
+  await env.flush();
+
+  const converted = env.windows().find((w) => w.type === "popup" && w.id !== source.id);
+  assert.ok(converted);
+  assert.equal(converted.tabs[0].id, created.id);
+  assert.deepEqual(JSON.parse(JSON.stringify(env.registry()[String(converted.id)].priorContext)), {
+    kind: "lil",
+    windowId: source.id,
+  });
+});
+
+test("the first tab of a new normal window is not converted just because a lil is focused", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+
+  const brandNew = await env.chrome.windows.create({ url: "https://fresh.example/", type: "normal" });
+  await env.flush();
+
+  assert.equal(env.windows().filter((w) => w.type === "popup").length, 1);
+  assert.ok(env.windows().find((w) => w.id === brandNew.id).tabs.some((t) => t.url === "https://fresh.example/"));
+  assert.deepEqual(Object.keys(env.registry()), [String(source.id)]);
+});
+
 test("suite runs without a live profile or the repo as cwd", async () => {
   const originalCwd = process.cwd();
   const originalHome = process.env.HOME;
