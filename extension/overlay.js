@@ -1073,7 +1073,7 @@
     }
 
     back.addEventListener("click", () => history.back());
-    promoteBtn.addEventListener("click", () => promote("default"));
+    promoteBtn.addEventListener("click", () => promote("primary"));
     caretBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       if (menuOpen()) closeMenu();
@@ -1143,7 +1143,7 @@
         } else if (e.key === "o" || e.key === "O") {
           e.preventDefault();
           e.stopPropagation();
-          promote("default");
+          promote("primary");
         }
       },
       true

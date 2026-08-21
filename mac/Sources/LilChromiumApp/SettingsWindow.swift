@@ -234,6 +234,7 @@ struct SettingsRoot: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.yellow)
                             .help("Choose an installed browser other than Primary.")
+                            .accessibilityLabel("Choose an installed browser other than Primary.")
                     }
                 }
             }
