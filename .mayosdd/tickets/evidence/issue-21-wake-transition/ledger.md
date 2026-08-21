@@ -15,7 +15,17 @@ Reports: `REVIEW-STANDARDS.md`, `REVIEW-SPEC.md` (this directory).
 | P1 | Spec | Failed worker wake followed by the nap page's direct fallback leaves nap metadata and its capture behind | **fix** | Every path that visibly leaves the nap document must reconcile the registry and delete the capture. Inactive preload navigation must not count as a completed wake. Worker activation/removal/replacement failures must remain truthful and must not clear state or report success until a fresh active document has actually replaced the nap document; provide focused failure coverage. |
 | P2 | Spec | The page's 500 ms fallback races the worker's success-at-cap response | **fix** | The page fallback may run only after an explicit worker failure or genuine worker unreachability. It must not compete with the worker's bounded success path at the same deadline. Preserve the 180 ms floor and no-later-than-500 ms visible transition contract. |
 | P3 | Spec | `waitForWakeSwap` misses readiness that occurs before its `onUpdated` listener observes it | **fix** | After subscribing, inspect the fresh tab's current status so an already-complete load swaps at the floor; keep the listener/check order race-safe and retain the 500 ms cap. |
+| P4 | Spec | Direct page fallback awaits storage and IndexedDB reconciliation without a bound before navigating | **fix** | Cleanup must remain eventual, but a hung cleanup API must not strand the nap document. Bound the page's wait before navigation and retain a worker-side/event-driven cleanup backstop for state the page could not finish. |
+| S3 | Standards | PROTOCOL says activation failure puts the nap document back in front, while code only needs that rollback after removal failure | **fix** | State the two truthful failure paths precisely: activation failure leaves the already-visible nap document in front; removal failure reactivates it. |
 
 ## Round 1 outcome
 
 One high and two medium wake-correctness fixes plus two small cleanup fixes are owed. The inactive preload, minimum hold, capped happy path, fresh-document identity, successful cleanup, clean history, controlled-clock seam, and real-Mac QA split otherwise passed.
+
+## Round 1 remediation review
+
+Review `krz4zBqB` found S1, S2, P1, P2, and P3 resolved. It added P4 and S3 above.
+
+### Adjudication A1
+
+The 1000 ms no-reply backstop is accepted as genuine worker unreachability for this ticket. The 500 ms bound governs the worker-owned visual transition; recovery after a silent/dead worker is a separate safety path. Do not add a second status protocol or speculative machinery for a Chromium API promise that remains pending indefinitely. Real-Mac QA should reopen this only if a supported browser demonstrates such a hang or overlap.
