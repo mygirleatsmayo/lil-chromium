@@ -20,6 +20,31 @@ struct PaletteRow {
     let autocompleteHost: String?
 }
 
+/// The fully resolved action produced by pressing Return in the palette.
+struct PaletteAction: Equatable {
+    enum Kind {
+        case open
+        case search
+    }
+
+    let kind: Kind
+    let url: String
+    let incognito: Bool
+    let hint: String
+}
+
+/// The only modifier keys that participate in a palette Return chord.
+/// AppKit lock state and key-origin metadata never cross this boundary.
+struct PaletteReturnChord: OptionSet, Equatable, Sendable {
+    let rawValue: UInt8
+
+    static let shift = Self(rawValue: 1 << 0)
+    static let command = Self(rawValue: 1 << 1)
+    static let option = Self(rawValue: 1 << 2)
+    static let control = Self(rawValue: 1 << 3)
+    static let plain: Self = []
+}
+
 /// Owns the in-memory history snapshot (as a prebuilt `Ranking.HistoryIndex`)
 /// and turns a query string into ordered rows.
 ///
@@ -40,6 +65,46 @@ final class PaletteModel {
     /// hot path is the caller's job; this just stores the prebuilt index.
     func setIndex(_ index: Ranking.HistoryIndex) {
         self.index = index
+    }
+
+    /// Resolve Return at the native palette boundary. Unsupported modifier
+    /// combinations return nil so extra keys cannot fall through to an action.
+    func action(
+        for query: String,
+        selectedRow: PaletteRow?,
+        chord: PaletteReturnChord
+    ) -> PaletteAction? {
+        if chord == [.shift] || chord == [.command, .shift] {
+            let row = searchRow(query.trimmingCharacters(in: .whitespacesAndNewlines))
+            let incognito = chord == [.command, .shift]
+            return PaletteAction(
+                kind: .search,
+                url: row.actionURL,
+                incognito: incognito,
+                hint: incognito ? "⇧⌘⏎ Search Incognito" : "⇧⏎ Search"
+            )
+        }
+        let incognito: Bool
+        switch chord {
+        case .plain:
+            incognito = false
+        case [.command]:
+            incognito = true
+        default:
+            return nil
+        }
+        guard let selectedRow else { return nil }
+
+        let kind: PaletteAction.Kind = selectedRow.kind == .search ? .search : .open
+        let verb = kind == .search ? "Search" : "Open"
+        let shortcut = incognito ? "⌘⏎" : "⏎"
+        let suffix = incognito ? " Incognito" : ""
+        return PaletteAction(
+            kind: kind,
+            url: selectedRow.actionURL,
+            incognito: incognito,
+            hint: "\(shortcut) \(verb)\(suffix)"
+        )
     }
 
     /// The host offered for inline type-ahead. When a history row sits above

@@ -145,19 +145,18 @@ final class PaletteRowView: NSView {
 
     // MARK: - Configuration
 
-    /// Configure the row. `showHint` shows "↵ Open · esc Close" (dropped when the
-    /// row is crowded — the layout truncates it, but we also suppress it if the
-    /// title/domain are long so it never overlaps).
-    func configure(_ row: PaletteRow, selected: Bool, showHint: Bool, index: Int) {
+    /// Configure the row. The selected row receives the exact Return action's
+    /// modifier-aware hint; other rows receive nil.
+    func configure(_ row: PaletteRow, selected: Bool, hint: String?, index: Int) {
         rowIndex = index
         titleLabel.stringValue = row.title
         background.isSelected = selected
-        hintLabel.stringValue = showHint ? "↵ Open  ·  esc Close" : ""
+        hintLabel.stringValue = hint ?? ""
         // When the hint is shown it takes the right slot; blank the domain so it
         // collapses to zero intrinsic width (hidden views still hold layout, so
         // clearing the string — not isHidden — is what actually frees the space).
         // Non-selected rows show the domain.
-        domainLabel.stringValue = showHint ? "" : row.subtitle
+        domainLabel.stringValue = hint == nil ? row.subtitle : ""
 
         // Icon.
         switch row.kind {

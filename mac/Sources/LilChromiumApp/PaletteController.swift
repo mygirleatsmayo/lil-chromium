@@ -19,6 +19,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
 
     private var currentRows: [PaletteRow] = []
     private var selectedIndex: Int = 0
+    private var currentReturnChord: PaletteReturnChord = .plain
 
     // Inline autocomplete state.
     /// The text the user has actually typed (excludes auto-appended completion).
@@ -58,6 +59,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         inputField.stringValue = ""
         committedQuery = ""
         selectedIndex = 0
+        currentReturnChord = .plain
 
         // Read config fresh at each show() (always current), cache for the
         // session so per-keystroke reposition/row-building doesn't re-hit the
@@ -278,7 +280,8 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         for (i, row) in currentRows.prefix(maxResultRows).enumerated() {
             let rowView = PaletteRowView()
             rowView.configure(row, selected: i == selectedIndex,
-                              showHint: i == selectedIndex, index: i)
+                              hint: i == selectedIndex ? actionHint(for: row) : nil,
+                              index: i)
             rowView.heightAnchor.constraint(equalToConstant: resultRowHeight).isActive = true
             rowView.onHover = { [weak self] idx in self?.hoverSelect(idx) }
             rowView.onClick = { [weak self] idx in self?.clickRow(idx) }
@@ -324,30 +327,61 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         for (i, view) in stack.arrangedSubviews.enumerated() {
             guard let rowView = view as? PaletteRowView, i < currentRows.count else { continue }
             rowView.configure(currentRows[i], selected: i == selectedIndex,
-                              showHint: i == selectedIndex, index: i)
+                              hint: i == selectedIndex ? actionHint(for: currentRows[i]) : nil,
+                              index: i)
         }
     }
 
-    /// Open the current selection. `incognito` (palette ⌘-Enter) opens the
-    /// selection as an incognito lil (open.incognito:true), passed through to the
-    /// relay open call.
-    private func activateSelection(incognito: Bool = false) {
-        guard !currentRows.isEmpty, selectedIndex < currentRows.count else { return }
-        let row = currentRows[selectedIndex]
-        let urlString = row.actionURL
-        let (left, top) = paletteAnchorCoords()
-        close()
-        OpenRouter.open(urlString, left: left, top: top, incognito: incognito)
+    private func actionHint(for row: PaletteRow) -> String? {
+        model.action(
+            for: committedQuery,
+            selectedRow: row,
+            chord: currentReturnChord
+        )?.hint
     }
 
-    /// True when the current AppKit event has Command as its only non-Return
-    /// modifier — used to detect ⌘-Enter, which shares the `insertNewline:`
-    /// selector with a plain Return in the field editor.
+    /// Resolve and open the current Return action. Mouse clicks use the plain
+    /// chord; keyboard submission uses the current event's semantic chord.
+    private func activateSelection(chord: PaletteReturnChord = .plain) {
+        guard !currentRows.isEmpty, selectedIndex < currentRows.count else { return }
+        guard let action = model.action(
+            for: committedQuery,
+            selectedRow: currentRows[selectedIndex],
+            chord: chord
+        ) else { return }
+        let (left, top) = paletteAnchorCoords()
+        close()
+        OpenRouter.open(action.url, left: left, top: top, incognito: action.incognito)
+    }
+
+    /// Return variants share the `insertNewline:` selector. AppKit flags are
+    /// reduced here to the four keys that participate in the action chord.
     /// verified: see research (SO 61806458) — distinguish ⌘-Return from Return
     /// via NSApp.currentEvent.modifierFlags in doCommandBySelector.
-    private func commandHeldOnCurrentEvent() -> Bool {
-        guard let flags = NSApp.currentEvent?.modifierFlags else { return false }
-        return flags.intersection(.deviceIndependentFlagsMask).contains(.command)
+    private func returnChordOnCurrentEvent() -> PaletteReturnChord {
+        guard let flags = NSApp.currentEvent?.modifierFlags else {
+            return currentReturnChord
+        }
+        return Self.returnChord(from: flags)
+    }
+
+    /// Lock state and key-origin metadata are intentionally not chord keys.
+    static func returnChord(from flags: NSEvent.ModifierFlags) -> PaletteReturnChord {
+        var chord: PaletteReturnChord = .plain
+        if flags.contains(.shift) { chord.insert(.shift) }
+        if flags.contains(.command) { chord.insert(.command) }
+        if flags.contains(.option) { chord.insert(.option) }
+        if flags.contains(.control) { chord.insert(.control) }
+        return chord
+    }
+
+    /// Called by PalettePanel for each flagsChanged event while it is key.
+    /// Reconfiguring the selected row makes its hint follow held modifiers.
+    func modifierFlagsDidChange(_ flags: NSEvent.ModifierFlags) {
+        let chord = Self.returnChord(from: flags)
+        guard chord != currentReturnChord else { return }
+        currentReturnChord = chord
+        refreshSelectionHighlight()
     }
 
     /// Chrome-space coordinates anchored to the palette's current position.
@@ -375,10 +409,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         switch selector {
         case #selector(NSResponder.insertNewline(_:)):
-            // Plain Return opens normally; ⌘-Return opens as an incognito lil.
-            // Both arrive as insertNewline: — the modifier is read off the
-            // current AppKit event.
-            activateSelection(incognito: commandHeldOnCurrentEvent())
+            activateSelection(chord: returnChordOnCurrentEvent())
             return true
         case #selector(NSResponder.moveUp(_:)):
             moveSelection(.up)
