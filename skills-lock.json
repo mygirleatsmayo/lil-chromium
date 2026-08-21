@@ -1,6 +1,12 @@
 {
   "version": 1,
   "skills": {
+    "chrome-extension": {
+      "source": "samber/cc-skills",
+      "sourceType": "github",
+      "skillPath": "skills/chrome-extension/SKILL.md",
+      "computedHash": "055a41d804114f6696cf71a074cf8f60f0340f4855a81b57b9bc68bd9754b5be"
+    },
     "swift-testing-pro": {
       "source": "twostraws/swift-testing-agent-skill",
       "sourceType": "github",
