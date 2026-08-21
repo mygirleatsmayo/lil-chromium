@@ -1038,8 +1038,11 @@ chrome.tabs.onCreated.addListener(async (tab) => {
 //
 // Pipeline: captureVisibleTab (throttled ≤2/sec) → dataURL→Blob→IndexedDB →
 // mark registry {slept, sleepCaptureKey, originalUrl, originalTitle} →
-// replace the tab document with sleep.html. Wake: sleep page click → wakeLil
-// → navigate back + delete capture.
+// replace the tab document with sleep.html. Wake (v4, issue #21): sleep page
+// click → wakeLil → the original URL loads in an inactive tab of the same lil
+// window behind the nap image; after the 180 ms floor (readiness-gated, 500 ms
+// cap) the fresh tab takes over, the nap tab is removed, and the capture and
+// nap registry fields are cleared.
 // ===========================================================================
 
 const IDB_NAME = "lil-sleep";
@@ -1257,32 +1260,100 @@ async function sleepLil(windowId) {
   return true;
 }
 
-// Wake a slept lil: navigate its tab back to the original URL, delete capture,
-// clear the registry sleep marks. Called from the sleep page's wake message.
+// Wake timing bounds (issue #21): the static nap image stays visible for at
+// least 180 ms, the swap completes as soon as the fresh page is ready after
+// that floor, and waiting for readiness stops no later than 500 ms.
+const WAKE_MIN_HOLD_MS = 180;
+const WAKE_MAX_WAIT_MS = 500;
+
+// Wait until the wake swap may happen for the preloaded tab: the fresh page's
+// first `status: "complete"` held to the 180 ms image floor, or the 500 ms cap
+// if readiness never arrives — the transition proceeds regardless.
+function waitForWakeSwap(tabId, startedAt) {
+  return new Promise((resolve) => {
+    let done = false;
+    let floorTimer = null;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      if (floorTimer !== null) clearTimeout(floorTimer);
+      clearTimeout(capTimer);
+      resolve();
+    };
+    const onUpdated = (id, changeInfo) => {
+      if (id !== tabId || !changeInfo || changeInfo.status !== "complete") return;
+      if (floorTimer !== null) return; // readiness already observed
+      const wait = Math.max(0, startedAt + WAKE_MIN_HOLD_MS - Date.now());
+      if (wait === 0) finish();
+      else floorTimer = setTimeout(finish, wait);
+    };
+    const capTimer = setTimeout(finish, Math.max(0, startedAt + WAKE_MAX_WAIT_MS - Date.now()));
+    chrome.tabs.onUpdated.addListener(onUpdated);
+  });
+}
+
+// Clear every nap-only registry field while keeping the lil registered, and
+// delete the stored capture. Called only after the fresh document exists.
+async function clearNapState(windowId, originalUrl, captureKey) {
+  const reg = await getRegistry();
+  const entry = reg[String(windowId)];
+  if (entry) {
+    delete entry.slept;
+    delete entry.sleepCaptureKey;
+    delete entry.originalUrl;
+    delete entry.originalTitle;
+    entry.url = originalUrl;
+    entry.lastInteraction = Date.now();
+    await setRegistry(reg);
+  }
+  if (captureKey) await safe(idbDelete(captureKey), "idbDelete wake");
+}
+
+// Wake a slept lil through a bounded, clean transition. The original URL
+// begins loading at once in an inactive tab of the same lil window while the
+// nap image stays painted; once the fresh page is ready (never before the
+// 180 ms floor, never waiting past 500 ms) the fresh tab takes over and the
+// nap tab — and with it the internal nap history entry — is removed.
 async function wakeLil(windowId) {
   const reg = await getRegistry();
   const entry = reg[String(windowId)];
   if (!entry) return false;
   const originalUrl = entry.originalUrl || entry.url;
   const captureKey = entry.sleepCaptureKey;
+  if (!originalUrl) return false;
 
   const tabs = await safe(chrome.tabs.query({ windowId, active: true }), "tabs.query wake");
-  const tab = tabs && tabs[0];
-  if (tab && tab.id !== undefined && originalUrl) {
-    await safe(chrome.tabs.update(tab.id, { url: originalUrl }), "tabs.update wake");
+  const napTab = tabs && tabs[0];
+  if (!napTab || napTab.id === undefined) return false;
+
+  const startedAt = Date.now();
+  const freshTab = await safe(
+    chrome.tabs.create({ windowId, url: originalUrl, active: false }),
+    "tabs.create wake"
+  );
+
+  if (!freshTab || freshTab.id === undefined) {
+    // Preload unavailable: hold the image floor, then release the nap document
+    // through entry's replacement-only path so history stays clean. If even
+    // that is impossible, leave nap state truthful and report failure — the
+    // nap page's own fallback can still navigate it.
+    const wait = startedAt + WAKE_MIN_HOLD_MS - Date.now();
+    if (wait > 0) await delay(wait);
+    const released = await replaceTabDocument(napTab.id, originalUrl);
+    if (!released) {
+      log("wakeLil: no fresh navigation possible for", windowId);
+      return false;
+    }
+    await clearNapState(windowId, originalUrl, captureKey);
+    log("woke lil", windowId, "(replacement fallback)");
+    return true;
   }
 
-  // Clear sleep marks; keep the lil registered as a normal live lil.
-  const reg2 = await getRegistry();
-  if (reg2[String(windowId)]) {
-    reg2[String(windowId)].slept = false;
-    delete reg2[String(windowId)].sleepCaptureKey;
-    delete reg2[String(windowId)].originalUrl;
-    reg2[String(windowId)].url = originalUrl;
-    reg2[String(windowId)].lastInteraction = Date.now();
-    await setRegistry(reg2);
-  }
-  if (captureKey) await safe(idbDelete(captureKey), "idbDelete wake");
+  await waitForWakeSwap(freshTab.id, startedAt);
+  await safe(chrome.tabs.update(freshTab.id, { active: true }), "tabs.update wake activate");
+  await safe(chrome.tabs.remove(napTab.id), "tabs.remove nap page");
+  await clearNapState(windowId, originalUrl, captureKey);
   log("woke lil", windowId);
   return true;
 }
@@ -1867,9 +1938,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return;
         }
         case "wakeLil": {
-          // From the sleep page click.
-          if (senderWindowId !== undefined) await wakeLil(senderWindowId);
-          sendResponse({ ok: true });
+          // From the sleep page click. ok:false lets the nap page run its own
+          // fallback navigation instead of staying stranded.
+          const woke = senderWindowId !== undefined ? await wakeLil(senderWindowId) : false;
+          sendResponse({ ok: woke });
           return;
         }
         case "closeWindow": {

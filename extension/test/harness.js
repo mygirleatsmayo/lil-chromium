@@ -25,17 +25,63 @@ export async function flush(turns = 8) {
   }
 }
 
-function sandbox({ chrome, indexedDB }) {
+/**
+ * Manually advanced clock for the worker sandbox. `Date.now()` reads it and
+ * `setTimeout`/`clearTimeout` queue on it, so tests step time forward instead
+ * of sleeping against the wall clock. advance() fires due timers in time
+ * order, flushing promise continuations after each one.
+ */
+export function createClock(start = 1_700_000_000_000) {
+  let now = start;
+  let seq = 0;
+  const timers = new Map();
+  const clock = {
+    now: () => now,
+    setTimeout(fn, ms = 0) {
+      const id = ++seq;
+      timers.set(id, { at: now + Math.max(0, ms), fn });
+      return id;
+    },
+    clearTimeout(id) {
+      timers.delete(id);
+    },
+    async advance(ms) {
+      const target = now + ms;
+      for (;;) {
+        let nextId = null;
+        let nextAt = Infinity;
+        for (const [id, t] of timers) {
+          if (t.at <= target && t.at < nextAt) {
+            nextAt = t.at;
+            nextId = id;
+          }
+        }
+        if (nextId === null) break;
+        const t = timers.get(nextId);
+        timers.delete(nextId);
+        now = t.at;
+        t.fn();
+        await flush();
+      }
+      now = target;
+    },
+  };
+  return clock;
+}
+
+function sandbox({ chrome, indexedDB, clock }) {
   return {
     chrome,
     indexedDB,
     console: quietConsole,
-    setTimeout,
-    clearTimeout,
+    setTimeout: clock ? clock.setTimeout : setTimeout,
+    clearTimeout: clock ? clock.clearTimeout : clearTimeout,
     setInterval,
     clearInterval,
     queueMicrotask,
-    Date,
+    // The worker only ever reads Date.now(); a clocked boot swaps in the
+    // manual clock, everything else keeps the real Date.
+    Date: clock ? { now: clock.now } : Date,
     Math,
     JSON,
     Promise,
@@ -83,7 +129,8 @@ function sandbox({ chrome, indexedDB }) {
 export async function boot(options = {}) {
   const chrome = createChrome(options);
   const indexedDB = createIndexedDB();
-  const context = vm.createContext(sandbox({ chrome, indexedDB }));
+  const clock = options.clock === true ? createClock(options.clockStart) : null;
+  const context = vm.createContext(sandbox({ chrome, indexedDB, clock }));
   vm.runInContext(fs.readFileSync(WORKER_PATH, "utf8"), context, { filename: WORKER_PATH });
   await flush();
   const state = chromeState(chrome);
@@ -91,6 +138,7 @@ export async function boot(options = {}) {
     chrome,
     indexedDB,
     workerPath: WORKER_PATH,
+    clock,
     journal: () => state.journal,
     registry() {
       return state.storage.ephemeralWindows || {};
@@ -135,6 +183,11 @@ export async function boot(options = {}) {
       const reply = await state.sendRuntimeMessage(msg, sender);
       await flush();
       return reply;
+    },
+    // Send a runtime message without awaiting the reply, so a test can drive
+    // the manual clock while the worker's handler is still pending.
+    messageLater(msg, sender = {}) {
+      return state.sendRuntimeMessage(msg, sender);
     },
     async installed() {
       await state.events.runtime.onInstalled.fire({ reason: "install" });
