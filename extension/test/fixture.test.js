@@ -14,6 +14,7 @@ const SHARED = [
   "message-history-result",
   "message-open-legacy",
   "message-open-prior-context",
+  "message-open-settings",
   "message-pong-legacy",
   "message-restore-focus",
 ];

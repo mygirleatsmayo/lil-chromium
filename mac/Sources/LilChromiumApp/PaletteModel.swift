@@ -7,6 +7,7 @@ struct PaletteRow {
         case history     // a page or origin match (favicon)
         case openURL     // "Open <url>" — input parses as a URL (globe/arrow)
         case search      // "Search {engine} for '<query>'" (magnifier)
+        case settings    // native Settings window (gear)
     }
 
     let kind: Kind
@@ -25,6 +26,7 @@ struct PaletteAction: Equatable {
     enum Kind {
         case open
         case search
+        case settings
     }
 
     let kind: Kind
@@ -95,6 +97,15 @@ final class PaletteModel {
         }
         guard let selectedRow else { return nil }
 
+        if selectedRow.kind == .settings {
+            return PaletteAction(
+                kind: .settings,
+                url: selectedRow.actionURL,
+                incognito: false,
+                hint: "⏎ Settings"
+            )
+        }
+
         let kind: PaletteAction.Kind = selectedRow.kind == .search ? .search : .open
         let verb = kind == .search ? "Search" : "Open"
         let shortcut = incognito ? "⌘⏎" : "⏎"
@@ -156,6 +167,10 @@ final class PaletteModel {
             limit: max(maxRows, index.pages.count + index.origins.count)
         )
 
+        if SettingsAction.matchesQuery(trimmed) {
+            rows.append(settingsRow())
+        }
+
         if looksURL {
             // Position 1 is the explicit "Open <url>" row (per contract).
             let normalized = URLIntent.normalizedURL(trimmed)
@@ -205,6 +220,17 @@ final class PaletteModel {
             actionURL: r.url,
             host: r.host,
             autocompleteHost: r.host
+        )
+    }
+
+    private func settingsRow() -> PaletteRow {
+        PaletteRow(
+            kind: .settings,
+            title: "Settings",
+            subtitle: "Lil Chromium",
+            actionURL: SettingsAction.urlString,
+            host: nil,
+            autocompleteHost: nil
         )
     }
 

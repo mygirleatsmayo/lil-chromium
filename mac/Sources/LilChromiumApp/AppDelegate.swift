@@ -118,10 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func showSettings() {
-        // The palette is a floating panel and would sit on top of Settings, so
-        // dismiss it first: the two surfaces must never compete for focus.
-        palette.close()
-        SettingsWindowController.show()
+        palette.requestSettings()
     }
 
     @objc func quit() {
@@ -168,8 +165,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         handleIncomingURL(urlString)
     }
 
-    /// Central intake: dedupe, then route (relay-first, browser fallback), always
-    /// anchored to the current mouse position.
+    /// Central intake: dedupe, then Settings-first, then ordinary open
+    /// (relay-first, browser fallback), always anchored to the mouse.
     private func handleIncomingURL(_ urlString: String) {
         let now = Date()
         if urlString == lastOpenedURL,
@@ -179,6 +176,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lastOpenedURL = urlString
         lastOpenedAt = now
 
-        OpenRouter.openAnchoredToMouse(urlString)
+        switch URLIntent.destination(for: urlString) {
+        case .settings:
+            showSettings()
+        case .open(let url):
+            OpenRouter.openAnchoredToMouse(url)
+        }
     }
 }

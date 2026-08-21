@@ -101,6 +101,54 @@ struct PaletteRowsTests {
     }
 }
 
+/// Gear-adjacent discoverability (issue #9): typing “settings” or
+/// “preferences” offers a selectable Settings result that is not a lil open.
+struct PaletteSettingsAccessTests {
+
+    private func model() -> PaletteModel {
+        PaletteModel()
+    }
+
+    @Test(arguments: ["settings", "Settings", "SETTINGS"])
+    func settingsQueryLeadsWithTheSettingsAction(_ query: String) {
+        let rows = model().rows(for: query)
+        let row = rows.first
+
+        #expect(row?.kind == .settings)
+        #expect(row?.title == "Settings")
+        #expect(row?.actionURL == SettingsAction.urlString)
+        #expect(rows.contains { $0.kind == .search }, "Search stays available below Settings")
+    }
+
+    @Test(arguments: ["preferences", "Preferences", "PREFERENCES"])
+    func preferencesQueryLeadsWithTheSettingsAction(_ query: String) {
+        let rows = model().rows(for: query)
+
+        #expect(rows.first?.kind == .settings)
+        #expect(rows.first?.actionURL == SettingsAction.urlString)
+        #expect(rows.contains { $0.kind == .search }, "Search stays available below Settings")
+    }
+
+    @Test(
+        "Partial stubs stay ordinary non-URL queries",
+        .bug(id: 9),
+        arguments: ["set", "sett", "pref", "prefer"]
+    )
+    func partialSettingsStubsStayOrdinaryNonURLQueries(_ query: String) {
+        let rows = model().rows(for: query)
+
+        #expect(rows.contains { $0.kind == .settings } == false)
+        #expect(rows.first?.kind == .search)
+    }
+
+    @Test(arguments: ["", "s", "p", "gi", "quarterly budget review", "settings extra"])
+    func unrelatedQueriesDoNotOfferSettings(_ query: String) {
+        let rows = model().rows(for: query)
+
+        #expect(rows.contains { $0.kind == .settings } == false)
+    }
+}
+
 /// Row ORDER around the Search action (issue #13).
 ///
 /// The rule under test: for non-empty, non-URL text, only a contiguous literal
@@ -490,6 +538,54 @@ struct PaletteActionTests {
         )
 
         #expect(action == nil)
+    }
+
+    @Test("Return on Settings requests native Settings", .bug(id: 9))
+    func returnOnSettingsRequestsNativeSettings() throws {
+        let model = PaletteModel()
+        let selectedRow = try #require(model.rows(for: "settings").first)
+
+        let action = try #require(model.action(
+            for: "settings",
+            selectedRow: selectedRow,
+            chord: .plain
+        ))
+
+        #expect(selectedRow.kind == .settings)
+        #expect(action.kind == .settings)
+        #expect(action.url == SettingsAction.urlString)
+        #expect(action.incognito == false)
+        #expect(action.hint == "⏎ Settings")
+    }
+
+    @Test("Command-Return on Settings is still Settings, not an incognito lil", .bug(id: 9))
+    func commandReturnOnSettingsDoesNotOpenALil() throws {
+        let model = PaletteModel()
+        let selectedRow = try #require(model.rows(for: "preferences").first)
+
+        let action = try #require(model.action(
+            for: "preferences",
+            selectedRow: selectedRow,
+            chord: [.command]
+        ))
+
+        #expect(action.kind == .settings)
+        #expect(action.incognito == false)
+    }
+
+    @Test("Shift-Return still searches when Settings is selected", .bug(id: 14))
+    func shiftReturnSearchesEvenWhenSettingsIsSelected() throws {
+        let model = PaletteModel()
+        let selectedRow = try #require(model.rows(for: "settings").first)
+
+        let action = try #require(model.action(
+            for: "settings",
+            selectedRow: selectedRow,
+            chord: [.shift]
+        ))
+
+        #expect(action.kind == .search)
+        #expect(action.url == SearchEngineConfig.defaults.searchURL(for: "settings"))
     }
 
     @MainActor

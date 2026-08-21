@@ -709,6 +709,42 @@ test("geometry maintenance never requests focus", async () => {
   assert.equal(env.registry()[String(lil.id)].bounds.width, 800, "the bounds are still recorded");
 });
 
+test("opening Settings from a lil posts open-settings and does not raise a browser window", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver(fixture("message-open-legacy"));
+  const lil = env.windows()[0];
+  const host = await env.chrome.windows.create({ url: "https://mail.example/", type: "normal" });
+  await env.chrome.windows.update(host.id, { focused: true });
+  const beforeJournal = env.journal().length;
+  const beforeOutgoing = env.outgoing().length;
+
+  const reply = await env.message({ action: "openSettings" }, sender(lil));
+
+  assert.equal(reply.ok, true);
+  const posted = env.outgoing().slice(beforeOutgoing).filter((m) => m.type === "open-settings");
+  assert.equal(posted.length, 1);
+  assert.deepEqual(posted[0], fixture("message-open-settings"));
+  assert.equal(
+    env.outgoing().slice(beforeOutgoing).some((m) => m.type === "open-external"),
+    false
+  );
+
+  const after = env.journal().slice(beforeJournal);
+  assert.equal(
+    after.some((e) => e.op === "windows.create"),
+    false,
+    "Settings must not create a window"
+  );
+  assert.equal(
+    after.some((e) => e.op === "windows.update" && e.update && e.update.focused === true),
+    false,
+    "Settings must not explicitly focus a Host-browser window"
+  );
+  assert.equal(env.windows().find((w) => w.id === host.id).focused, true);
+  assert.equal(env.windows().length, 2);
+});
+
 test("suite runs without a live profile or the repo as cwd", async () => {
   const originalCwd = process.cwd();
   const originalHome = process.env.HOME;

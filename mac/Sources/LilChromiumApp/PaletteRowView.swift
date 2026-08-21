@@ -163,6 +163,9 @@ final class PaletteRowView: NSView {
         case .search:
             currentHost = nil
             setSymbol("magnifyingglass")
+        case .settings:
+            currentHost = nil
+            setSymbol("gearshape")
         case .openURL:
             currentHost = row.host
             // Prefer a favicon if we can derive a host, else an arrow glyph.

@@ -11,6 +11,7 @@ Terminology: an ephemeral window is a **lil** (plural: **lils**).
 
 Extension ID (pinned via `key` in manifest): `oofeehjoocddelicpmnpbafmbalaakge`
 Native messaging host name: `com.lilchromium.relay`
+App bundle id: `com.lilchromium.app`
 `allowed_origins`: `["chrome-extension://oofeehjoocddelicpmnpbafmbalaakge/"]`
 
 ## Browser slugs
@@ -102,6 +103,8 @@ Written by the app (Settings window / menu). Read by the app and by each host (f
 
 ### App routing order (link click / palette open)
 
+Incoming URL intake recognizes the dedicated Settings action `lilchromium://settings` before ordinary HTTP/HTTPS routing and presents the singleton Settings window. That URL is never sent as `open` and never launched in a browser.
+
 1. `relay-<primaryBrowser>.sock`
 2. `relay-<fallbackBrowser>.sock`
 3. any other `relay-*.sock` present (newest mtime first)
@@ -129,6 +132,7 @@ All JSON with `type`. `id` for request/response matching.
 - `{"type":"open-external","browser":slug,"url":string}` — host launches the URL in that browser via `open -b <bundleId> <url>` (or NSWorkspace equivalent). Fire-and-forget; host logs failures.
 - `{"type":"restore-focus","priorContext":{"kind":"external-app","pid":int,"bundleId":string?}}` — extension asks the host to reactivate a lil's recorded external predecessor. Host first activates the eligible live process at the exact PID, then may fall back to an eligible live process with the same bundle ID. If neither exists it does nothing; it never substitutes a browser window.
 - `{"type":"whitelist-op","op":"add"|"remove","domain":string}` — host merges the change into `config.json` → `sleep.whitelist` (atomic read-modify-write, preserves all other fields, dedupes). Lets the extension's context menus edit the whitelist. App's Settings window reads the file fresh on open.
+- `{"type":"open-settings"}` — extension asks the host to open native Settings. Host never forwards the message and never opens a browser; it launches the dedicated app-owned URL `lilchromium://settings` targeted at bundle id `com.lilchromium.app` (`open -b`). Fire-and-forget. The app receives that URL through ordinary URL intake.
 
 ### host-only (socket side, never forwarded)
 
@@ -142,7 +146,7 @@ As v1: host queues `open` (max 20 FIFO) while the port is down; `history-query` 
 
 - **Naming**: user-facing copy says "lil"/"lils" (e.g. "Open in a new lil").
 - **Hover-reveal top bar** replaces the always-visible pill. Hidden by default (nothing covers page UI). Reveal when cursor is within 24px of the viewport top (~80ms intent delay) or on ⌘L; hide 300ms after the cursor leaves unless the address field is focused or a menu is open; Esc hides. Bar (closed shadow DOM, slides down, glass-look CSS backdrop-blur, adapts to `prefers-color-scheme`): [back button] [editable address field, centered — shows current URL compactly, full URL + select-all on focus, Enter navigates via SW `tabs.update` (add https:// when missing; non-URL input → search via config `searchEngine.template`)] [**Open in {primaryBrowserName}** ⌘O] [⌄ caret menu].
-- **Caret menu**: promote to Primary; "Open in {host browser} tab" when Host ≠ Primary; tab groups of the Host browser (`tabGroups.query`); other installed browsers ("Open in {name}…" → `open-external`); "Close lil".
+- **Caret menu**: promote to Primary; "Open in {host browser} tab" when Host ≠ Primary; tab groups of the Host browser (`tabGroups.query`); other installed browsers ("Open in {name}…" → `open-external`); "Settings…" (posts `open-settings` to the host — a request for native Settings, not duplicated global controls); "Close lil".
 - **Promote semantics**: if `primaryBrowser` is the installation the lil lives in → v1 no-reload move (`tabs.move` → `windows.create({tabId})` fallback) + optional group. Else → `open-external` to Primary + close the lil (state not preservable across browsers — accepted).
 - **⌘O** (content-script capture + `promote-tab` command backstop) = promote to Primary. **⌘L** = reveal + focus address bar.
 - **New-window link handling (v3 — replaces v2 collapse logic)**: on `onCreatedNavigationTarget` from a lil, WAIT for the tab to settle (retry `tabs.get`/`windows.get`), then branch:
@@ -160,7 +164,7 @@ Native app activation does not require Accessibility permission. The contract do
 
 ## App behavior contract (v2 changes)
 
-- Palette: anchor per config (`top-center` default: centered horizontally, panel top at 20% of the primary display's visibleFrame height). Dismiss ONLY on: Esc, ⌘⌥N toggle, X button, opening a result, or showing Settings (v4 — a floating panel must not cover the normal-level Settings window). NOT on app deactivation (user can visit Raycast/pasteboard and come back). Panel level stays `.floating`, `.nonactivatingPanel`, visible across Spaces.
+- Palette: anchor per config (`top-center` default: centered horizontally, panel top at 20% of the primary display's visibleFrame height). Dismiss ONLY on: Esc, ⌘⌥N toggle, X button, opening a result, or showing Settings (v4 — a floating panel must not cover the normal-level Settings window). NOT on app deactivation (user can visit Raycast/pasteboard and come back). Panel level stays `.floating`, `.nonactivatingPanel`, visible across Spaces. Persistent gear control and a selectable Settings result (the complete case-insensitive words “settings” and “preferences” only) both close the palette then present Settings; they never send `open`.
 - Palette sends `open` anchored near the panel; link clicks anchored at mouse (unchanged).
 - Settings window (Liquid Glass mini window), organized into three sections (v4):
   - **General** — Primary browser picker (installed only), Fallback browser, palette position, search engine (presets + custom template), launch-at-login.

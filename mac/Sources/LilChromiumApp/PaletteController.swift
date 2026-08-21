@@ -89,6 +89,13 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         panel?.orderOut(nil)
     }
 
+    /// The shared Settings launch path: dismiss the palette first so the
+    /// surfaces never compete for focus, then present the singleton window.
+    func requestSettings() {
+        close()
+        SettingsWindowController.show()
+    }
+
     // MARK: - Panel construction
 
     private func buildPanelIfNeeded() {
@@ -137,6 +144,21 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         field.configureAsPaletteInput()
         field.delegate = self
 
+        let settingsButton = NSButton()
+        settingsButton.translatesAutoresizingMaskIntoConstraints = false
+        settingsButton.isBordered = false
+        settingsButton.bezelStyle = .regularSquare
+        settingsButton.imagePosition = .imageOnly
+        let gearCfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        let gearImg = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")?
+            .withSymbolConfiguration(gearCfg)
+        gearImg?.isTemplate = true
+        settingsButton.image = gearImg
+        settingsButton.contentTintColor = .secondaryLabelColor
+        settingsButton.setAccessibilityLabel("Settings")
+        settingsButton.target = self
+        settingsButton.action = #selector(settingsButtonPressed)
+
         // X close button (circular xmark), top-right of the input row.
         let closeButton = NSButton()
         closeButton.translatesAutoresizingMaskIntoConstraints = false
@@ -153,6 +175,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         closeButton.action = #selector(closeButtonPressed)
 
         inputRow.addSubview(field)
+        inputRow.addSubview(settingsButton)
         inputRow.addSubview(closeButton)
 
         // --- Results stack ---
@@ -173,8 +196,13 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
 
             // Field: leading inset 20, vertically centered, intrinsic height.
             field.leadingAnchor.constraint(equalTo: inputRow.leadingAnchor, constant: 20),
-            field.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -10),
+            field.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -10),
             field.centerYAnchor.constraint(equalTo: inputRow.centerYAnchor),
+
+            settingsButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -8),
+            settingsButton.centerYAnchor.constraint(equalTo: inputRow.centerYAnchor),
+            settingsButton.widthAnchor.constraint(equalToConstant: 22),
+            settingsButton.heightAnchor.constraint(equalToConstant: 22),
 
             closeButton.trailingAnchor.constraint(equalTo: inputRow.trailingAnchor, constant: -18),
             closeButton.centerYAnchor.constraint(equalTo: inputRow.centerYAnchor),
@@ -349,6 +377,10 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
             selectedRow: currentRows[selectedIndex],
             chord: chord
         ) else { return }
+        if action.kind == .settings {
+            requestSettings()
+            return
+        }
         let (left, top) = paletteAnchorCoords()
         close()
         OpenRouter.open(action.url, left: left, top: top, incognito: action.incognito)
@@ -398,6 +430,10 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
 
     @objc private func closeButtonPressed() {
         close()
+    }
+
+    @objc private func settingsButtonPressed() {
+        requestSettings()
     }
 
     // MARK: - NSTextFieldDelegate

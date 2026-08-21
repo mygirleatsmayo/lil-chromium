@@ -1,8 +1,21 @@
 import Foundation
+import LilShared
 
 /// Interpreting raw palette/link input into a concrete URL and understanding
 /// whether typed text looks like a URL.
 enum URLIntent {
+
+    /// What an incoming URL means at the app's routing boundary.
+    /// Settings is classified first so it can never fall through to a lil open.
+    enum Destination: Equatable {
+        case settings
+        case open(String)
+    }
+
+    static func destination(for urlString: String) -> Destination {
+        if SettingsAction.matches(urlString) { return .settings }
+        return .open(urlString)
+    }
 
     /// Does this text look like a URL the user meant to open directly?
     /// Rules (from PROTOCOL.md palette contract):

@@ -161,6 +161,18 @@ struct MessageTests {
         #expect(msg.url == "")
     }
 
+    /// Issue #9: extension → host, no extra fields. The host launches Lil
+    /// Chromium's dedicated Settings action; it never forwards this to a browser.
+    @Test func openSettingsIsTypeOnly() throws {
+        let msg = try Fixture.decode(OpenSettingsMessage.self, from: "message-open-settings")
+        let encoded = try LilCodec.encode(msg)
+        let out = try jsonObject(encoded)
+
+        #expect(msg.type == "open-settings")
+        #expect(out.keys.sorted() == ["type"])
+        #expect(out["type"] as? String == "open-settings")
+    }
+
     /// Dispatch only needs `type` and `id`; unknown fields never break routing.
     @Test func envelopeDecodesAnyMessageForDispatch() throws {
         let envelope = try Fixture.decode(LilMessage.self, from: "message-context")
