@@ -1,11 +1,24 @@
 {
   "version": 1,
   "skills": {
+    "SVG Logo Designer": {
+      "source": "rknall/claude-skills",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "svg-logo-designer/SKILL.md",
+      "computedHash": "c591208a052cc9f7deb77be1183e4627daf54dbf575ea2653f519f29fe3bd4c8"
+    },
     "chrome-extension": {
       "source": "samber/cc-skills",
       "sourceType": "github",
       "skillPath": "skills/chrome-extension/SKILL.md",
       "computedHash": "055a41d804114f6696cf71a074cf8f60f0340f4855a81b57b9bc68bd9754b5be"
+    },
+    "logo-designer": {
+      "source": "neonwatty/logo-designer-skill",
+      "sourceType": "github",
+      "skillPath": "skills/logo-designer/SKILL.md",
+      "computedHash": "37f00324349c15112c606110548566ee76390c234cecb5801a175c4e0823f729"
     },
     "swift-testing-pro": {
       "source": "twostraws/swift-testing-agent-skill",
