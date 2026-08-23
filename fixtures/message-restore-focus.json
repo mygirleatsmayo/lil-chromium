@@ -1,0 +1,8 @@
+{
+  "type": "restore-focus",
+  "priorContext": {
+    "kind": "external-app",
+    "pid": 4242,
+    "bundleId": "com.apple.mail"
+  }
+}

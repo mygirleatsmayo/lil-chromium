@@ -8,7 +8,7 @@
 //   - Handshake with the host for browser identity + full user config.
 //   - New-window link handling (v3): preserve native popups (OAuth fix),
 //     re-parent normal-window spawns per linkBehavior.
-//   - Focus discipline (v3): MRU stack + explicit refocus.
+//   - Focus discipline: per-lil prior context + explicit refocus.
 //   - Ephemerality (v3): per-lil expiry + 1-min sweep alarm.
 //   - Sleep (v3): captureVisibleTab → IndexedDB → sleep.html; auto + manual.
 //   - Incognito lils (v3): gated on isAllowedIncognitoAccess.
@@ -19,7 +19,8 @@ const NATIVE_HOST = "com.lilchromium.relay";
 // Registry entry shape (v3):
 //   { url, bounds:{left,top,width,height},
 //     expiry: "never"|"quit"|<hoursNumber>, lastInteraction: ts,
-//     slept?: bool, sleepCaptureKey?: string, originalUrl?: string }
+//     priorContext?: {kind,...},
+//     slept?: bool, sleepCaptureKey?: string, originalUrl?: string, originalTitle?: string }
 const REGISTRY_KEY = "ephemeralWindows";
 const LAST_SIZE_KEY = "lastSize"; // {width, height} — last user-resized lil size
 const CONTEXT_KEY = "hostContext"; // cached `context` reply (stale-but-usable)
@@ -71,12 +72,12 @@ const DEFAULT_SLEEP = {
   whitelist: [],
 };
 const DEFAULT_SEARCH = { name: "Startpage", template: "https://www.startpage.com/sp/search?query=%s" };
-const DEFAULT_HOVERBAR = { style: "glass", tint: null };
+const DEFAULT_HOVERBAR = { style: "glass", tint: null, revealHeight: 15 };
 const DEFAULT_CONTEXT = {
   browser: "chrome",
   browserName: "Chrome",
-  defaultBrowser: "helium",
-  defaultBrowserName: "Helium",
+  primaryBrowser: "helium",
+  primaryBrowserName: "Helium",
   fallbackBrowser: "chrome",
   linkBehavior: "new-lil",
   ephemeralDefault: "never",
@@ -125,8 +126,11 @@ function normalizeContext(msg) {
   return {
     browser: src.browser || DEFAULT_CONTEXT.browser,
     browserName: src.browserName || DEFAULT_CONTEXT.browserName,
-    defaultBrowser: src.defaultBrowser || DEFAULT_CONTEXT.defaultBrowser,
-    defaultBrowserName: src.defaultBrowserName || DEFAULT_CONTEXT.defaultBrowserName,
+    // A persisted v0.3 context may still use the legacy keys. Normalize it to
+    // the v0.4 contract so no caller needs two browser-identity vocabularies.
+    primaryBrowser: src.primaryBrowser || src.defaultBrowser || DEFAULT_CONTEXT.primaryBrowser,
+    primaryBrowserName:
+      src.primaryBrowserName || src.defaultBrowserName || DEFAULT_CONTEXT.primaryBrowserName,
     fallbackBrowser: src.fallbackBrowser || DEFAULT_CONTEXT.fallbackBrowser,
     linkBehavior: src.linkBehavior === "same-lil" ? "same-lil" : "new-lil",
     ephemeralDefault: normalizeExpiry(src.ephemeralDefault, "never"),
@@ -145,6 +149,12 @@ function normalizeContext(msg) {
     hoverBar: {
       style: hoverBar.style === "solid" ? "solid" : "glass",
       tint: typeof hoverBar.tint === "string" ? hoverBar.tint : null,
+      // Writers clamp to 0..48 before the value leaves the config model
+      // (PROTOCOL.md); a non-number here degrades to the default.
+      revealHeight:
+        typeof hoverBar.revealHeight === "number" && Number.isFinite(hoverBar.revealHeight)
+          ? hoverBar.revealHeight
+          : DEFAULT_HOVERBAR.revealHeight,
     },
     knownBrowsers: Array.isArray(src.knownBrowsers) ? src.knownBrowsers : [],
   };
@@ -245,44 +255,16 @@ function consumeClickHint(url) {
 }
 
 // ===========================================================================
-// FOCUS DISCIPLINE — MRU stack of window ids.
+// FOCUS DISCIPLINE — live browser focus plus explicit refocus.
 //
-// Maintained via windows.onFocusChanged (ignoring WINDOW_ID_NONE). Keeps BOTH
-// lil and normal windows so, when a focused lil closes, we can return focus to
-// whatever the user was truly on last. Memory-only; rebuilt as the user clicks
-// around. Focused lil creates are followed by an explicit focusWindow() because
+// WINDOW_ID_NONE is retained as real external-app focus state. Focused lil
+// creates are followed by an explicit focusWindow() because
 // create({focused:true}) is unreliable on macOS (research §Focus); unfocused
 // creates (restoreWindows) skip it.
 // ===========================================================================
 
-const mruStack = []; // window ids, most-recent-first
-
-function mruTouch(windowId) {
-  if (typeof windowId !== "number" || windowId < 0) return;
-  const i = mruStack.indexOf(windowId);
-  if (i >= 0) mruStack.splice(i, 1);
-  mruStack.unshift(windowId);
-  while (mruStack.length > 24) mruStack.pop();
-}
-
-function mruRemove(windowId) {
-  const i = mruStack.indexOf(windowId);
-  if (i >= 0) mruStack.splice(i, 1);
-}
-
-// Filter dead ids out of the MRU stack and return the first still-alive id, or
-// null. Used when a focused lil closes so we hand focus to a real window.
-async function mruTopAlive(excludeId) {
-  const all = await safe(chrome.windows.getAll({}), "getAll mru");
-  const live = new Set((all || []).map((w) => w.id));
-  for (let i = mruStack.length - 1; i >= 0; i--) {
-    if (!live.has(mruStack[i])) mruStack.splice(i, 1);
-  }
-  for (const id of mruStack) {
-    if (id !== excludeId && live.has(id)) return id;
-  }
-  return null;
-}
+let focusedWindowId = chrome.windows.WINDOW_ID_NONE;
+let lastNormalWindowId = chrome.windows.WINDOW_ID_NONE;
 
 // Explicit focus. Used after windows.create when a lil is asked to take focus.
 async function focusWindow(windowId) {
@@ -290,9 +272,13 @@ async function focusWindow(windowId) {
   await safe(chrome.windows.update(windowId, { focused: true }), "windows.update focus");
 }
 
-chrome.windows.onFocusChanged.addListener((windowId) => {
-  if (windowId === chrome.windows.WINDOW_ID_NONE) return; // ignore blur-to-none
-  mruTouch(windowId);
+chrome.windows.onFocusChanged.addListener(async (windowId) => {
+  focusedWindowId = windowId;
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  const win = await safe(chrome.windows.get(windowId), "windows.get last-normal");
+  if (win && win.type === "normal" && focusedWindowId === windowId) {
+    lastNormalWindowId = windowId;
+  }
 });
 
 // ===========================================================================
@@ -357,25 +343,58 @@ async function handlePortMessage(msg) {
   try {
     if (msg.type === "open") {
       if (msg.incognito) {
-        await openIncognitoLil(msg.url, msg.left, msg.top);
+        await openIncognitoLil(msg.url, msg.left, msg.top, msg.priorContext);
       } else {
-        await openLil({ url: msg.url, left: msg.left, top: msg.top });
+        await openLil({ url: msg.url, left: msg.left, top: msg.top, appSuppliedPriorContext: msg.priorContext });
       }
     } else if (msg.type === "history-query") {
       await answerHistoryQuery(msg);
     } else if (msg.type === "context") {
       await storeContext(msg);
+      // Reconnect catch-up (issue #12): a fresh host-sourced context also
+      // converges the lils that missed a config-update while disconnected.
+      await broadcastContextToLils();
       log(
         "context updated",
         "browser=" + msg.browser,
-        "default=" + msg.defaultBrowser,
+        "primary=" + msg.primaryBrowser,
         "link=" + msg.linkBehavior
       );
+    } else if (msg.type === "config-update") {
+      await applyConfigUpdate(msg);
     } else {
       log("unknown port message", msg.type);
     }
   } catch (err) {
     log("handlePortMessage error", err && err.message ? err.message : err);
+  }
+}
+
+// Hot-apply (issue #12): the app published the normalized full config to every
+// relay. Replace the config half of the cached context — the host identity
+// (browser/browserName) is this worker's own, not the app's — then push the
+// result to every live lil so overlays apply it without a reload.
+async function applyConfigUpdate(msg) {
+  const current = await getContext();
+  await storeContext({ ...msg, browser: current.browser, browserName: current.browserName });
+  await broadcastContextToLils();
+  log("config hot-applied", "primary=" + msg.primaryBrowser, "link=" + msg.linkBehavior);
+}
+
+// Push the current context to every live lil's overlay (registered lils plus
+// in-memory incognito ones). Fire-and-forget per lil: a tab mid-navigation
+// misses the push but reads fresh context when its overlay mounts.
+async function broadcastContextToLils() {
+  const ctx = await getContext();
+  const reg = await getRegistry();
+  const windowIds = new Set(
+    Object.keys(reg)
+      .map((key) => parseInt(key, 10))
+      .filter((id) => Number.isInteger(id))
+  );
+  for (const id of incognitoLils) windowIds.add(id);
+  for (const windowId of windowIds) {
+    await broadcastToWindow(windowId, { action: "contextUpdate", context: ctx });
   }
 }
 
@@ -453,6 +472,11 @@ async function deregisterWindow(windowId) {
 async function isEphemeralWindow(windowId) {
   if (windowId === undefined || windowId === null) return false;
   if (incognitoLils.has(windowId)) return true;
+  return isRegisteredLil(windowId);
+}
+
+async function isRegisteredLil(windowId) {
+  if (windowId === undefined || windowId === null) return false;
   const reg = await getRegistry();
   return Object.prototype.hasOwnProperty.call(reg, String(windowId));
 }
@@ -530,6 +554,53 @@ async function clampBounds(left, top, width, height) {
 // ===========================================================================
 
 const incognitoLils = new Set(); // window ids of live incognito lils
+const incognitoPriorContexts = new Map(); // window id -> prior context
+// Host/group promotion empties the source lil and Chrome removes that window.
+// That onRemoved is a lifecycle transfer, not a close/unwind.
+const promotingWindowIds = new Set();
+
+function normalizePriorContext(value) {
+  if (!value || typeof value !== "object") return null;
+  if ((value.kind === "lil" || value.kind === "normal-window") && Number.isInteger(value.windowId)) {
+    return { kind: value.kind, windowId: value.windowId };
+  }
+  if (value.kind === "external-app" && Number.isInteger(value.pid) && value.pid > 0) {
+    const context = { kind: "external-app", pid: value.pid };
+    if (typeof value.bundleId === "string" && value.bundleId) context.bundleId = value.bundleId;
+    return context;
+  }
+  return null;
+}
+
+// Capture the live Chromium focus before windows.create can change it. When no
+// browser window is focused, only the app-supplied prior-context candidate is
+// eligible.
+async function capturePriorContext(appSuppliedPriorContext) {
+  const all = await safe(chrome.windows.getAll({}), "getAll prior context");
+  const focused = (all || []).find((win) => win.focused && win.id !== undefined);
+  if (focused) {
+    if (await isEphemeralWindow(focused.id)) return { kind: "lil", windowId: focused.id };
+    return focused.type === "normal" ? { kind: "normal-window", windowId: focused.id } : null;
+  }
+  const normalized = normalizePriorContext(appSuppliedPriorContext);
+  return normalized && normalized.kind === "external-app" ? normalized : null;
+}
+
+async function restorePriorContext(priorContext) {
+  const prior = normalizePriorContext(priorContext);
+  if (!prior) return;
+
+  if (prior.kind === "external-app") {
+    postToHost({ type: "restore-focus", priorContext: prior });
+    return;
+  }
+
+  const win = await safe(chrome.windows.get(prior.windowId), "windows.get prior context");
+  if (!win) return;
+  if (prior.kind === "lil" && !(await isEphemeralWindow(prior.windowId))) return;
+  if (prior.kind === "normal-window" && win.type !== "normal") return;
+  await focusWindow(prior.windowId);
+}
 
 /**
  * Open one lil and bring it into the lifecycle. Returns the created window, or
@@ -540,8 +611,11 @@ const incognitoLils = new Set(); // window ids of live incognito lils
  *   tabId        Existing tab to adopt into the new lil.
  *   left, top    Desired top-left before clamping; undefined centers the lil.
  *   size         {width, height}; defaults to the remembered last user size.
- *   focus        Ask for focus after create (default true). Also drives the MRU.
+ *   focus        Ask for focus after create (default true).
  *   incognito    In-memory-only lil: never registered, never restored.
+ *   priorContext Explicit related lil/normal-window predecessor.
+ *   appSuppliedPriorContext App-supplied prior-context candidate, eligible
+ *                only when Chromium has no focused window.
  *   recordUrl    URL to store in the registry. Defaults to `url`, then the
  *                adopted tab's URL — restoration uses it so a slept lil records
  *                its real URL rather than its sleep-page URL.
@@ -555,6 +629,10 @@ async function openLil(spec) {
     return null;
   }
 
+  const priorContext =
+    spec.priorContext !== undefined
+      ? normalizePriorContext(spec.priorContext)
+      : await capturePriorContext(spec.appSuppliedPriorContext);
   const size = spec.size || (await getLastSize());
   const bounds = await clampBounds(spec.left, spec.top, size.width, size.height);
   const focus = spec.focus !== false;
@@ -572,12 +650,13 @@ async function openLil(spec) {
   if (focus) {
     // Explicit refocus (create({focused:true}) unreliable when not frontmost).
     await focusWindow(win.id);
-    mruTouch(win.id);
   }
 
   // Incognito lils live in memory only: never persisted, never restored.
   if (spec.incognito) {
     incognitoLils.add(win.id);
+    if (priorContext) incognitoPriorContexts.set(win.id, priorContext);
+    if (focus) await refreshMenusForWindow(win);
     return win;
   }
 
@@ -586,9 +665,18 @@ async function openLil(spec) {
     win.id,
     spec.recordUrl || spec.url || (win.tabs && win.tabs[0] && win.tabs[0].url) || "",
     { left: win.left, top: win.top, width: win.width, height: win.height },
-    Object.assign({ expiry: ctx.ephemeralDefault, lastInteraction: Date.now() }, spec.registration)
+    Object.assign(
+      { expiry: ctx.ephemeralDefault, lastInteraction: Date.now(), priorContext },
+      spec.registration
+    )
   );
+  if (focus) await refreshMenusForWindow(win);
   return win;
+}
+
+async function refreshMenusForWindow(win) {
+  const tab = win && win.tabs && win.tabs[0];
+  if (tab) await updateContextMenusForTab(tab);
 }
 
 // Top-left for a lil cascaded off `windowId`. `unpositionedCoord` is used per
@@ -607,18 +695,18 @@ async function cascadeOrigin(windowId, unpositionedCoord) {
 // tell the content overlay to show a hint toast pointing at the toggle.
 // ===========================================================================
 
-async function openIncognitoLil(url, left, top) {
+async function openIncognitoLil(url, left, top, appSuppliedPriorContext) {
   if (typeof url !== "string" || !url) return null;
   // A normal lil whose overlay surfaces the incognito-toggle hint.
   const fallback = async () => {
-    const win = await openLil({ url, left, top });
+    const win = await openLil({ url, left, top, appSuppliedPriorContext });
     if (win) queueIncognitoHint(win.id);
     return win;
   };
   const allowed = await safe(chrome.extension.isAllowedIncognitoAccess(), "isAllowedIncognitoAccess");
   if (!allowed) return fallback();
   // A failed create means the toggle raced off (or worse) → normal fallback.
-  return (await openLil({ url, left, top, incognito: true })) || fallback();
+  return (await openLil({ url, left, top, incognito: true, appSuppliedPriorContext })) || fallback();
 }
 
 // When we fall back to a normal lil in place of an incognito one, the overlay
@@ -646,18 +734,24 @@ async function broadcastToWindow(windowId, message) {
 
 // ===========================================================================
 // RESTORE — parked lils survive restart. Skips "quit"-expiry lils; slept lils
-// reopen as their sleep page.
+// reopen as their nap page.
 // ===========================================================================
 
 async function restoreWindows() {
   const oldReg = await getRegistry();
-  const entries = Object.values(oldReg);
+  const entries = Object.entries(oldReg);
   if (!entries.length) return;
 
   await setRegistry({});
 
+  // Nap pages are rebuilt with the current configured tint; the normalized
+  // context already carries the built-in default when configuration has none.
+  const ctx = await getContext();
+  const tint = ctx.sleep && ctx.sleep.tint ? ctx.sleep.tint : DEFAULT_SLEEP.tint;
+
   let restored = 0;
-  for (const entry of entries) {
+  const restoredWindowIds = new Map();
+  for (const [oldWindowId, entry] of entries) {
     if (!entry || typeof entry.url !== "string" || !entry.url) continue;
     if (entry.expiry === "quit") continue; // excluded from restore
 
@@ -666,22 +760,48 @@ async function restoreWindows() {
     const slept = entry.slept && entry.sleepCaptureKey && entry.originalUrl;
 
     const win = await openLil({
-      url: slept ? sleepPageUrl(entry.sleepCaptureKey, entry.originalUrl) : entry.url,
+      url: slept
+        ? sleepPageUrl({
+            captureKey: entry.sleepCaptureKey,
+            originalUrl: entry.originalUrl,
+            originalTitle: entry.originalTitle,
+            tint,
+          })
+        : entry.url,
       recordUrl: entry.url,
       left: b.left,
       top: b.top,
       size: { width: b.width || DEFAULT_SIZE.width, height: b.height || DEFAULT_SIZE.height },
       focus: false, // restoration must never steal focus from the user
+      priorContext: null, // never derive a predecessor from incidental startup focus
       registration: {
         expiry: normalizeExpiry(entry.expiry, "never"),
         lastInteraction: Date.now(),
+        priorContext: normalizePriorContext(entry.priorContext),
         slept: !!entry.slept,
         sleepCaptureKey: entry.sleepCaptureKey,
         originalUrl: entry.originalUrl,
+        originalTitle: entry.originalTitle,
       },
     });
-    if (win) restored += 1;
+    if (win) {
+      restored += 1;
+      restoredWindowIds.set(oldWindowId, win.id);
+    }
   }
+
+  // Restored Chromium window ids are new. Re-key predecessor-lil references
+  // after every window exists so chain order in storage cannot matter.
+  const reg = await getRegistry();
+  let remapped = false;
+  for (const entry of Object.values(reg)) {
+    const prior = normalizePriorContext(entry && entry.priorContext);
+    if (!prior || prior.kind !== "lil") continue;
+    const newWindowId = restoredWindowIds.get(String(prior.windowId));
+    entry.priorContext = newWindowId === undefined ? null : { kind: "lil", windowId: newWindowId };
+    remapped = true;
+  }
+  if (remapped) await setRegistry(reg);
   log("restored", restored, "little window(s)");
 }
 
@@ -697,7 +817,21 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (reg[key]) {
     // Don't overwrite the "real" url with the sleep-page URL — slept entries
     // keep their originalUrl and are managed by sleep/wake directly.
-    if (reg[key].slept) return;
+    // If the active, user-visible document has left the nap URL (page fallback
+    // whose own cleanup hung), finish the leftover registry/capture work.
+    // An inactive same-window wake preload reporting the original URL is not
+    // a completed wake and must not clear nap state; neither is the fresh
+    // document of a swap that still has a nap document to fall back to.
+    if (reg[key].slept) {
+      if (tab.active && !isSleepPageUrl(changeInfo.url) && !(await napDocumentMayRemain(tab.windowId))) {
+        await clearNapState(
+          tab.windowId,
+          reg[key].originalUrl || changeInfo.url,
+          reg[key].sleepCaptureKey
+        );
+      }
+      return;
+    }
     reg[key].url = changeInfo.url;
     await setRegistry(reg);
   }
@@ -716,14 +850,21 @@ chrome.windows.onBoundsChanged.addListener(async (win) => {
 });
 
 chrome.windows.onRemoved.addListener(async (windowId) => {
+  const incognitoPriorContext = incognitoPriorContexts.get(windowId);
+  incognitoPriorContexts.delete(windowId);
   const wasIncognito = incognitoLils.delete(windowId);
   const reg = await getRegistry();
   const entry = reg[String(windowId)];
   const wasLil = !!entry || wasIncognito;
 
-  // Was this the focused window? If so, restore focus to the MRU top.
-  const wasFocused = mruStack[0] === windowId;
-  mruRemove(windowId);
+  const wasFocused = focusedWindowId === windowId;
+  if (wasFocused) focusedWindowId = chrome.windows.WINDOW_ID_NONE;
+
+  // Consult the predecessor exactly once, before deleting the lil's state.
+  // Successful host/group promotion is a transfer: skip unwind there only.
+  if (wasLil && wasFocused && !promotingWindowIds.has(windowId)) {
+    await restorePriorContext(entry ? entry.priorContext : incognitoPriorContext);
+  }
 
   // Clean up any stored capture for this lil.
   if (entry && entry.sleepCaptureKey) {
@@ -731,18 +872,16 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
   }
   await deregisterWindow(windowId);
 
-  if (wasLil && wasFocused) {
-    const top = await mruTopAlive(windowId);
-    if (top !== null) await focusWindow(top);
-  }
 });
 
 // ===========================================================================
-// NEW-WINDOW LINK HANDLING (v3) — the auth-popup fix + focus discipline.
+// NEW-WINDOW LINK HANDLING (v3, classification refined in v4 by issue #16).
 //
 // On onCreatedNavigationTarget from a lil, WAIT for the tab to settle, then:
-//   - window.type === "popup" OR openerTabId missing OR OAuth-guard URL
-//       → do NOTHING (preserve the native popup: window.opener/postMessage).
+//   - window.type === "popup" OR OAuth-guard URL (requested or settled)
+//       → do NOTHING (preserve the native popup/auth flow: window.opener /
+//         postMessage). A missing openerTabId alone is NOT decisive: a
+//         rel="noopener" target=_blank spawn is a genuine requested target.
 //   - landed as a tab in a NORMAL window
 //       → effective behavior = config linkBehavior flipped by ⌘ clickHint:
 //         new-lil  → re-parent into a new cascaded lil (create → focus)
@@ -790,10 +929,27 @@ function matchesOAuthGuard(url) {
 // no position cascades off the origin, so the lil still lands offset.
 async function cascadeTabToLil(tabId, srcWindowId, fallbackUrl) {
   const { left, top } = await cascadeOrigin(srcWindowId, CASCADE_OFFSET);
-  return openLil({ tabId, recordUrl: fallbackUrl, left, top });
+  return openLil({
+    tabId,
+    recordUrl: fallbackUrl,
+    left,
+    top,
+    priorContext: { kind: "lil", windowId: srcWindowId },
+  });
 }
 
+// Tabs named by webNavigation.onCreatedNavigationTarget. That event is the
+// public signal that a tab was created to host a navigation from another tab,
+// so the new-window link flow owns it — the new-tab conversion below must
+// never adopt it, regardless of which listener runs first (Chromium dispatches
+// tabs.onCreated for the new tab before this event). Command+T / utility opens
+// never fire it. Claimed synchronously at listener entry so the claim always
+// lands before the new-tab flow's settle-then-decide checks; tab ids are
+// session-unique, so entries are kept for the life of the service worker.
+const linkOwnedTabIds = new Set();
+
 chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
+  if (details && typeof details.tabId === "number") linkOwnedTabIds.add(details.tabId);
   try {
     const srcTab = await safe(chrome.tabs.get(details.sourceTabId), "tabs.get source");
     if (!srcTab || srcTab.windowId === undefined) return;
@@ -804,12 +960,16 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
     if (!settled) return; // tab vanished — nothing to do
     const { tab, win } = settled;
 
-    // ---- Branch 1: native popup / auth window → LEAVE UNTOUCHED. ----
+    // ---- Branch 1: native popup / guarded auth flow → LEAVE UNTOUCHED. ----
+    // Preservation is decided by the settled state together: a genuine popup
+    // window (a featureful window.open keeps window.opener/postMessage alive)
+    // or an OAuth-guard URL, requested or final. A missing opener alone is
+    // NOT decisive (issue #16): an opener-less spawn in a normal window is a
+    // genuine requested browsing target and follows the configured behavior.
     const isPopupWindow = win.type === "popup";
-    const noOpener = tab.openerTabId === undefined || tab.openerTabId === null;
     const authUrl = matchesOAuthGuard(details.url) || matchesOAuthGuard(tab.url);
-    if (isPopupWindow || noOpener || authUrl) {
-      log("new-window: preserving native popup", win.type, "opener=" + tab.openerTabId);
+    if (isPopupWindow || authUrl) {
+      log("new-window: preserving native popup/auth", win.type, "opener=" + tab.openerTabId);
       return; // no re-parent, no navigate, no registry
     }
 
@@ -838,11 +998,65 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
 });
 
 // ===========================================================================
+// NEW-TAB CONVERSION (v4, issue #18).
+//
+// A browser-created tab (Command+T, or a utility open targeted at this
+// browser) converts into a lil only when public events tie it to a lil:
+// onFocusChanged still names a registered lil at the onCreated event, the
+// tab is active and opener-less, and it landed in an already-populated
+// normal window. No timestamps. When that tie is missing, leave the tab.
+// A tab claimed by the link flow (linkOwnedTabIds) or matching the OAuth
+// guard is never converted — the new-window leave-alone rules always win.
+// ===========================================================================
+
+chrome.tabs.onCreated.addListener(async (tab) => {
+  const sourceWindowId = focusedWindowId;
+  const destWindowId = lastNormalWindowId;
+  try {
+    if (!tab || tab.id === undefined || tab.windowId === undefined) return;
+    if (tab.active !== true) return;
+    if (tab.openerTabId !== undefined && tab.openerTabId !== null) return;
+    if (sourceWindowId === chrome.windows.WINDOW_ID_NONE) return;
+    if (tab.windowId === sourceWindowId) return;
+    if (tab.windowId !== destWindowId) return;
+    if (!(await isEphemeralWindow(sourceWindowId))) return;
+
+    const settled = await settleTabAndWindow(tab.id);
+    if (!settled) return;
+    const { tab: live, win } = settled;
+    if (linkOwnedTabIds.has(tab.id)) return;
+    if (live.openerTabId !== undefined && live.openerTabId !== null) return;
+    if (matchesOAuthGuard(live.url || live.pendingUrl)) return;
+    if (live.active !== true) return;
+    if (!win || win.type !== "normal") return;
+    if (await isEphemeralWindow(win.id)) return;
+
+    const inWindow = await safe(
+      chrome.tabs.query({ windowId: live.windowId }),
+      "tabs.query new-tab siblings"
+    );
+    if (!inWindow || inWindow.filter((t) => t.id !== live.id).length === 0) return;
+
+    await cascadeTabToLil(
+      live.id,
+      sourceWindowId,
+      live.url || live.pendingUrl || tab.url || tab.pendingUrl || ""
+    );
+  } catch (err) {
+    log("new-tab conversion error", err && err.message ? err.message : err);
+  }
+});
+
+// ===========================================================================
 // SLEEP SYSTEM (v3).
 //
 // Pipeline: captureVisibleTab (throttled ≤2/sec) → dataURL→Blob→IndexedDB →
-// mark registry {slept, sleepCaptureKey, originalUrl} → navigate the tab to
-// sleep.html. Wake: sleep page click → wakeLil → navigate back + delete capture.
+// mark registry {slept, sleepCaptureKey, originalUrl, originalTitle} →
+// replace the tab document with sleep.html. Wake (v4, issue #21): sleep page
+// click → wakeLil → the original URL loads in an inactive tab of the same lil
+// window behind the nap image; after the 180 ms floor (readiness-gated, 500 ms
+// cap) the fresh tab takes over, the nap tab is removed, and the capture and
+// nap registry fields are cleared.
 // ===========================================================================
 
 const IDB_NAME = "lil-sleep";
@@ -920,13 +1134,56 @@ function idbKeys() {
   );
 }
 
-// Build the sleep-page URL for a given capture key + original URL + tint.
-function sleepPageUrl(captureKey, originalUrl, tint) {
+// Build the sleep-page URL from the nap-page inputs. Capture identity,
+// original URL/title, and tint travel as one named value so none can shift or
+// be silently omitted between entry and restore. Wire params (k/u/t/tint) and
+// the sleep.html page name are unchanged.
+function sleepPageUrl({ captureKey, originalUrl, originalTitle, tint }) {
   const params = new URLSearchParams();
   params.set("k", captureKey);
   params.set("u", originalUrl || "");
+  params.set("t", originalTitle || "");
   if (tint) params.set("tint", tint);
   return chrome.runtime.getURL("sleep.html") + "?" + params.toString();
+}
+
+function isSleepPageUrl(url) {
+  if (typeof url !== "string" || !url) return false;
+  const nap = chrome.runtime.getURL("sleep.html");
+  return url === nap || url.startsWith(nap + "?");
+}
+
+// Might a nap document still exist anywhere in this lil window? Nap state is
+// only leftover once none does: while one remains — a wake swap still in
+// flight, a rollback that put it back in front — the registry is telling the
+// truth. Asked at the moment of clearing, so a stale event cannot act on a
+// window that has since changed. An unanswerable query counts as "may remain":
+// clearing on a guess would delete a capture the nap still needs, while
+// keeping it costs only a later event or the sweep's orphan pass.
+async function napDocumentMayRemain(windowId) {
+  const tabs = await safe(chrome.tabs.query({ windowId }), "tabs.query nap leftover");
+  return !tabs || tabs.some((t) => isSleepPageUrl(t.url) || isSleepPageUrl(t.pendingUrl));
+}
+
+// Release the original document by replacing the current history entry so the
+// nap URL does not sit on top of the live page in back/forward. Replacement is
+// the only truthful release: when scripting is unavailable or fails, return
+// false and leave the live document untouched — never degrade to
+// history-pushing navigation.
+async function replaceTabDocument(tabId, url) {
+  const execute = chrome.scripting && chrome.scripting.executeScript;
+  if (typeof execute !== "function") return false;
+  const injected = await safe(
+    execute.call(chrome.scripting, {
+      target: { tabId },
+      func: (nextUrl) => {
+        location.replace(nextUrl);
+      },
+      args: [url],
+    }),
+    "scripting.executeScript replace"
+  );
+  return !!injected;
 }
 
 // Global capture throttle: serialize captures with a min gap so we never exceed
@@ -982,6 +1239,7 @@ async function sleepLil(windowId) {
   const tab = tabs && tabs[0];
   if (!tab || tab.id === undefined) return false;
   const originalUrl = tab.url || entry.url || "";
+  const originalTitle = typeof tab.title === "string" ? tab.title : "";
   if (!originalUrl || /^chrome-extension:\/\//i.test(originalUrl)) return false; // already a lil page
 
   const dataUrl = await throttledCapture(windowId);
@@ -1005,40 +1263,165 @@ async function sleepLil(windowId) {
     reg2[String(windowId)].slept = true;
     reg2[String(windowId)].sleepCaptureKey = captureKey;
     reg2[String(windowId)].originalUrl = originalUrl;
+    reg2[String(windowId)].originalTitle = originalTitle;
     await setRegistry(reg2);
   }
 
-  await safe(chrome.tabs.update(tab.id, { url: sleepPageUrl(captureKey, originalUrl, tint) }), "tabs.update sleep");
+  const released = await replaceTabDocument(
+    tab.id,
+    sleepPageUrl({ captureKey, originalUrl, originalTitle, tint })
+  );
+  if (!released) {
+    // The live document was never released, so the nap never happened: roll
+    // back this entry's nap-only registry fields and the freshly stored
+    // capture rather than claim a nap the user cannot see.
+    const reg3 = await getRegistry();
+    const pending = reg3[String(windowId)];
+    if (pending && pending.sleepCaptureKey === captureKey) {
+      delete pending.slept;
+      delete pending.sleepCaptureKey;
+      delete pending.originalUrl;
+      delete pending.originalTitle;
+      await setRegistry(reg3);
+    }
+    await safe(idbDelete(captureKey), "idbDelete nap rollback");
+    log("sleepLil: document replacement failed for", windowId);
+    return false;
+  }
   log("slept lil", windowId);
   return true;
 }
 
-// Wake a slept lil: navigate its tab back to the original URL, delete capture,
-// clear the registry sleep marks. Called from the sleep page's wake message.
+// Wake timing bounds (issue #21): the static nap image stays visible for at
+// least 180 ms, the swap completes as soon as the fresh page is ready after
+// that floor, and waiting for readiness stops no later than 500 ms.
+const WAKE_MIN_HOLD_MS = 180;
+const WAKE_MAX_WAIT_MS = 500;
+
+// Milliseconds until the wake image floor is met, never negative. The one
+// timing rule for both the preload waiter and the replacement-fallback path.
+function wakeFloorRemainingMs(startedAt) {
+  return Math.max(0, startedAt + WAKE_MIN_HOLD_MS - Date.now());
+}
+
+// Wait until the wake swap may happen for the preloaded tab: the fresh page's
+// first `status: "complete"` held to the 180 ms image floor, or the 500 ms cap
+// if readiness never arrives — the transition proceeds regardless.
+function waitForWakeSwap(tabId, startedAt) {
+  return new Promise((resolve) => {
+    let done = false;
+    let floorTimer = null;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      if (floorTimer !== null) clearTimeout(floorTimer);
+      clearTimeout(capTimer);
+      resolve();
+    };
+    // Readiness observed: swap at once past the floor, else when it is met.
+    const ready = () => {
+      if (done || floorTimer !== null) return; // readiness already observed
+      const wait = wakeFloorRemainingMs(startedAt);
+      if (wait === 0) finish();
+      else floorTimer = setTimeout(finish, wait);
+    };
+    const onUpdated = (id, changeInfo) => {
+      if (id !== tabId || !changeInfo || changeInfo.status !== "complete") return;
+      ready();
+    };
+    const capTimer = setTimeout(finish, Math.max(0, startedAt + WAKE_MAX_WAIT_MS - Date.now()));
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    // Subscribed first, so readiness cannot fall between the listener and this
+    // inspection: a load that already completed still swaps at the floor.
+    void safe(chrome.tabs.get(tabId), "tabs.get wake readiness").then((tab) => {
+      if (tab && tab.status === "complete") ready();
+    });
+  });
+}
+
+// Clear every nap-only registry field while keeping the lil registered, and
+// delete the stored capture. Used after a successful wake replacement, and as
+// the event-driven backstop when the nap document is already gone.
+async function clearNapState(windowId, originalUrl, captureKey) {
+  const reg = await getRegistry();
+  const entry = reg[String(windowId)];
+  if (entry) {
+    delete entry.slept;
+    delete entry.sleepCaptureKey;
+    delete entry.originalUrl;
+    delete entry.originalTitle;
+    entry.url = originalUrl;
+    entry.lastInteraction = Date.now();
+    await setRegistry(reg);
+  }
+  if (captureKey) await safe(idbDelete(captureKey), "idbDelete wake");
+}
+
+// Wake a slept lil through a bounded, clean transition. The original URL
+// begins loading at once in an inactive tab of the same lil window while the
+// nap image stays painted; once the fresh page is ready (never before the
+// 180 ms floor, never waiting past 500 ms) the fresh tab takes over and the
+// nap tab — and with it the internal nap history entry — is removed. Success
+// is reported only after that replacement has actually happened; failures
+// leave nap state truthful so the nap page's own fallback can fire.
 async function wakeLil(windowId) {
   const reg = await getRegistry();
   const entry = reg[String(windowId)];
   if (!entry) return false;
   const originalUrl = entry.originalUrl || entry.url;
   const captureKey = entry.sleepCaptureKey;
+  if (!originalUrl) return false;
 
   const tabs = await safe(chrome.tabs.query({ windowId, active: true }), "tabs.query wake");
-  const tab = tabs && tabs[0];
-  if (tab && tab.id !== undefined && originalUrl) {
-    await safe(chrome.tabs.update(tab.id, { url: originalUrl }), "tabs.update wake");
+  const napTab = tabs && tabs[0];
+  if (!napTab || napTab.id === undefined) return false;
+
+  const startedAt = Date.now();
+  const freshTab = await safe(
+    chrome.tabs.create({ windowId, url: originalUrl, active: false }),
+    "tabs.create wake"
+  );
+
+  if (!freshTab || freshTab.id === undefined) {
+    // Preload unavailable: hold the image floor, then release the nap document
+    // through entry's replacement-only path so history stays clean. If even
+    // that is impossible, leave nap state truthful and report failure — the
+    // nap page's own fallback can still navigate it.
+    const wait = wakeFloorRemainingMs(startedAt);
+    if (wait > 0) await delay(wait);
+    const released = await replaceTabDocument(napTab.id, originalUrl);
+    if (!released) {
+      log("wakeLil: no fresh navigation possible for", windowId);
+      return false;
+    }
+    await clearNapState(windowId, originalUrl, captureKey);
+    log("woke lil", windowId, "(replacement fallback)");
+    return true;
   }
 
-  // Clear sleep marks; keep the lil registered as a normal live lil.
-  const reg2 = await getRegistry();
-  if (reg2[String(windowId)]) {
-    reg2[String(windowId)].slept = false;
-    delete reg2[String(windowId)].sleepCaptureKey;
-    delete reg2[String(windowId)].originalUrl;
-    reg2[String(windowId)].url = originalUrl;
-    reg2[String(windowId)].lastInteraction = Date.now();
-    await setRegistry(reg2);
+  await waitForWakeSwap(freshTab.id, startedAt);
+
+  // Wake completes only when a fresh active document has actually replaced
+  // the nap document. Until then nap state stays truthful and the reply
+  // reports failure, so the nap page's own fallback can fire.
+  const activated = await safe(chrome.tabs.update(freshTab.id, { active: true }), "tabs.update wake activate");
+  if (!activated) {
+    await safe(chrome.tabs.remove(freshTab.id), "tabs.remove wake preload");
+    log("wakeLil: fresh tab activation failed for", windowId);
+    return false;
   }
-  if (captureKey) await safe(idbDelete(captureKey), "idbDelete wake");
+  try {
+    await chrome.tabs.remove(napTab.id);
+  } catch (err) {
+    // The nap document survived: put it back in front and drop the preload so
+    // the visible lil and the registry tell the same nap truth.
+    log("wakeLil: nap tab removal failed for", windowId, err && err.message ? err.message : err);
+    await safe(chrome.tabs.update(napTab.id, { active: true }), "tabs.update wake rollback");
+    await safe(chrome.tabs.remove(freshTab.id), "tabs.remove wake preload");
+    return false;
+  }
+  await clearNapState(windowId, originalUrl, captureKey);
   log("woke lil", windowId);
   return true;
 }
@@ -1092,11 +1475,10 @@ async function runSweep() {
     const ctx = await getContext();
     const now = Date.now();
     const reg = await getRegistry();
-    // Determine the currently focused window. Prefer the live query (survives SW
-    // restarts where the MRU stack is empty); fall back to the MRU top.
+    // Determine the currently focused window from live browser state.
     const lastFocused = await safe(chrome.windows.getLastFocused({}), "sweep getLastFocused");
-    let focusedTop =
-      lastFocused && lastFocused.focused && lastFocused.id !== undefined ? lastFocused.id : mruStack[0];
+    const focusedTop =
+      lastFocused && lastFocused.focused && lastFocused.id !== undefined ? lastFocused.id : null;
 
     for (const [key, entry] of Object.entries(reg)) {
       const windowId = parseInt(key, 10);
@@ -1107,9 +1489,6 @@ async function runSweep() {
         const idleMs = now - (entry.lastInteraction || 0);
         if (idleMs > entry.expiry * 3600 * 1000) {
           log("ephemeral close", windowId, "idle(min)=" + Math.round(idleMs / 60000));
-          await deregisterWindow(windowId);
-          if (entry.sleepCaptureKey) await safe(idbDelete(entry.sleepCaptureKey), "idb ephemeral");
-          mruRemove(windowId);
           await safe(chrome.windows.remove(windowId), "windows.remove ephemeral");
           continue; // gone — skip sleep checks
         }
@@ -1176,8 +1555,7 @@ async function refreshLastInteraction(windowId) {
 }
 
 // ===========================================================================
-// PROMOTE — get a lil's tab out of ephemeral mode (unchanged from v2, plus
-// focus discipline + MRU cleanup).
+// PROMOTE — get a lil's tab out of ephemeral mode (unchanged from v2).
 // ===========================================================================
 
 async function findNormalWindow() {
@@ -1196,50 +1574,53 @@ async function moveTabIntoHostBrowser(tabId, groupId) {
   const tab = await safe(chrome.tabs.get(tabId), "tabs.get promote");
   if (!tab) return false;
   const sourceWindowId = tab.windowId;
+  if (sourceWindowId !== undefined) promotingWindowIds.add(sourceWindowId);
 
   let ok = false;
-
-  if (typeof groupId === "number") {
-    const res = await safe(chrome.tabs.group({ tabIds: [tabId], groupId }), "tabs.group");
-    if (res !== null) {
-      const g = await safe(chrome.tabGroups.get(groupId), "tabGroups.get");
-      if (g && g.windowId !== undefined) {
-        await safe(chrome.tabs.update(tabId, { active: true }), "tabs.update active group");
-        await safe(chrome.windows.update(g.windowId, { focused: true }), "windows.update focus group");
-      }
-      ok = true;
-    }
-  } else {
-    const target = await findNormalWindow();
-    if (target && target.id !== undefined) {
-      const moved = await safe(chrome.tabs.move(tabId, { windowId: target.id, index: -1 }), "tabs.move promote");
-      if (moved !== null) {
-        await safe(chrome.tabs.update(tabId, { active: true }), "tabs.update active");
-        await safe(chrome.windows.update(target.id, { focused: true }), "windows.update focus");
+  try {
+    if (typeof groupId === "number") {
+      const res = await safe(chrome.tabs.group({ tabIds: [tabId], groupId }), "tabs.group");
+      if (res !== null) {
+        const g = await safe(chrome.tabGroups.get(groupId), "tabGroups.get");
+        if (g && g.windowId !== undefined) {
+          await safe(chrome.tabs.update(tabId, { active: true }), "tabs.update active group");
+          await safe(chrome.windows.update(g.windowId, { focused: true }), "windows.update focus group");
+        }
         ok = true;
       }
-    }
-    if (!ok) {
-      const win = await safe(chrome.windows.create({ tabId, focused: true }), "windows.create promote-fallback");
-      ok = !!win;
-    }
-    if (!ok && tab.url) {
+    } else {
       const target = await findNormalWindow();
-      const createOpts = { url: tab.url, active: true };
-      if (target && target.id !== undefined) createOpts.windowId = target.id;
-      const t = await safe(chrome.tabs.create(createOpts), "tabs.create last-resort");
-      if (t) {
-        await safe(chrome.tabs.remove(tabId), "tabs.remove old");
-        ok = true;
+      if (target && target.id !== undefined) {
+        const moved = await safe(chrome.tabs.move(tabId, { windowId: target.id, index: -1 }), "tabs.move promote");
+        if (moved !== null) {
+          await safe(chrome.tabs.update(tabId, { active: true }), "tabs.update active");
+          await safe(chrome.windows.update(target.id, { focused: true }), "windows.update focus");
+          ok = true;
+        }
+      }
+      if (!ok) {
+        const win = await safe(chrome.windows.create({ tabId, focused: true }), "windows.create promote-fallback");
+        ok = !!win;
+      }
+      if (!ok && tab.url) {
+        const target = await findNormalWindow();
+        const createOpts = { url: tab.url, active: true };
+        if (target && target.id !== undefined) createOpts.windowId = target.id;
+        const t = await safe(chrome.tabs.create(createOpts), "tabs.create last-resort");
+        if (t) {
+          await safe(chrome.tabs.remove(tabId), "tabs.remove old");
+          ok = true;
+        }
       }
     }
-  }
 
-  if (ok) {
-    mruRemove(sourceWindowId);
-    await deregisterWindow(sourceWindowId);
+    if (ok) {
+      await deregisterWindow(sourceWindowId);
+    }
+    return ok;
+  } finally {
+    if (sourceWindowId !== undefined) promotingWindowIds.delete(sourceWindowId);
   }
-  return ok;
 }
 
 async function handOffToBrowser(tabId, browserSlug) {
@@ -1248,7 +1629,6 @@ async function handOffToBrowser(tabId, browserSlug) {
   const posted = postToHost({ type: "open-external", browser: browserSlug, url: tab.url });
   const wid = tab.windowId;
   if (wid !== undefined) {
-    mruRemove(wid);
     await deregisterWindow(wid);
     await safe(chrome.windows.remove(wid), "windows.remove handoff");
   }
@@ -1261,26 +1641,59 @@ async function promoteTab(tabId, dest, groupId, browser) {
   if (dest === "group" && typeof groupId === "number") return moveTabIntoHostBrowser(tabId, groupId);
   if (dest === "host-tab") return moveTabIntoHostBrowser(tabId, undefined);
   if (dest === "browser" && typeof browser === "string" && browser) return handOffToBrowser(tabId, browser);
-  if (ctx.defaultBrowser && ctx.defaultBrowser === ctx.browser) return moveTabIntoHostBrowser(tabId, undefined);
-  return handOffToBrowser(tabId, ctx.defaultBrowser || DEFAULT_CONTEXT.defaultBrowser);
+  if (ctx.primaryBrowser && ctx.primaryBrowser === ctx.browser) return moveTabIntoHostBrowser(tabId, undefined);
+  return handOffToBrowser(tabId, ctx.primaryBrowser || DEFAULT_CONTEXT.primaryBrowser);
 }
 
-// Open a URL into a lil already living in `windowId` per link behavior. Used by
-// context-menu handlers.
-async function openLinkForLil(windowId, url, mode) {
+// Open a URL into a lil already living in `windowId`. Used by "Open link in this lil".
+async function openLinkInThisLil(windowId, url) {
   if (typeof url !== "string" || !url) return;
-  if (mode === "same-lil") {
-    const tabs = await safe(chrome.tabs.query({ windowId, active: true }), "tabs.query lil");
-    const tab = tabs && tabs[0];
-    if (tab && tab.id !== undefined) {
-      await safe(chrome.tabs.update(tab.id, { url }), "tabs.update ctxmenu same-lil");
-    }
-    return;
+  const tabs = await safe(chrome.tabs.query({ windowId, active: true }), "tabs.query lil");
+  const tab = tabs && tabs[0];
+  if (tab && tab.id !== undefined) {
+    await safe(chrome.tabs.update(tab.id, { url }), "tabs.update ctxmenu this-lil");
   }
-  const created = await safe(chrome.tabs.create({ windowId, url, active: false }), "tabs.create ctxmenu");
-  if (created && created.id !== undefined) {
-    await cascadeTabToLil(created.id, windowId, url);
-  }
+}
+
+// Fresh lil for a link. Names the invoking window as predecessor so a normal
+// tab's "new lil" action does not pretend the source was already a lil.
+async function openLinkInNewLil(tab, url) {
+  if (typeof url !== "string" || !url || !tab || tab.windowId === undefined) return null;
+  const { left, top } = await cascadeOrigin(tab.windowId);
+  const registered = await isRegisteredLil(tab.windowId);
+  return openLil({
+    url,
+    left,
+    top,
+    priorContext: registered
+      ? { kind: "lil", windowId: tab.windowId }
+      : { kind: "normal-window", windowId: tab.windowId },
+  });
+}
+
+// Context-menu incognito: never load the URL into a normal lil. If Chromium
+// blocks incognito access, explain on the source page and leave the URL there.
+async function openLinkInIncognitoLil(tab, url) {
+  if (typeof url !== "string" || !url || !tab || tab.windowId === undefined) return null;
+  const explain = () => {
+    broadcastToWindow(tab.windowId, { action: "incognitoHint" });
+    return null;
+  };
+  const allowed = await safe(chrome.extension.isAllowedIncognitoAccess(), "isAllowedIncognitoAccess");
+  if (!allowed) return explain();
+  const { left, top } = await cascadeOrigin(tab.windowId);
+  const fromLil = (await isRegisteredLil(tab.windowId)) || incognitoLils.has(tab.windowId);
+  const win =
+    (await openLil({
+      url,
+      left,
+      top,
+      incognito: true,
+      priorContext: fromLil
+        ? { kind: "lil", windowId: tab.windowId }
+        : { kind: "normal-window", windowId: tab.windowId },
+    })) || explain();
+  return win;
 }
 
 // ===========================================================================
@@ -1563,8 +1976,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return;
         }
         case "sleepThisLil": {
-          if (senderWindowId !== undefined) await sleepLil(senderWindowId);
-          sendResponse({ ok: true });
+          const slept = senderWindowId !== undefined ? await sleepLil(senderWindowId) : false;
+          sendResponse({ ok: slept });
+          return;
+        }
+        case "openSettings": {
+          // Contextual request for the native Settings window. Posts the
+          // dedicated host command; never creates or focuses a browser window.
+          const posted = postToHost({ type: "open-settings" });
+          sendResponse({ ok: posted });
           return;
         }
         case "reopenIncognito": {
@@ -1573,7 +1993,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           if (senderWindowId !== undefined) {
             const { left, top } = await cascadeOrigin(senderWindowId);
             await openIncognitoLil(url, left, top);
-            mruRemove(senderWindowId);
             await deregisterWindow(senderWindowId);
             await safe(chrome.windows.remove(senderWindowId), "windows.remove reopen");
           }
@@ -1587,18 +2006,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return;
         }
         case "wakeLil": {
-          // From the sleep page click.
-          if (senderWindowId !== undefined) await wakeLil(senderWindowId);
-          sendResponse({ ok: true });
+          // From the sleep page click. ok:false lets the nap page run its own
+          // fallback navigation instead of staying stranded.
+          const woke = senderWindowId !== undefined ? await wakeLil(senderWindowId) : false;
+          sendResponse({ ok: woke });
           return;
         }
         case "closeWindow": {
           if (senderWindowId !== undefined) {
-            mruRemove(senderWindowId);
-            const reg = await getRegistry();
-            const entry = reg[String(senderWindowId)];
-            if (entry && entry.sleepCaptureKey) await safe(idbDelete(entry.sleepCaptureKey), "idb close");
-            await deregisterWindow(senderWindowId);
             await safe(chrome.windows.remove(senderWindowId), "windows.remove close");
           }
           sendResponse({ ok: true });
@@ -1620,70 +2035,163 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 chrome.commands.onCommand.addListener(async (command) => {
-  if (command !== "promote-tab") return;
   const tabs = await safe(chrome.tabs.query({ active: true, lastFocusedWindow: true }), "tabs.query command");
   const tab = tabs && tabs[0];
   if (!tab || tab.windowId === undefined) return;
   if (!(await isEphemeralWindow(tab.windowId))) return;
-  await promoteTab(tab.id, "default");
+  if (command === "promote-tab") {
+    await promoteTab(tab.id, "default");
+    return;
+  }
+  if (command === "let-this-lil-nap") {
+    await sleepLil(tab.windowId);
+  }
 });
 
 // ===========================================================================
-// CONTEXT MENUS (v3) — recreated cleanly in onInstalled (removeAll first).
+// CONTEXT MENUS — recreated cleanly in onInstalled (removeAll first).
 //
+// Visibility and click authorization share one policy: a label is shown only
+// where its action would be true. Tab-strip registration is isolated so an
+// unsupported `tab` context cannot prevent the other menus from loading.
 // link (lil windows):   Open link in new lil / this lil / incognito lil
-// page (lil windows):   Sleep this lil, Never sleep {host} / Allow sleeping {host}
+// page (lil windows):   Let This Lil Nap, Never nap {host} / Allow napping {host}
 // page (NORMAL windows): Send to lil
 // onClicked handlers verify window context and no-op gracefully.
 // ===========================================================================
 
 const CTX_NEW_LIL = "open-link-new-lil";
-const CTX_SAME_LIL = "open-link-same-lil";
+const CTX_THIS_LIL = "open-link-this-lil";
 const CTX_INCOGNITO_LIL = "open-link-incognito-lil";
 const CTX_SLEEP = "sleep-this-lil";
 const CTX_WHITELIST = "toggle-whitelist";
 const CTX_SEND_TO_LIL = "send-to-lil";
+const CTX_SEND_TAB_TO_LIL = "send-tab-to-lil";
+
+// One snapshot of the invoking tab. Visibility and click authorization both
+// read this so a label cannot appear where its action would no-op, or run
+// where its label would be a lie.
+function contextActionSnapshot(tab, registeredLil) {
+  const incognitoLil = !!(tab && incognitoLils.has(tab.windowId));
+  const incognito = !!(tab && tab.incognito) || incognitoLil;
+  return {
+    registeredLil: !!registeredLil,
+    incognitoLil,
+    incognito,
+    normalPage: !registeredLil && !incognito,
+    host: hostOf(tab && tab.url),
+  };
+}
+
+function contextActionAllowed(menuItemId, snap) {
+  switch (menuItemId) {
+    case CTX_THIS_LIL:
+      return snap.registeredLil;
+    case CTX_NEW_LIL:
+      return snap.registeredLil || snap.normalPage;
+    case CTX_INCOGNITO_LIL:
+      return snap.registeredLil || snap.normalPage || snap.incognito;
+    case CTX_SEND_TO_LIL:
+    case CTX_SEND_TAB_TO_LIL:
+      return snap.normalPage;
+    case CTX_SLEEP:
+      return snap.registeredLil;
+    case CTX_WHITELIST:
+      return (snap.registeredLil || snap.incognitoLil) && !!snap.host;
+    default:
+      return false;
+  }
+}
 
 function createContextMenus() {
   chrome.contextMenus.removeAll(() => {
     void chrome.runtime.lastError;
     try {
-      chrome.contextMenus.create({ id: CTX_NEW_LIL, title: "Open link in new lil", contexts: ["link"] });
-      chrome.contextMenus.create({ id: CTX_SAME_LIL, title: "Open link in this lil", contexts: ["link"] });
+      // Hidden until the shared policy runs; Chrome otherwise shows every item.
+      chrome.contextMenus.create({
+        id: CTX_NEW_LIL,
+        title: "Open link in new lil",
+        contexts: ["link"],
+        visible: false,
+      });
+      chrome.contextMenus.create({
+        id: CTX_THIS_LIL,
+        title: "Open link in this lil",
+        contexts: ["link"],
+        visible: false,
+      });
       chrome.contextMenus.create({
         id: CTX_INCOGNITO_LIL,
         title: "Open link in incognito lil",
         contexts: ["link"],
+        visible: false,
       });
-      chrome.contextMenus.create({ id: CTX_SLEEP, title: "Sleep this lil", contexts: ["page"] });
-      chrome.contextMenus.create({ id: CTX_WHITELIST, title: "Never sleep this site", contexts: ["page"] });
-      chrome.contextMenus.create({ id: CTX_SEND_TO_LIL, title: "Send to lil", contexts: ["page"] });
+      chrome.contextMenus.create({
+        id: CTX_SLEEP,
+        title: "Let This Lil Nap",
+        contexts: ["page"],
+        visible: false,
+      });
+      chrome.contextMenus.create({
+        id: CTX_WHITELIST,
+        title: "Never nap this site",
+        contexts: ["page"],
+        visible: false,
+      });
+      chrome.contextMenus.create({
+        id: CTX_SEND_TO_LIL,
+        title: "Send to lil",
+        contexts: ["page"],
+        visible: false,
+      });
     } catch (err) {
       log("contextMenus.create error", err && err.message ? err.message : err);
     }
+    createTabStripSend();
+    void applyContextMenusForFocusedTab();
   });
 }
 
-// Keep the whitelist menu title in sync with the active tab's host + lil status.
+function createTabStripSend() {
+  try {
+    chrome.contextMenus.create(
+      { id: CTX_SEND_TAB_TO_LIL, title: "Send Tab to Lil", contexts: ["tab"], visible: false },
+      () => {
+        const err = chrome.runtime.lastError;
+        if (err) log("Send Tab to Lil omitted", err.message);
+      }
+    );
+  } catch (err) {
+    log("Send Tab to Lil omitted", err && err.message ? err.message : err);
+  }
+}
+
+// Keep titles and visibility in lockstep with the click policy for this tab.
 async function updateContextMenusForTab(tab) {
   if (!tab || tab.windowId === undefined) return;
-  const isLil = await isEphemeralWindow(tab.windowId);
-  const host = hostOf(tab.url);
+  const registeredLil = await isRegisteredLil(tab.windowId);
+  const snap = contextActionSnapshot(tab, registeredLil);
+  const host = snap.host;
   const ctx = await getContext();
   const whitelisted = hostWhitelisted(host, ctx.sleep && ctx.sleep.whitelist);
 
-  const setTitle = (id, title, visible) => {
-    chrome.contextMenus.update(id, { title, visible }, () => void chrome.runtime.lastError);
+  const setItem = (id, props) => {
+    chrome.contextMenus.update(id, props, () => void chrome.runtime.lastError);
   };
 
-  // Lil-only page items visible in lils; "Send to lil" visible only in normal windows.
-  setTitle(CTX_SLEEP, "Sleep this lil", isLil && !incognitoLils.has(tab.windowId));
-  setTitle(
-    CTX_WHITELIST,
-    host ? (whitelisted ? "Allow sleeping " + host : "Never sleep " + host) : "Never sleep this site",
-    isLil && !!host
-  );
-  setTitle(CTX_SEND_TO_LIL, "Send to lil", !isLil);
+  setItem(CTX_THIS_LIL, { visible: contextActionAllowed(CTX_THIS_LIL, snap) });
+  setItem(CTX_NEW_LIL, { visible: contextActionAllowed(CTX_NEW_LIL, snap) });
+  setItem(CTX_INCOGNITO_LIL, { visible: contextActionAllowed(CTX_INCOGNITO_LIL, snap) });
+  setItem(CTX_SLEEP, {
+    title: "Let This Lil Nap",
+    visible: contextActionAllowed(CTX_SLEEP, snap),
+  });
+  setItem(CTX_WHITELIST, {
+    title: host ? (whitelisted ? "Allow napping " + host : "Never nap " + host) : "Never nap this site",
+    visible: contextActionAllowed(CTX_WHITELIST, snap),
+  });
+  setItem(CTX_SEND_TO_LIL, { visible: contextActionAllowed(CTX_SEND_TO_LIL, snap) });
+  setItem(CTX_SEND_TAB_TO_LIL, { visible: contextActionAllowed(CTX_SEND_TAB_TO_LIL, snap) });
 }
 
 chrome.tabs.onActivated.addListener(async (info) => {
@@ -1702,32 +2210,35 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 // Re-parent the current NORMAL-window tab into a new lil (Send to lil).
 async function sendTabToLil(tabId, srcWindowId) {
   const { left, top } = await cascadeOrigin(srcWindowId);
-  return openLil({ tabId, left, top });
+  return openLil({
+    tabId,
+    left,
+    top,
+    priorContext: { kind: "normal-window", windowId: srcWindowId },
+  });
 }
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   try {
     if (!tab || tab.windowId === undefined) return;
-    const isLil = await isEphemeralWindow(tab.windowId);
+    const registeredLil = await isRegisteredLil(tab.windowId);
+    const snap = contextActionSnapshot(tab, registeredLil);
+    if (!contextActionAllowed(info.menuItemId, snap)) return;
 
     switch (info.menuItemId) {
       case CTX_NEW_LIL:
-        if (isLil && info.linkUrl) await openLinkForLil(tab.windowId, info.linkUrl, "new-lil");
+        if (info.linkUrl) await openLinkInNewLil(tab, info.linkUrl);
         return;
-      case CTX_SAME_LIL:
-        if (isLil && info.linkUrl) await openLinkForLil(tab.windowId, info.linkUrl, "same-lil");
+      case CTX_THIS_LIL:
+        if (info.linkUrl) await openLinkInThisLil(tab.windowId, info.linkUrl);
         return;
       case CTX_INCOGNITO_LIL:
-        if (isLil && info.linkUrl) {
-          const { left, top } = await cascadeOrigin(tab.windowId);
-          await openIncognitoLil(info.linkUrl, left, top);
-        }
+        if (info.linkUrl) await openLinkInIncognitoLil(tab, info.linkUrl);
         return;
       case CTX_SLEEP:
-        if (isLil && !incognitoLils.has(tab.windowId)) await sleepLil(tab.windowId);
+        await sleepLil(tab.windowId);
         return;
       case CTX_WHITELIST: {
-        if (!isLil) return;
         const host = hostOf(tab.url);
         if (!host) return;
         const ctx = await getContext();
@@ -1737,7 +2248,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         return;
       }
       case CTX_SEND_TO_LIL:
-        if (!isLil && tab.id !== undefined) await sendTabToLil(tab.id, tab.windowId);
+      case CTX_SEND_TAB_TO_LIL:
+        if (tab.id !== undefined) await sendTabToLil(tab.id, tab.windowId);
         return;
       default:
         return;
@@ -1751,10 +2263,19 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // LIFECYCLE
 // ===========================================================================
 
+async function applyContextMenusForFocusedTab() {
+  const tabs = await safe(
+    chrome.tabs.query({ active: true, lastFocusedWindow: true }),
+    "tabs.query menu policy"
+  );
+  if (tabs && tabs[0]) await updateContextMenusForTab(tabs[0]);
+}
+
 chrome.runtime.onStartup.addListener(async () => {
   connectNative();
   await ensureSweepAlarm();
   await restoreWindows();
+  await applyContextMenusForFocusedTab();
 });
 
 chrome.runtime.onInstalled.addListener(async () => {

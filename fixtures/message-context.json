@@ -3,8 +3,8 @@
   "id": "ctx-1",
   "browser": "brave",
   "browserName": "Brave",
-  "defaultBrowser": "helium",
-  "defaultBrowserName": "Helium",
+  "primaryBrowser": "helium",
+  "primaryBrowserName": "Helium",
   "fallbackBrowser": "chrome",
   "linkBehavior": "new-lil",
   "ephemeralDefault": "6h",
@@ -22,7 +22,8 @@
   },
   "hoverBar": {
     "style": "solid",
-    "tint": "#112233"
+    "tint": "#112233",
+    "revealHeight": 24
   },
   "knownBrowsers": [
     {"slug": "helium", "name": "Helium", "installed": true},

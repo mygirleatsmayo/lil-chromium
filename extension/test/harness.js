@@ -25,17 +25,65 @@ export async function flush(turns = 8) {
   }
 }
 
-function sandbox({ chrome, indexedDB }) {
+/**
+ * Manually advanced clock for the worker sandbox. `Date.now()` reads it and
+ * `setTimeout`/`clearTimeout` queue on it, so tests step time forward instead
+ * of sleeping against the wall clock. advance() fires due timers in time
+ * order, flushing promise continuations after each one.
+ *
+ * Private and fixed-start until a real caller needs customization.
+ */
+function createClock() {
+  let now = 1_700_000_000_000;
+  let seq = 0;
+  const timers = new Map();
+  const clock = {
+    now: () => now,
+    setTimeout(fn, ms = 0) {
+      const id = ++seq;
+      timers.set(id, { at: now + Math.max(0, ms), fn });
+      return id;
+    },
+    clearTimeout(id) {
+      timers.delete(id);
+    },
+    async advance(ms) {
+      const target = now + ms;
+      for (;;) {
+        let nextId = null;
+        let nextAt = Infinity;
+        for (const [id, t] of timers) {
+          if (t.at <= target && t.at < nextAt) {
+            nextAt = t.at;
+            nextId = id;
+          }
+        }
+        if (nextId === null) break;
+        const t = timers.get(nextId);
+        timers.delete(nextId);
+        now = t.at;
+        t.fn();
+        await flush();
+      }
+      now = target;
+    },
+  };
+  return clock;
+}
+
+function sandbox({ chrome, indexedDB, clock }) {
   return {
     chrome,
     indexedDB,
     console: quietConsole,
-    setTimeout,
-    clearTimeout,
+    setTimeout: clock ? clock.setTimeout : setTimeout,
+    clearTimeout: clock ? clock.clearTimeout : clearTimeout,
     setInterval,
     clearInterval,
     queueMicrotask,
-    Date,
+    // The worker only ever reads Date.now(); a clocked boot swaps in the
+    // manual clock, everything else keeps the real Date.
+    Date: clock ? { now: clock.now } : Date,
     Math,
     JSON,
     Promise,
@@ -83,7 +131,8 @@ function sandbox({ chrome, indexedDB }) {
 export async function boot(options = {}) {
   const chrome = createChrome(options);
   const indexedDB = createIndexedDB();
-  const context = vm.createContext(sandbox({ chrome, indexedDB }));
+  const clock = options.clock === true ? createClock() : null;
+  const context = vm.createContext(sandbox({ chrome, indexedDB, clock }));
   vm.runInContext(fs.readFileSync(WORKER_PATH, "utf8"), context, { filename: WORKER_PATH });
   await flush();
   const state = chromeState(chrome);
@@ -91,6 +140,7 @@ export async function boot(options = {}) {
     chrome,
     indexedDB,
     workerPath: WORKER_PATH,
+    clock,
     journal: () => state.journal,
     registry() {
       return state.storage.ephemeralWindows || {};
@@ -104,8 +154,20 @@ export async function boot(options = {}) {
     windows() {
       return state.listWindows();
     },
+    async blurBrowser() {
+      await state.blurBrowser();
+      await flush();
+    },
     menus() {
       return [...state.menus.values()];
+    },
+    sessionHistory(tabId) {
+      return state.sessionHistory(tabId);
+    },
+    async setTabState(tabId, patch) {
+      const tab = await state.setTabState(tabId, patch);
+      await flush();
+      return tab;
     },
     captures() {
       return indexedDB.store("lil-sleep", "captures");
@@ -115,10 +177,19 @@ export async function boot(options = {}) {
       await state.deliver(msg);
       await flush();
     },
+    async disconnect() {
+      state.native.disconnectPort();
+      await flush();
+    },
     async message(msg, sender = {}) {
       const reply = await state.sendRuntimeMessage(msg, sender);
       await flush();
       return reply;
+    },
+    // Send a runtime message without awaiting the reply, so a test can drive
+    // the manual clock while the worker's handler is still pending.
+    messageLater(msg, sender = {}) {
+      return state.sendRuntimeMessage(msg, sender);
     },
     async installed() {
       await state.events.runtime.onInstalled.fire({ reason: "install" });
@@ -130,6 +201,10 @@ export async function boot(options = {}) {
     },
     async alarm(name = "lil-sweep") {
       await state.events.alarms.onAlarm.fire({ name });
+      await flush();
+    },
+    async command(name) {
+      await state.events.commands.onCommand.fire(name);
       await flush();
     },
     async clickMenu(menuItemId, tab, info = {}) {

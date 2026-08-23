@@ -24,12 +24,12 @@ enum RelayClient {
     }
 
     /// The routing order for sockets, per PROTOCOL.md "App routing order":
-    /// 1. relay-<defaultBrowser>.sock  2. relay-<fallbackBrowser>.sock
+    /// 1. relay-<primaryBrowser>.sock  2. relay-<fallbackBrowser>.sock
     /// 3. any other live relay-*.sock (`liveSlugs`, newest mtime first).
     /// Deduped, preserving order; empty slugs are dropped.
-    static func socketOrder(defaultBrowser: String, fallbackBrowser: String, liveSlugs: [String]) -> [String] {
+    static func socketOrder(primaryBrowser: String, fallbackBrowser: String, liveSlugs: [String]) -> [String] {
         var seen = Set<String>()
-        return ([defaultBrowser, fallbackBrowser] + liveSlugs).filter { slug in
+        return ([primaryBrowser, fallbackBrowser] + liveSlugs).filter { slug in
             !slug.isEmpty && seen.insert(slug).inserted
         }
     }
@@ -38,7 +38,7 @@ enum RelayClient {
     private static func routedSockets() -> [(slug: String, path: String)] {
         let cfg = LilConfig.load()
         let order = socketOrder(
-            defaultBrowser: cfg.defaultBrowser,
+            primaryBrowser: cfg.primaryBrowser,
             fallbackBrowser: cfg.fallbackBrowser,
             liveSlugs: LilPaths.allSocketURLs().map(\.slug)
         )
@@ -140,6 +140,40 @@ enum RelayClient {
 
     // MARK: - Public operations
 
+    /// Hot-apply (issue #12): the relays a Settings write converges on — EVERY
+    /// live relay, not the routing order. Slug-sorted, deduped, no empties, so
+    /// the fanout order is normalized and independent of socket mtimes.
+    static func broadcastTargets(liveSlugs: [String]) -> [String] {
+        var seen = Set<String>()
+        return liveSlugs.filter { !$0.isEmpty && seen.insert($0).inserted }.sorted()
+    }
+
+    /// Serial queue so a burst of Settings edits reaches each relay in write
+    /// order (last write wins everywhere, matching config.json).
+    private static let broadcastQueue = DispatchQueue(label: "com.lilchromium.config-broadcast")
+
+    /// Publish the just-persisted config to every live relay, off the caller's
+    /// thread. Fire-and-forget per relay: a missed relay (browser quit, dead
+    /// socket) catches up from config.json on its extension's next (re)connect
+    /// `get-context`, which the host always answers with a fresh read.
+    static func broadcastConfigAsync(_ config: LilConfig) {
+        broadcastQueue.async { broadcastConfig(config) }
+    }
+
+    /// Send the normalized full configuration to every live relay socket.
+    /// Synchronous; call from a background queue (see broadcastConfigAsync).
+    static func broadcastConfig(_ config: LilConfig, connectTimeoutMs: Int = 300) {
+        guard let line = try? LilCodec.encodeLine(ConfigUpdateMessage(config: config)) else { return }
+        for slug in broadcastTargets(liveSlugs: LilPaths.allSocketURLs().map(\.slug)) {
+            guard let fd = try? connect(
+                path: LilPaths.socketPath(forBrowser: slug),
+                timeoutMs: connectTimeoutMs
+            ) else { continue }
+            _ = writeAll(fd, line)
+            Darwin.close(fd)
+        }
+    }
+
     /// The browser slug that served the last successful routed request. Best
     /// effort, for optional caller diagnostics; not required by the palette.
     /// Guarded by a lock since requests run off the main thread.
@@ -158,9 +192,22 @@ enum RelayClient {
     /// every socket fails so the caller can fall back to launching a browser.
     /// `incognito` (palette ⌘-Enter) sets `open.incognito` on the wire; the
     /// extension decides how to honor it (gated on isAllowedIncognitoAccess).
-    static func sendOpen(url: String, left: Int, top: Int, incognito: Bool = false, connectTimeoutMs: Int = 300) throws {
+    static func sendOpen(
+        url: String,
+        left: Int,
+        top: Int,
+        incognito: Bool = false,
+        priorContext: PriorContext? = nil,
+        connectTimeoutMs: Int = 300
+    ) throws {
         let line = try LilCodec.encodeLine(
-            OpenMessage(url: url, left: left, top: top, incognito: incognito ? true : nil)
+            OpenMessage(
+                url: url,
+                left: left,
+                top: top,
+                incognito: incognito ? true : nil,
+                priorContext: priorContext
+            )
         )
         var lastError: Error = RelayError.connectFailed
         for target in routedSockets() {

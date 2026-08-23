@@ -74,9 +74,20 @@ enum OpenRouter {
     /// launch fallback cannot honor it (no extension in the loop), so an
     /// incognito open that finds no relay degrades to a normal browser launch.
     static func open(_ urlString: String, left: Int, top: Int, incognito: Bool = false) {
+        // Capture before the relay can ask Chromium to create/focus the lil.
+        // A browser-focused predecessor is identified more precisely by the
+        // extension; this native value is used only when Chromium reports no
+        // focused window.
+        let priorContext = externalPriorContext()
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                try RelayClient.sendOpen(url: urlString, left: left, top: top, incognito: incognito)
+                try RelayClient.sendOpen(
+                    url: urlString,
+                    left: left,
+                    top: top,
+                    incognito: incognito,
+                    priorContext: priorContext
+                )
                 // Success: the host is up. (If the extension port were down the
                 // host queues the open per PROTOCOL.md, so a successful socket
                 // write is sufficient — no separate ping needed on the hot path.)
@@ -90,8 +101,18 @@ enum OpenRouter {
         }
     }
 
+    /// The frontmost non-Lil-Chromium process, recorded as an exact pid with a
+    /// bundle-id fallback. Nil means there is no eligible external predecessor.
+    private static func externalPriorContext() -> PriorContext? {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+            return nil
+        }
+        return .externalApp(pid: app.processIdentifier, bundleId: app.bundleIdentifier)
+    }
+
     /// Fallback when no relay answered: launch the URL in a real browser by
-    /// bundle id, in order — config defaultBrowser, then fallbackBrowser, then
+    /// bundle id, in order — configured Primary, then Fallback, then
     /// the first installed known browser. NEVER `NSWorkspace.shared.open(url)`
     /// bare: this app IS the system default HTTP handler, so a bare open would
     /// route straight back to us (infinite loop). If nothing can be launched
@@ -112,14 +133,14 @@ enum OpenRouter {
         }
         func appendBundleId(forSlug slug: String) {
             guard !slug.isEmpty else { return }
-            // Prefer the config's recorded bundle id; fall back to the table.
-            append(cfg.knownBrowsers.first(where: { $0.slug == slug })?.bundleId
-                ?? BrowserTable.bundleId(forSlug: slug))
+            append(BrowserTable.bundleId(forSlug: slug))
         }
-        appendBundleId(forSlug: cfg.defaultBrowser)
+        appendBundleId(forSlug: cfg.primaryBrowser)
         appendBundleId(forSlug: cfg.fallbackBrowser)
         // Then any installed known browser from the config scan.
-        for kb in cfg.knownBrowsers where kb.installed { append(kb.bundleId) }
+        for kb in cfg.knownBrowsers where kb.installed {
+            append(BrowserTable.bundleId(forSlug: kb.slug))
+        }
         return candidates
     }
 

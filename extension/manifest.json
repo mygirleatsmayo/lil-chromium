@@ -14,7 +14,8 @@
     "webNavigation",
     "system.display",
     "contextMenus",
-    "alarms"
+    "alarms",
+    "scripting"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {
@@ -40,7 +41,10 @@
         "default": "Ctrl+Shift+O",
         "mac": "Command+Shift+O"
       },
-      "description": "Open this lil in the default browser"
+      "description": "Open this lil in the Primary browser"
+    },
+    "let-this-lil-nap": {
+      "description": "Let This Lil Nap"
     }
   }
 }

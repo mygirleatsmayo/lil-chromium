@@ -8,19 +8,29 @@ if (typeof window !== "undefined" && window.SLEEPING_LIL_DATA) {
 }
 //
 // Runs in the extension's own origin (chrome-extension://) so it shares the SW's
-// IndexedDB. Reads the capture key + original URL + tint from the query string,
-// paints the screenshot full-bleed under a tinted overlay, and wakes the lil on
-// any click (SW navigates the tab back to the original URL and deletes the
-// capture). See PROTOCOL.md §Sleep.
+// IndexedDB. Reads the capture key + original URL + original title + tint from
+// the query string, paints the screenshot full-bleed under a tinted overlay,
+// titles the document with the sleeping symbol, and wakes the lil on any click
+// (the SW runs the bounded wake transition — the original URL loads behind this
+// static image, the swap lands within 180–500 ms, and the capture is deleted —
+// with a fallback here, only if the worker fails or is unreachable, that
+// starts cleanup then navigates even if storage/IDB never settles).
+// See PROTOCOL.md Lil Nap.
 
 (() => {
   const IDB_NAME = "lil-sleep";
   const IDB_STORE = "captures";
+  // Registry key and nap-only field names mirror background.js — the
+  // extension ships unpacked with no shared module between page and worker.
+  const REGISTRY_KEY = "ephemeralWindows";
 
   const params = new URLSearchParams(location.search);
   const captureKey = params.get("k") || "";
   const originalUrl = params.get("u") || "";
+  const originalTitle = params.get("t") || "";
   const tintParam = params.get("tint") || "purple";
+
+  document.title = "💤 " + originalTitle;
 
   const shot = document.getElementById("shot");
   const tintEl = document.getElementById("tint");
@@ -90,6 +100,39 @@ if (typeof window !== "undefined" && window.SLEEPING_LIL_DATA) {
     });
   }
 
+  function idbDelete(key) {
+    return new Promise((resolve, reject) => {
+      let req;
+      try {
+        req = indexedDB.open(IDB_NAME, 1);
+      } catch (e) {
+        reject(e);
+        return;
+      }
+      req.onsuccess = () => {
+        const db = req.result;
+        let tx;
+        try {
+          tx = db.transaction(IDB_STORE, "readwrite");
+        } catch (e) {
+          db.close();
+          reject(e);
+          return;
+        }
+        tx.objectStore(IDB_STORE).delete(key);
+        tx.oncomplete = () => {
+          db.close();
+          resolve(true);
+        };
+        tx.onerror = () => {
+          db.close();
+          reject(tx.error);
+        };
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
   let objectUrl = null;
   (async () => {
     if (!captureKey) return;
@@ -108,31 +151,92 @@ if (typeof window !== "undefined" && window.SLEEPING_LIL_DATA) {
     if (objectUrl) URL.revokeObjectURL(objectUrl);
   });
 
-  // ---- Wake on any click. Ask the SW to restore, with a hard fallback so the
-  // page never stays stuck if the SW is unreachable. ----
+  // ---- Wake on any click. The worker owns the bounded transition (see
+  // PROTOCOL.md Lil Nap). The direct fallback below fires only on an explicit
+  // worker failure or genuine unreachability — never in parallel with the
+  // worker's bounded path. ----
   let waking = false;
+
+  // Leaving the nap document directly must start what the worker could not:
+  // clear this lil's nap-only registry fields (the lil stays registered) and
+  // delete the capture. Best effort, and bounded — a hung storage/IDB call
+  // must not stop the page from waking itself.
+  async function reconcileNapState() {
+    try {
+      const obj = await chrome.storage.local.get(REGISTRY_KEY);
+      const reg = (obj && obj[REGISTRY_KEY]) || {};
+      let touched = false;
+      for (const entry of Object.values(reg)) {
+        if (captureKey && entry && entry.sleepCaptureKey === captureKey) {
+          delete entry.slept;
+          delete entry.sleepCaptureKey;
+          delete entry.originalUrl;
+          delete entry.originalTitle;
+          entry.url = originalUrl;
+          entry.lastInteraction = Date.now();
+          touched = true;
+        }
+      }
+      if (touched) await chrome.storage.local.set({ [REGISTRY_KEY]: reg });
+    } catch (_) {
+      /* storage unreachable — navigate anyway */
+    }
+    if (captureKey) {
+      try {
+        await idbDelete(captureKey);
+      } catch (_) {
+        /* the worker's sweep keeps orphan-capture cleanup as a backstop */
+      }
+    }
+  }
+
+  // Long enough for storage and IndexedDB to answer — they cross a process
+  // boundary, so a zero bound would leave every time and abandon the cleanup
+  // it just started — but short enough that a hung call cannot hold the
+  // document: it fits inside the worker's own 180 ms image floor. Leftovers
+  // past this bound belong to the worker's URL-change backstop and the sweep's
+  // orphan-capture pass.
+  const CLEANUP_BOUND_MS = 150;
+
+  function leaveNap() {
+    if (!originalUrl) return;
+    (async () => {
+      const cleanup = reconcileNapState();
+      await Promise.race([
+        cleanup,
+        new Promise((resolve) => setTimeout(resolve, CLEANUP_BOUND_MS)),
+      ]);
+      try {
+        location.replace(originalUrl);
+      } catch (_) {
+        /* ignore */
+      }
+    })();
+  }
+
   function wake() {
     if (waking) return;
     waking = true;
-    let handled = false;
+    let answered = false; // the worker answered, one way or another
     try {
-      chrome.runtime.sendMessage({ action: "wakeLil" }, () => {
-        void chrome.runtime.lastError;
-        handled = true;
+      chrome.runtime.sendMessage({ action: "wakeLil" }, (reply) => {
+        answered = true;
+        // Only a successful reply means the worker owns the transition: an
+        // explicit failure or a message error leaves the nap page to go
+        // directly.
+        if (chrome.runtime.lastError || !reply || !reply.ok) leaveNap();
       });
     } catch (_) {
-      /* context invalidated — fall through to fallback */
+      leaveNap(); // context invalidated — no worker will answer
+      return;
     }
-    // Fallback: if the SW doesn't navigate us within 500ms, go directly.
+    // A reply that never arrives well past the worker's 500 ms cap (plus
+    // reply margin) means the worker is unreachable: go directly rather than
+    // strand. The deadline can never race the bounded path — a successful
+    // swap has removed this page long before it fires.
     setTimeout(() => {
-      if (!handled && originalUrl) {
-        try {
-          location.replace(originalUrl);
-        } catch (_) {
-          /* ignore */
-        }
-      }
-    }, 500);
+      if (!answered) leaveNap();
+    }, 1000);
   }
 
   document.addEventListener("click", wake, true);
