@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { parseHTML, Event as DOMEvent } from "linkedom";
 
 export const OVERLAY_PATH = path.resolve(fileURLToPath(new URL("../overlay.js", import.meta.url)));
+const MANIFEST_PATH = path.resolve(fileURLToPath(new URL("../manifest.json", import.meta.url)));
 
 const quietConsole = {
   log() {},
@@ -254,6 +255,9 @@ function createChrome(options = {}) {
     messages,
     runtime: {
       lastError: undefined,
+      getManifest() {
+        return JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
+      },
       sendMessage(msg, cb) {
         messages.push(msg);
         queueMicrotask(() => {

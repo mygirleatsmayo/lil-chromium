@@ -486,6 +486,7 @@
         .item .check { margin-left: auto; opacity: 0.9; }
         .item .k { margin-left: auto; font-size: 11px; opacity: 0.5; font-variant-numeric: tabular-nums; }
         .sub { padding: 5px 10px 2px; font-size: 11px; opacity: 0.5; text-transform: uppercase; letter-spacing: 0.4px; }
+        .foot { padding: 5px 10px 2px; font-size: 11px; opacity: 0.5; pointer-events: none; }
         .sep { height: 0.5px; background: var(--sep); margin: 5px 6px; }
         .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
         .gname { overflow: hidden; text-overflow: ellipsis; max-width: 190px; }
@@ -1102,6 +1103,12 @@
         closeMenu();
         send({ action: "closeWindow" });
       });
+      const manifest = chrome.runtime.getManifest();
+      const versionText = (manifest && (manifest.version_name || manifest.version)) || "";
+      if (versionText) {
+        addSep(menu);
+        addFooter(menu, versionText);
+      }
 
       menu.classList.add("open");
     }
@@ -1168,6 +1175,13 @@
       const s = document.createElement("div");
       s.className = "sep";
       container.appendChild(s);
+    }
+
+    function addFooter(container, text) {
+      const el = document.createElement("div");
+      el.className = "foot";
+      el.textContent = text;
+      container.appendChild(el);
     }
 
     back.addEventListener("click", () => history.back());

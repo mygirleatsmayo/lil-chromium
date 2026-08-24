@@ -196,19 +196,38 @@ struct SettingsRoot: View {
     var body: some View {
         // Three sections, in the order the parent spec fixes them: General
         // (what Lil Chromium itself does), Lils (what a lil does), Hoverbar
-        // (how a lil's overlay looks).
-        Form {
-            generalSection
-            lilsSection
-            hoverbarSection
+        // (how a lil's overlay looks). Version sits under the Form so it is a
+        // window footer, not a fourth settings group.
+        VStack(spacing: 0) {
+            Form {
+                generalSection
+                lilsSection
+                hoverbarSection
+            }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            versionFooter
         }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
         // Fixed size, not a minimum: the window styleMask has no .resizable and
         // NSHostingController otherwise sizes to fit content, which would make
         // the first-placement top edge drift off the 20% rule as sections grow.
         // Same size as the NSWindow contentRect / setContentSize above.
         .frame(width: SettingsPaneSize.size.width, height: SettingsPaneSize.size.height)
+    }
+
+    private var versionFooter: some View {
+        Text(versionLine)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 12)
+    }
+
+    /// Bundled `CFBundleShortVersionString` from Info.plist (`make app`).
+    private var versionLine: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        return version.isEmpty ? "Lil Chromium" : "Lil Chromium \(version)"
     }
 
     // MARK: General

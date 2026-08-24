@@ -19,7 +19,11 @@ APP_NAME="LilChromium"
 APP_EXECUTABLE="LilChromiumApp"
 HOST_EXECUTABLE="lilchromium-host"
 BUNDLE_ID="com.lilchromium.app"
-VERSION="0.1.0"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
+VERSION="$(git -C "${REPO_ROOT}" describe --tags --always --dirty 2>/dev/null || true)"
+if [[ -z "${VERSION}" ]]; then
+  VERSION="0.0.0+unknown"
+fi
 
 BUILD_DIR="${MAC_DIR}/build"
 APP_BUNDLE="${BUILD_DIR}/${APP_NAME}.app"
@@ -28,6 +32,7 @@ MACOS_DIR="${CONTENTS}/MacOS"
 RESOURCES_DIR="${CONTENTS}/Resources"
 
 # --- Build -------------------------------------------------------------------
+echo "==> Version ${VERSION}"
 echo "==> Building (swift build -c release) in ${MAC_DIR}"
 ( cd "${MAC_DIR}" && swift build -c release )
 

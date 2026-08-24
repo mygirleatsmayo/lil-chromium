@@ -95,7 +95,12 @@ test("keyboard isolation keeps address labels, pointer-transparent chrome, and S
   page.key(page.window, "l", { metaKey: true });
   page.root.querySelector(".caretbtn").dispatchEvent(new page.window.Event("click", { bubbles: true }));
   await page.flush();
-  assert.match(page.root.querySelector(".menu").textContent, /Settings…/);
+  const menu = page.root.querySelector(".menu");
+  assert.match(menu.textContent, /Settings…/);
+  const foot = menu.querySelector(".foot");
+  const manifest = page.chrome.runtime.getManifest();
+  assert.equal(foot.textContent, manifest.version_name || manifest.version);
+  assert.equal(foot.getAttribute("role"), null);
 });
 
 // --- Functional icon system (issue #23) ---------------------------------
