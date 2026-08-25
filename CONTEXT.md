@@ -37,8 +37,8 @@ A user-data context within one browser installation. Profiles are not independen
 _Avoid_: Browser installation
 
 **Prior context**:
-The lil or external macOS app that was active immediately before a lil took focus.
-_Avoid_: Previous browser window
+The live context macOS should reveal after a focused lil closes, treating each lil as if it were an independent app. It follows the user's focus history across lils, normal browser windows, and external apps; it is not permanently fixed when the lil is created.
+_Avoid_: Opener, creation-time predecessor, previous browser window
 
 **Lil Nap**:
 The feature and resource-saving inactive state from which a lil can later wake. User-facing actions say “Let This Lil Nap” and “Wake This Lil.”
