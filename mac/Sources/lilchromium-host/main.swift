@@ -135,6 +135,7 @@ final class Relay {
             forwardToExtension(line, kind: "history-query")
 
         case MessageType.open.rawValue:
+            FocusTrace.logOpen(line)
             if extensionUp {
                 if !forwardToExtension(line, kind: "open") {
                     enqueueOpen(line)
@@ -335,7 +336,12 @@ final class Relay {
             return
         }
         Task { @MainActor in
-            ExternalAppRestorer.restore(msg.priorContext)
+            let outcome = ExternalAppRestorer.restore(msg.priorContext)
+            // LILFOCUS (issue #30): host receipt, activation result, and the
+            // frontmost application the request actually produced. Public
+            // NSWorkspace reads only — no Accessibility, no private API.
+            hlog("[\(FocusTrace.tag)] restore-focus target=\(FocusTrace.describe(msg.priorContext)) outcome=\(outcome.rawValue)")
+            FocusTrace.logFrontmostAfterSettling(label: "restore-focus")
         }
     }
 

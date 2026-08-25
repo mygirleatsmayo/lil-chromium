@@ -15,6 +15,10 @@
 //   - Omnibox history suggestions (v3) for the hover bar.
 //   - Promote a lil into normal browsing or hand it to another browser.
 
+// LILFOCUS diagnostic seam (issue #30). Inert until armed over the relay; see
+// focus-trace.js. Loaded first so its helpers exist for the call sites below.
+importScripts("focus-trace.js");
+
 const NATIVE_HOST = "com.lilchromium.relay";
 // Registry entry shape (v3):
 //   { url, bounds:{left,top,width,height},
@@ -266,6 +270,10 @@ function consumeClickHint(url) {
 let focusedWindowId = chrome.windows.WINDOW_ID_NONE;
 let lastNormalWindowId = chrome.windows.WINDOW_ID_NONE;
 
+// LILFOCUS: let the diagnostic seam tell lils from ordinary windows without
+// exporting the registry to it.
+focusTraceInit({ isLil: (windowId) => isEphemeralWindow(windowId) });
+
 // Explicit focus. Used after windows.create when a lil is asked to take focus.
 async function focusWindow(windowId) {
   if (typeof windowId !== "number") return;
@@ -274,8 +282,16 @@ async function focusWindow(windowId) {
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
   focusedWindowId = windowId;
-  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  if (windowId === chrome.windows.WINDOW_ID_NONE) {
+    focusTrace("focus-changed", { windowId, kind: "none" });
+    return;
+  }
   const win = await safe(chrome.windows.get(windowId), "windows.get last-normal");
+  focusTrace("focus-changed", async () => ({
+    windowId,
+    kind: win ? win.type : "gone",
+    isLil: await isEphemeralWindow(windowId),
+  }));
   if (win && win.type === "normal" && focusedWindowId === windowId) {
     lastNormalWindowId = windowId;
   }
@@ -342,6 +358,13 @@ async function handlePortMessage(msg) {
   if (!msg || typeof msg !== "object") return;
   try {
     if (msg.type === "open") {
+      focusTrace("open-request", {
+        url: msg.url,
+        left: msg.left,
+        top: msg.top,
+        incognito: !!msg.incognito,
+        appSuppliedPriorContext: normalizePriorContext(msg.priorContext),
+      });
       if (msg.incognito) {
         await openIncognitoLil(msg.url, msg.left, msg.top, msg.priorContext);
       } else {
@@ -362,6 +385,8 @@ async function handlePortMessage(msg) {
       );
     } else if (msg.type === "config-update") {
       await applyConfigUpdate(msg);
+    } else if (focusTraceControl(msg)) {
+      // LILFOCUS: arm/disarm/snapshot for the issue #30 focus loop.
     } else {
       log("unknown port message", msg.type);
     }
@@ -577,6 +602,19 @@ function normalizePriorContext(value) {
 // eligible.
 async function capturePriorContext(appSuppliedPriorContext) {
   const all = await safe(chrome.windows.getAll({}), "getAll prior context");
+  // LILFOCUS: this reading is the live Chromium focus state the choice below
+  // turns on, taken from the array the capture already holds so tracing adds
+  // no query and no await to the create path.
+  focusTrace("prior-context-capture", {
+    appSuppliedPriorContext: normalizePriorContext(appSuppliedPriorContext),
+    windows: (all || []).map((win) => ({
+      id: win.id,
+      type: win.type,
+      focused: !!win.focused,
+      incognito: !!win.incognito,
+      bounds: { left: win.left, top: win.top, width: win.width, height: win.height },
+    })),
+  });
   const focused = (all || []).find((win) => win.focused && win.id !== undefined);
   if (focused) {
     if (await isEphemeralWindow(focused.id)) return { kind: "lil", windowId: focused.id };
@@ -588,17 +626,31 @@ async function capturePriorContext(appSuppliedPriorContext) {
 
 async function restorePriorContext(priorContext) {
   const prior = normalizePriorContext(priorContext);
-  if (!prior) return;
+  if (!prior) {
+    focusTrace("restore-attempt", { priorContext: null, outcome: "no-predecessor" });
+    return;
+  }
 
   if (prior.kind === "external-app") {
-    postToHost({ type: "restore-focus", priorContext: prior });
+    const delivered = postToHost({ type: "restore-focus", priorContext: prior });
+    focusTrace("restore-attempt", { priorContext: prior, outcome: delivered ? "sent-to-host" : "host-unavailable" });
     return;
   }
 
   const win = await safe(chrome.windows.get(prior.windowId), "windows.get prior context");
-  if (!win) return;
-  if (prior.kind === "lil" && !(await isEphemeralWindow(prior.windowId))) return;
-  if (prior.kind === "normal-window" && win.type !== "normal") return;
+  if (!win) {
+    focusTrace("restore-attempt", { priorContext: prior, outcome: "stale-window" });
+    return;
+  }
+  if (prior.kind === "lil" && !(await isEphemeralWindow(prior.windowId))) {
+    focusTrace("restore-attempt", { priorContext: prior, outcome: "no-longer-a-lil" });
+    return;
+  }
+  if (prior.kind === "normal-window" && win.type !== "normal") {
+    focusTrace("restore-attempt", { priorContext: prior, outcome: "no-longer-normal" });
+    return;
+  }
+  focusTrace("restore-attempt", { priorContext: prior, outcome: "focus-window" });
   await focusWindow(prior.windowId);
 }
 
@@ -637,6 +689,15 @@ async function openLil(spec) {
   const bounds = await clampBounds(spec.left, spec.top, size.width, size.height);
   const focus = spec.focus !== false;
 
+  focusTrace("lil-create-begin", {
+    url: spec.url,
+    adopting,
+    focusRequested: focus,
+    appSuppliedPriorContext: normalizePriorContext(spec.appSuppliedPriorContext),
+    chosenPriorContext: priorContext,
+    chosenBy: spec.priorContext !== undefined ? "caller" : "live-focus-capture",
+  });
+
   const opts = { type: "popup", focused: focus, width: bounds.width, height: bounds.height };
   if (adopting) opts.tabId = spec.tabId;
   else opts.url = spec.url;
@@ -645,7 +706,18 @@ async function openLil(spec) {
   if (bounds.top !== undefined) opts.top = bounds.top;
 
   const win = await safe(chrome.windows.create(opts), "windows.create lil");
-  if (!win || win.id === undefined) return null;
+  if (!win || win.id === undefined) {
+    focusTrace("lil-create-failed", { url: spec.url });
+    return null;
+  }
+
+  focusTrace("lil-created", {
+    windowId: win.id,
+    focusRequested: focus,
+    createdFocused: !!win.focused,
+    bounds: { left: win.left, top: win.top, width: win.width, height: win.height },
+    priorContext,
+  });
 
   if (focus) {
     // Explicit refocus (create({focused:true}) unreliable when not frontmost).
@@ -860,9 +932,18 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
   const wasFocused = focusedWindowId === windowId;
   if (wasFocused) focusedWindowId = chrome.windows.WINDOW_ID_NONE;
 
+  const promoting = promotingWindowIds.has(windowId);
+  focusTrace("window-removed", {
+    windowId,
+    wasLil,
+    wasFocused,
+    promoting,
+    priorContext: normalizePriorContext(entry ? entry.priorContext : incognitoPriorContext),
+  });
+
   // Consult the predecessor exactly once, before deleting the lil's state.
   // Successful host/group promotion is a transfer: skip unwind there only.
-  if (wasLil && wasFocused && !promotingWindowIds.has(windowId)) {
+  if (wasLil && wasFocused && !promoting) {
     await restorePriorContext(entry ? entry.priorContext : incognitoPriorContext);
   }
 

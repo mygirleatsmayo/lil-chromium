@@ -1,0 +1,114 @@
+{
+  "tag": "LILFOCUS",
+  "issue": 30,
+  "runId": "2026-08-25T21-40-45-475Z",
+  "startedAt": "2026-08-25T21:41:04.160Z",
+  "environment": {
+    "platform": "darwin 27.0.0",
+    "browserVersion": "0.15.7.1",
+    "appVersion": "v0.2-192-g6cf3671",
+    "extensionVersion": "0.4.0-trial",
+    "worktreeCommit": "2caad30"
+  },
+  "settings": {
+    "browser": "helium",
+    "bundleId": "net.imput.helium",
+    "sourceApp": "com.apple.mail",
+    "switchApp": "md.obsidian",
+    "url": "https://example.com/",
+    "settleMs": 900
+  },
+  "counts": {
+    "red": 0,
+    "green": 0,
+    "inconclusive": 9
+  },
+  "overall": "inconclusive",
+  "seamLive": false,
+  "scenarios": [
+    {
+      "scenario": "close/immediate",
+      "verdict": "inconclusive",
+      "reason": "no operator",
+      "repetitions": []
+    },
+    {
+      "scenario": "close/switch-then-refocus",
+      "verdict": "inconclusive",
+      "reason": "no operator",
+      "repetitions": []
+    },
+    {
+      "scenario": "close/unfocused-red-button",
+      "verdict": "inconclusive",
+      "reason": "no operator",
+      "repetitions": []
+    },
+    {
+      "scenario": "open/same-display/no-other-lil",
+      "verdict": "inconclusive",
+      "reason": "arrangement never matched",
+      "repetitions": []
+    },
+    {
+      "scenario": "open/same-display/lil-on-source-display",
+      "verdict": "inconclusive",
+      "reason": "arrangement never matched",
+      "repetitions": []
+    },
+    {
+      "scenario": "open/same-display/lil-on-primary-display",
+      "verdict": "inconclusive",
+      "reason": "arrangement never matched",
+      "repetitions": []
+    },
+    {
+      "scenario": "open/cross-display/no-other-lil",
+      "kind": "open",
+      "verdict": "inconclusive",
+      "reproductions": 0,
+      "repetitions": [
+        {
+          "repetition": 1,
+          "identifiedBy": "native",
+          "verdict": "green",
+          "reason": "only the requested lil came forward",
+          "lil": {
+            "number": 45553,
+            "display": 0,
+            "order": 0
+          },
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 95708
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": null,
+          "toreDown": false
+        },
+        {
+          "repetition": 2,
+          "verdict": "inconclusive",
+          "reason": "the previous lil is still open, so this scenario's arrangement no longer holds"
+        }
+      ],
+      "inconclusive": 1,
+      "rate": 0
+    },
+    {
+      "scenario": "open/cross-display/lil-on-source-display",
+      "verdict": "inconclusive",
+      "reason": "arrangement never matched",
+      "repetitions": []
+    },
+    {
+      "scenario": "open/cross-display/lil-on-primary-display",
+      "verdict": "inconclusive",
+      "reason": "arrangement never matched",
+      "repetitions": []
+    }
+  ]
+}

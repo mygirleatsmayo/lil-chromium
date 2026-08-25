@@ -133,6 +133,25 @@ export async function boot(options = {}) {
   const indexedDB = createIndexedDB();
   const clock = options.clock === true ? createClock() : null;
   const context = vm.createContext(sandbox({ chrome, indexedDB, clock }));
+
+  // The worker pulls in focus-trace.js with importScripts, exactly as a
+  // service worker does; sibling scripts share the worker's global scope.
+  context.importScripts = (...names) => {
+    for (const name of names) {
+      const file = path.resolve(path.dirname(WORKER_PATH), name);
+      vm.runInContext(fs.readFileSync(file, "utf8"), context, { filename: file });
+    }
+  };
+
+  // The only fetch the worker makes is the LILFOCUS diagnostic post, so the
+  // stub records requests instead of pretending to be a network.
+  const posts = [];
+  context.fetch = async (url, init = {}) => {
+    posts.push({ url, init });
+    if (options.fetchFails) throw new Error("collector unreachable");
+    return { ok: true, status: 204 };
+  };
+
   vm.runInContext(fs.readFileSync(WORKER_PATH, "utf8"), context, { filename: WORKER_PATH });
   await flush();
   const state = chromeState(chrome);
@@ -141,6 +160,8 @@ export async function boot(options = {}) {
     indexedDB,
     workerPath: WORKER_PATH,
     clock,
+    posts: () => posts,
+    traced: () => posts.map((p) => JSON.parse(p.init.body)),
     journal: () => state.journal,
     registry() {
       return state.storage.ephemeralWindows || {};
