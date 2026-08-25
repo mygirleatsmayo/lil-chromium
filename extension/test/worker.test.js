@@ -1531,6 +1531,114 @@ test("when the wake preload is unavailable, wake holds the floor and replaces th
   assert.equal((await reply).ok, true);
 });
 
+test("when the wake preload is returned in another window, wake keeps the lil and does not move the original URL into Primary", async () => {
+  let primaryId = -1;
+  let lilId = -1;
+  const env = await boot({
+    clock: true,
+    relocateTabCreate: (opts) => (opts && opts.windowId === lilId ? primaryId : undefined),
+  });
+  await env.deliver(fixture("message-context"));
+  const primary = await env.chrome.windows.create({ url: "https://primary.example/", type: "normal" });
+  primaryId = primary.id;
+  const lil = await openTitledLil(env);
+  lilId = lil.id;
+  const originalUrl = lil.tabs[0].url;
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+  const napTabId = napping.tabs[0].id;
+  const captureKey = env.registry()[String(lil.id)].sleepCaptureKey;
+
+  let returnedPreload = null;
+  env.chrome.tabs.onCreated.addListener((tab) => {
+    if (tab.url === originalUrl) returnedPreload = { tabId: tab.id, windowId: tab.windowId };
+  });
+
+  const reply = env.messageLater({ action: "wakeLil" }, sender(napping));
+  await env.flush();
+
+  const createEntry = env.journal().find((e) => e.op === "tabs.create" && e.create.url === originalUrl);
+  assert.equal(createEntry.create.windowId, lil.id, "requested preload window is the napping lil");
+  assert.ok(returnedPreload, "a fresh tab was created");
+  assert.equal(returnedPreload.windowId, primaryId, "returned fresh-tab window is Primary");
+
+  await env.clock.advance(500);
+  await env.flush();
+  assert.equal((await reply).ok, true);
+
+  const woken = env.windows().find((w) => w.id === lil.id);
+  assert.ok(woken, "wake must not empty and close the lil");
+  assert.equal(woken.tabs.length, 1);
+  assert.equal(woken.tabs[0].id, napTabId, "the nap tab is released in place, not removed");
+  assert.equal(woken.tabs[0].url, originalUrl);
+  assert.equal(woken.tabs[0].active, true);
+  assert.deepEqual(env.sessionHistory(napTabId), [originalUrl]);
+
+  const primaryAfter = env.windows().find((w) => w.id === primaryId);
+  assert.ok(primaryAfter, "Primary stays");
+  assert.deepEqual(
+    primaryAfter.tabs.map((t) => t.url),
+    ["https://primary.example/"],
+    "Primary receives no tab"
+  );
+
+  const entry = env.registry()[String(lil.id)];
+  assert.ok(entry, "the lil stays registered");
+  assert.equal(entry.url, originalUrl);
+  assert.equal(entry.slept, undefined);
+  assert.equal(entry.sleepCaptureKey, undefined);
+  assert.equal(entry.originalUrl, undefined);
+  assert.equal(entry.originalTitle, undefined);
+  assert.equal(env.captures().has(captureKey), false, "the capture is removed");
+});
+
+test("a relocated wake preload that cannot replace in place leaves the lil napping and does not keep the URL in Primary", async () => {
+  let primaryId = -1;
+  let lilId = -1;
+  let scriptingBlocked = false;
+  const env = await boot({
+    clock: true,
+    relocateTabCreate: (opts) => (opts && opts.windowId === lilId ? primaryId : undefined),
+    rejectScripting: () => scriptingBlocked,
+  });
+  await env.deliver(fixture("message-context"));
+  const primary = await env.chrome.windows.create({ url: "https://primary.example/", type: "normal" });
+  primaryId = primary.id;
+  const lil = await openTitledLil(env);
+  lilId = lil.id;
+  const originalUrl = lil.tabs[0].url;
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+  const napTabId = napping.tabs[0].id;
+  const captureKey = env.registry()[String(lil.id)].sleepCaptureKey;
+  scriptingBlocked = true;
+
+  const reply = env.messageLater({ action: "wakeLil" }, sender(napping));
+  await env.flush();
+  await env.clock.advance(500);
+  await env.flush();
+  assert.equal((await reply).ok, false, "failure is reported so the nap page's own fallback can fire");
+
+  const win = env.windows().find((w) => w.id === lil.id);
+  assert.ok(win, "the lil stays open");
+  assert.equal(win.tabs.length, 1);
+  assert.equal(win.tabs[0].id, napTabId);
+  assert.match(win.tabs[0].url, NAP_PAGE);
+  const primaryAfter = env.windows().find((w) => w.id === primaryId);
+  assert.deepEqual(
+    primaryAfter.tabs.map((t) => t.url),
+    ["https://primary.example/"],
+    "the misplaced preload is dropped, not left in Primary"
+  );
+  const entry = env.registry()[String(lil.id)];
+  assert.ok(entry, "the lil stays registered");
+  assert.equal(entry.slept, true);
+  assert.equal(entry.sleepCaptureKey, captureKey);
+  assert.equal(entry.originalUrl, originalUrl);
+  assert.equal(entry.originalTitle, ORIGINAL_PAGE_TITLE);
+  assert.ok(env.captures().has(captureKey), "the capture stays referenced, not orphaned");
+});
+
 test("when wake cannot navigate at all, it reports failure and leaves nap state truthful", async () => {
   let scriptingBlocked = false;
   const env = await boot({

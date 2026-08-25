@@ -1056,7 +1056,8 @@ chrome.tabs.onCreated.addListener(async (tab) => {
 // click → wakeLil → the original URL loads in an inactive tab of the same lil
 // window behind the nap image; after the 180 ms floor (readiness-gated, 500 ms
 // cap) the fresh tab takes over, the nap tab is removed, and the capture and
-// nap registry fields are cleared.
+// nap registry fields are cleared. A preload Chromium returns in another
+// window is dropped; wake then replaces in place so the lil is not emptied.
 // ===========================================================================
 
 const IDB_NAME = "lil-sleep";
@@ -1358,6 +1359,14 @@ async function clearNapState(windowId, originalUrl, captureKey) {
   if (captureKey) await safe(idbDelete(captureKey), "idbDelete wake");
 }
 
+// A wake preload is usable only when Chromium actually placed it in the
+// napping lil. A missing id, or a tab returned in another window, is not a
+// same-lil preload — activating it and removing the nap tab would relocate
+// the URL and close the lil (issue #33 / #21 F4).
+function wakePreloadIsInLil(tab, windowId) {
+  return !!(tab && tab.id !== undefined && tab.windowId === windowId);
+}
+
 // Wake a slept lil through a bounded, clean transition. The original URL
 // begins loading at once in an inactive tab of the same lil window while the
 // nap image stays painted; once the fresh page is ready (never before the
@@ -1383,11 +1392,14 @@ async function wakeLil(windowId) {
     "tabs.create wake"
   );
 
-  if (!freshTab || freshTab.id === undefined) {
-    // Preload unavailable: hold the image floor, then release the nap document
-    // through entry's replacement-only path so history stays clean. If even
-    // that is impossible, leave nap state truthful and report failure — the
-    // nap page's own fallback can still navigate it.
+  if (!wakePreloadIsInLil(freshTab, windowId)) {
+    // Preload missing or relocated: drop a misplaced tab so the original URL
+    // does not survive outside the lil, then hold the image floor and release
+    // the nap document through entry's replacement-only path. Never remove the
+    // nap tab on this path — that would empty and close the lil.
+    if (freshTab && freshTab.id !== undefined) {
+      await safe(chrome.tabs.remove(freshTab.id), "tabs.remove wake misplaced preload");
+    }
     const wait = wakeFloorRemainingMs(startedAt);
     if (wait > 0) await delay(wait);
     const released = await replaceTabDocument(napTab.id, originalUrl);

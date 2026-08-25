@@ -78,6 +78,11 @@ export function createChrome(options = {}) {
   const rejectScripting = options.rejectScripting || (() => false);
   // Fault injection: predicate over tabs.create options; true ⇒ the call rejects.
   const rejectTabCreate = options.rejectTabCreate || (() => false);
+  // Fault injection: mapper from tabs.create options to a different destination
+  // windowId. When it returns a live id, the created tab is placed there while
+  // the call still succeeds — Chromium can honour a popup windowId by putting
+  // the tab in another window (issue #33 / #21 F4).
+  const relocateTabCreate = options.relocateTabCreate || (() => undefined);
   // Fault injection: predicates over tabs.update(id, opts) / tabs.remove(id);
   // true ⇒ the call rejects.
   const rejectTabUpdate = options.rejectTabUpdate || (() => false);
@@ -415,7 +420,11 @@ export function createChrome(options = {}) {
       },
       async create(opts = {}) {
         if (rejectTabCreate(opts)) return Promise.reject(new Error("tabs.create failed"));
-        const windowId = opts.windowId ?? [...windows.keys()].at(-1);
+        const relocated = relocateTabCreate(opts);
+        const windowId =
+          relocated !== undefined && relocated !== null
+            ? relocated
+            : (opts.windowId ?? [...windows.keys()].at(-1));
         if (windowId === undefined) {
           const win = await createWindow({ url: opts.url, type: "normal", focused: !!opts.active });
           const tab = tabs.get(win.tabs[0].id);

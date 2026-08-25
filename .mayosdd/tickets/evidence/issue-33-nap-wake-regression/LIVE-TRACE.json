@@ -1,0 +1,51 @@
+{
+  "capturedAt": "2026-08-25T21:24:18.940Z",
+  "issue": 33,
+  "identities": {
+    "napSenderWindowId": "110440991",
+    "requestedPreloadWindowId": {
+      "value": "110440991",
+      "source": "nap-page window (sender)"
+    },
+    "returnedFreshTabWindowId": {
+      "value": "110440584",
+      "source": "inferred from new original-URL tab after wake"
+    },
+    "napTabRemoval": {
+      "observed": true,
+      "swRemoveEvents": [],
+      "lilWindowGone": true
+    },
+    "lilWindowRemoval": {
+      "observed": true,
+      "removedWindowIds": [
+        "110440991"
+      ],
+      "swWindowRemovedEvents": []
+    },
+    "registry": {
+      "source": "unobserved",
+      "sleepCaptureKeyFromUrl": "110440991-1787687942615"
+    },
+    "finalDestination": {
+      "windowId": "110440584",
+      "mode": "normal",
+      "tabIndex": 9,
+      "url": "https://www.hyperagent.com/docs/billing/pricing-changes"
+    },
+    "finalFocus": {
+      "windowId": "110440584",
+      "mode": "normal"
+    }
+  },
+  "counts": {
+    "nappingLilsBefore": 1,
+    "nappingLilsAfter": 0,
+    "originalUrlTabsBefore": 1,
+    "originalUrlTabsAfter": 2,
+    "heliumWindowsBefore": 2,
+    "heliumWindowsAfter": 1
+  },
+  "verdict": "fail",
+  "symptom": "wake closed the lil and created the original URL as a tab in another window"
+}
