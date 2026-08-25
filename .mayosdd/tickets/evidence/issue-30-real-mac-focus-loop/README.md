@@ -261,11 +261,14 @@ repetition carries `expected`, `actual`, `landedOnBrowser`, and `risenSiblings[]
 
     node scripts/focus-loop.mjs replay <trace.jsonl>
 
-Replay and the live run score through the same functions (`scoreRepetition` and
-`foldRun` in `scripts/focus-loop/verdict.mjs`), so an artifact can never
-disagree with the run that produced it. This is how #31 and #32 check a fix
-against the recorded symptom, and how a fresh worker consumes this evidence
-without replaying the original conversation.
+Replay and the live run score through the same functions (`scoreRepetition`,
+`teardownInconclusive`, and `foldRun` in `scripts/focus-loop/verdict.mjs`), so
+an artifact can never disagree with the run that produced it. A
+`repetition-verdict` carries the seam's `teardown` outcome; replay consumes it
+and reconstructs the same stop as the live run, so a failed close cannot fold
+green. This is how #31 and #32 check a fix against the recorded symptom, and
+how a fresh worker consumes this evidence without replaying the original
+conversation.
 
 ---
 

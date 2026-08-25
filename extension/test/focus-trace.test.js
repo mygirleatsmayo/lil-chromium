@@ -245,6 +245,7 @@ test("teardown can never close Primary, a stale id, or the same lil twice", asyn
   // A lil the run opened but the operator closed first is not closed again.
   await env.chrome.windows.remove(gone.id);
   await close(gone.id);
+  await close(gone.id); // forgotten after the terminal not-lil outcome
 
   assert.deepEqual(
     events(env, "harness-close").map((e) => e.detail.outcome),
@@ -254,7 +255,47 @@ test("teardown can never close Primary, a stale id, or the same lil twice", asyn
       "closed",
       "not-owned-by-this-run",
       "no-longer-a-registered-lil",
+      "not-owned-by-this-run",
     ]
+  );
+});
+
+test("a failed close keeps ownership so the same run can retry, without loosening refusals", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver(arm());
+  const primary = await openPrimaryWindow(env);
+  const lil = await openLil(env);
+
+  const remove = env.chrome.windows.remove.bind(env.chrome.windows);
+  let failNext = true;
+  env.chrome.windows.remove = async (id) => {
+    if (failNext) {
+      failNext = false;
+      throw new Error("windows.remove failed");
+    }
+    return remove(id);
+  };
+
+  const close = (windowId) => env.deliver({ type: "lil-focus-trace", op: "close-lil", runId: "run-1", windowId });
+
+  await close(lil.id);
+  assert.ok(env.windows().some((w) => w.id === lil.id), "the lil is still open after a failed close");
+  assert.equal(events(env, "harness-close").at(-1).detail.outcome, "close-failed");
+
+  await close(primary.id);
+  assert.ok(env.windows().some((w) => w.id === primary.id), "Primary stays closed-inert while ownership is retained");
+
+  await close(lil.id);
+  assert.equal(env.windows().some((w) => w.id === lil.id), false, "the sweep's retry closes the same lil");
+  assert.equal(events(env, "harness-close").at(-1).detail.outcome, "closed");
+
+  await close(lil.id);
+  await close(999_999);
+
+  assert.deepEqual(
+    events(env, "harness-close").map((e) => e.detail.outcome),
+    ["close-failed", "not-owned-by-this-run", "closed", "not-owned-by-this-run", "not-owned-by-this-run"]
   );
 });
 

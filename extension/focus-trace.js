@@ -128,14 +128,20 @@ function focusTraceCloseLil(msg) {
   focusTrace("harness-close", () => focusTraceRemoveOwnedLil(run, msg.windowId));
 }
 
-/** Close one lil this run owns, and say what happened to it. */
+/**
+ * Close one lil this run owns, and say what happened to it.
+ *
+ * Ownership is dropped only after a confirmed close or a terminal stale/not-lil
+ * outcome — a failed `windows.remove` keeps the id so the final sweep can retry.
+ */
 async function focusTraceRemoveOwnedLil(run, windowId) {
   if (!(await focusTraceIsLil(windowId))) {
+    run.ownedLils.delete(windowId);
     return { windowId, outcome: "no-longer-a-registered-lil" };
   }
-  run.ownedLils.delete(windowId);
   try {
     await chrome.windows.remove(windowId);
+    run.ownedLils.delete(windowId);
     return { windowId, outcome: "closed" };
   } catch (_) {
     return { windowId, outcome: "close-failed" };

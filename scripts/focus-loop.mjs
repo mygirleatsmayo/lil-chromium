@@ -40,7 +40,7 @@ import { activateApp, hostLogTail, openLilThroughProduct, probe, probeBinary } f
 import { exitCode, printSummary, summarize, writeArtifacts } from "./focus-loop/artifacts.mjs";
 import { gestures, needsOperator, selectScenarios } from "./focus-loop/scenarios.mjs";
 import { replay } from "./focus-loop/replay.mjs";
-import { browserLayout, displayOfApp, scoreRepetition } from "./focus-loop/verdict.mjs";
+import { browserLayout, displayOfApp, scoreRepetition, teardownInconclusive } from "./focus-loop/verdict.mjs";
 
 const REPO_ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const DEFAULT_OUT = path.join(REPO_ROOT, ".mayosdd/tickets/evidence/issue-30-real-mac-focus-loop");
@@ -298,12 +298,12 @@ class Run {
       ? { verdict: "inconclusive", reason: problem }
       : scoreRepetition({ scenario, probes, created: state.created, bundleId: this.opts.bundleId });
     const rep = { repetition: index + 1, ...result, createdWindowId: state.lilWindowId };
-    this.record("repetition-verdict", rep);
-    this.report(rep);
-
     // Teardown, not measurement: an opening repetition leaves a lil behind, and
     // the next repetition must start from the arrangement that was confirmed.
+    // Recorded on this verdict so replay can reconstruct a teardown stop.
     if (scenario.kind === "open") rep.teardown = await this.tearDown(state.lilWindowId);
+    this.record("repetition-verdict", rep);
+    this.report(rep);
     return rep;
   }
 
@@ -364,13 +364,11 @@ class Run {
         const rep = await this.runRepetition(scenario, i);
         repetitions.push(rep);
         // A repetition whose lil is still open has changed the arrangement the
-        // next one would be scored against, so the scenario stops here.
-        if (rep.teardown && rep.teardown !== "closed" && rep.teardown !== "nothing-to-close") {
-          repetitions.push({
-            repetition: i + 2,
-            verdict: "inconclusive",
-            reason: `teardown reported "${rep.teardown}", so the confirmed arrangement no longer holds`,
-          });
+        // next one would be scored against, so the scenario stops here. The
+        // teardown field on the recorded verdict is what replay consumes.
+        const extra = teardownInconclusive(rep);
+        if (extra) {
+          repetitions.push(extra);
           break;
         }
       }

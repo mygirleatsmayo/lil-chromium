@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { foldRun } from "./verdict.mjs";
 import { readTrace, replay, replayRecords } from "./replay.mjs";
 
 const FIXTURE = path.resolve(
@@ -64,4 +65,50 @@ test("a trace with no extension records still scores from the native reading", (
   assert.equal(by["open/cross-display/no-other-lil"].reproductions, 2);
   assert.equal(by["open/same-display/lil-on-primary-display"].verdict, "green");
   assert.equal(by["open/cross-display/no-other-lil"].repetitions[0].identifiedBy, "native");
+});
+
+test("a green open whose teardown failed replays inconclusive, matching the live run", () => {
+  const all = readTrace(FIXTURE);
+  const start = all.findIndex(
+    (r) => r.event === "repetition-begin" && r.detail && r.detail.scenario === "open/same-display/lil-on-primary-display"
+  );
+  const end = all.findIndex((r, i) => i > start && r.event === "repetition-begin");
+  const records = all.slice(start, end).map((r) =>
+    r.event === "harness-close" ? { ...r, detail: { ...r.detail, outcome: "close-failed" } } : r
+  );
+  records.push({
+    tag: "LILFOCUS",
+    source: "harness",
+    t: records[records.length - 1].t + 1,
+    event: "repetition-verdict",
+    detail: { repetition: 1, verdict: "green", teardown: "close-failed" },
+  });
+
+  const result = replayRecords(records, { bundleId: "net.imput.helium" });
+  const scenario = result.scenarios[0];
+  const live = foldRun([
+    {
+      scenario: "open/same-display/lil-on-primary-display",
+      kind: "open",
+      repetitions: [
+        { repetition: 1, verdict: "green", teardown: "close-failed" },
+        {
+          repetition: 2,
+          verdict: "inconclusive",
+          reason: 'teardown reported "close-failed", so the confirmed arrangement no longer holds',
+        },
+      ],
+    },
+  ]);
+
+  assert.equal(result.overall, "inconclusive", "must not replay the measured green as the whole run");
+  assert.deepEqual(result.counts, live.counts);
+  assert.equal(scenario.verdict, "inconclusive");
+  assert.equal(scenario.repetitions.length, 2);
+  assert.equal(scenario.repetitions[0].verdict, "green");
+  assert.equal(scenario.repetitions[1].verdict, "inconclusive");
+  assert.equal(
+    scenario.repetitions[1].reason,
+    'teardown reported "close-failed", so the confirmed arrangement no longer holds'
+  );
 });

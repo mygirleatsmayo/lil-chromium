@@ -233,6 +233,20 @@ export function scenarioVerdict(reps) {
 }
 
 /**
+ * An opening repetition whose lil is still open has broken the arrangement the
+ * next one would be scored against. `closed` and `nothing-to-close` keep going;
+ * any other teardown outcome stops the scenario with one recorded inconclusive.
+ */
+export function teardownInconclusive(rep) {
+  if (!rep || !rep.teardown || rep.teardown === "closed" || rep.teardown === "nothing-to-close") return null;
+  return {
+    repetition: rep.repetition + 1,
+    verdict: "inconclusive",
+    reason: `teardown reported "${rep.teardown}", so the confirmed arrangement no longer holds`,
+  };
+}
+
+/**
  * Score one repetition's collected probes and creations.
  *
  * The native reading alone decides the verdict, so the loop still scores a
