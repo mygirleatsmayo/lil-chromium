@@ -80,8 +80,11 @@ export function createChrome(options = {}) {
   const rejectTabCreate = options.rejectTabCreate || (() => false);
   // Fault injection: mapper from tabs.create options to a different destination
   // windowId. When it returns a live id, the created tab is placed there while
-  // the call still succeeds — Chromium can honour a popup windowId by putting
-  // the tab in another window (issue #33 / #21 F4).
+  // the call still succeeds — a harness model of a successful create whose tab
+  // is not in the requested lil (issue #33 / #21 F4).
+  // verified: Helium 0.15.7.1 red trace: napping lil 110440991 gone after
+  // wake; original URL appeared as a new tab in Primary 110440584. tabs.create
+  // request/return window ids were not observed inside the worker.
   const relocateTabCreate = options.relocateTabCreate || (() => undefined);
   // Fault injection: predicates over tabs.update(id, opts) / tabs.remove(id);
   // true ⇒ the call rejects.

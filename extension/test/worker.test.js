@@ -1639,6 +1639,54 @@ test("a relocated wake preload that cannot replace in place leaves the lil nappi
   assert.ok(env.captures().has(captureKey), "the capture stays referenced, not orphaned");
 });
 
+test("a relocated wake preload whose cleanup fails leaves the lil napping and does not succeed in place", async () => {
+  let primaryId = -1;
+  let lilId = -1;
+  let napTabId = -1;
+  let blockMisplacedCleanup = false;
+  const env = await boot({
+    clock: true,
+    relocateTabCreate: (opts) => (opts && opts.windowId === lilId ? primaryId : undefined),
+    rejectTabRemove: (id) => blockMisplacedCleanup && id !== napTabId,
+  });
+  await env.deliver(fixture("message-context"));
+  const primary = await env.chrome.windows.create({ url: "https://primary.example/", type: "normal" });
+  primaryId = primary.id;
+  const lil = await openTitledLil(env);
+  lilId = lil.id;
+  const originalUrl = lil.tabs[0].url;
+  await env.message({ action: "sleepThisLil" }, sender(lil));
+  const napping = env.windows().find((w) => w.id === lil.id);
+  napTabId = napping.tabs[0].id;
+  const captureKey = env.registry()[String(lil.id)].sleepCaptureKey;
+  blockMisplacedCleanup = true;
+
+  const reply = env.messageLater({ action: "wakeLil" }, sender(napping));
+  await env.flush();
+  await env.clock.advance(500);
+  await env.flush();
+  assert.equal((await reply).ok, false, "a leftover original-URL tab is not a completed wake");
+
+  const win = env.windows().find((w) => w.id === lil.id);
+  assert.ok(win, "the lil stays open");
+  assert.equal(win.tabs.length, 1);
+  assert.equal(win.tabs[0].id, napTabId);
+  assert.match(win.tabs[0].url, NAP_PAGE);
+  const primaryAfter = env.windows().find((w) => w.id === primaryId);
+  assert.equal(
+    primaryAfter.tabs.filter((t) => t.url === originalUrl).length,
+    1,
+    "the unresolved preload remains in Primary"
+  );
+  const entry = env.registry()[String(lil.id)];
+  assert.ok(entry, "the lil stays registered");
+  assert.equal(entry.slept, true);
+  assert.equal(entry.sleepCaptureKey, captureKey);
+  assert.equal(entry.originalUrl, originalUrl);
+  assert.equal(entry.originalTitle, ORIGINAL_PAGE_TITLE);
+  assert.ok(env.captures().has(captureKey), "the capture stays referenced, not orphaned");
+});
+
 test("when wake cannot navigate at all, it reports failure and leaves nap state truthful", async () => {
   let scriptingBlocked = false;
   const env = await boot({

@@ -107,3 +107,50 @@ node .mayosdd/tickets/evidence/issue-33-nap-wake-regression/live-wake-trace.mjs 
 4. Click the napping lil once, then Enter.
 
 Until that reload, the stored live artifact is the **red** current-trial run, not a green proof.
+
+## First-review remediation (S1, P1)
+
+Ledger: `.mayosdd/reviews/issue-33/findings-ledger.md`. P2/P3 remain HITL verification obligations; live Helium was not loaded or rerun.
+
+### P1 red
+
+```
+node --test --test-name-pattern 'a relocated wake preload whose cleanup fails' extension/test/worker.test.js
+```
+
+Failed at `assert.equal((await reply).ok, false, "a leftover original-URL tab is not a completed wake")` — production reported `ok: true` after `safe()` swallowed `tabs.remove` of the misplaced preload and continued into a successful in-place replacement while the original URL remained in Primary.
+
+### P1 green
+
+Same command: pass 1, fail 0.
+
+`wakeLil` no longer swallows a failed drop of a misplaced preload. If that `tabs.remove` throws, wake returns `false` without `replaceTabDocument`, `clearNapState`, or nap-tab removal. The lil stays napping; registry/capture stay truthful; the unresolved original-URL tab remains in Primary.
+
+### S1
+
+`verified:` markers on `wakePreloadIsInLil` and `relocateTabCreate` state only the red Helium outcome (lil `110440991` gone; original URL as a new tab in Primary `110440584`; windows 2→1, original-URL tabs 1→2). They do not claim `tabs.create` request/return ids or registry, which the stored trace did not capture.
+
+### Focused wake family after remediation
+
+```
+node --test --test-name-pattern 'wake |napping lil leaves|inactive same-window wake|mid-swap redirect|cannot tell whether a nap|redirect on the fresh document mid-swap|back/forward history holds no stale|relocated wake preload' extension/test/worker.test.js
+```
+
+18 tests, pass 18, fail 0.
+
+### `pnpm test`
+
+```
+ℹ tests 143
+ℹ pass 143
+ℹ fail 0
+```
+
+`git diff --check`: clean.
+
+### Changed files (this round)
+
+- `extension/background.js` — failed misplaced-preload `tabs.remove` aborts wake; `verified:` on `wakePreloadIsInLil`
+- `extension/test/chrome.js` — `verified:` on `relocateTabCreate` without claiming uncaptured `tabs.create` ids
+- `extension/test/worker.test.js` — relocated-preload cleanup-failure case
+- this report — remediation red/green commands and results

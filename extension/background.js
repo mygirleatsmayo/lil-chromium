@@ -1056,8 +1056,8 @@ chrome.tabs.onCreated.addListener(async (tab) => {
 // click → wakeLil → the original URL loads in an inactive tab of the same lil
 // window behind the nap image; after the 180 ms floor (readiness-gated, 500 ms
 // cap) the fresh tab takes over, the nap tab is removed, and the capture and
-// nap registry fields are cleared. A preload Chromium returns in another
-// window is dropped; wake then replaces in place so the lil is not emptied.
+// nap registry fields are cleared. A preload whose windowId is not the lil
+// is dropped; wake then replaces in place so the lil is not emptied.
 // ===========================================================================
 
 const IDB_NAME = "lil-sleep";
@@ -1359,10 +1359,14 @@ async function clearNapState(windowId, originalUrl, captureKey) {
   if (captureKey) await safe(idbDelete(captureKey), "idbDelete wake");
 }
 
-// A wake preload is usable only when Chromium actually placed it in the
-// napping lil. A missing id, or a tab returned in another window, is not a
-// same-lil preload — activating it and removing the nap tab would relocate
-// the URL and close the lil (issue #33 / #21 F4).
+// A wake preload is usable only when it actually sits in the napping lil.
+// A missing id, or a tab whose windowId is not the lil, is not a same-lil
+// preload — activating it and removing the nap tab would relocate the URL
+// and close the lil (issue #33 / #21 F4).
+// verified: Helium 0.15.7.1, 2026-08-25: waking the napping lil closed
+// window 110440991 and left the original URL as a new tab in Primary
+// 110440584 (windows 2→1, original-URL tabs 1→2). tabs.create request/
+// return ids and registry were not captured in the worker.
 function wakePreloadIsInLil(tab, windowId) {
   return !!(tab && tab.id !== undefined && tab.windowId === windowId);
 }
@@ -1396,9 +1400,16 @@ async function wakeLil(windowId) {
     // Preload missing or relocated: drop a misplaced tab so the original URL
     // does not survive outside the lil, then hold the image floor and release
     // the nap document through entry's replacement-only path. Never remove the
-    // nap tab on this path — that would empty and close the lil.
+    // nap tab on this path — that would empty and close the lil. If the drop
+    // fails, the original URL still sits outside the lil: do not replace in
+    // place, clear nap state, or report success.
     if (freshTab && freshTab.id !== undefined) {
-      await safe(chrome.tabs.remove(freshTab.id), "tabs.remove wake misplaced preload");
+      try {
+        await chrome.tabs.remove(freshTab.id);
+      } catch (err) {
+        log("wakeLil: misplaced preload cleanup failed for", windowId, err && err.message ? err.message : err);
+        return false;
+      }
     }
     const wait = wakeFloorRemainingMs(startedAt);
     if (wait > 0) await delay(wait);
