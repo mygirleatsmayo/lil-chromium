@@ -26,3 +26,7 @@ Initial reviewed point: `e624c3d`
 ## Manager review note
 
 The required first `surfx output --diff` was truncated because the diagnostic change is large. A second restricted inspection of code structure and sanitized trace fields was necessary before acceptance. The retained trace contains app/window identity and geometry needed by the z-order oracle, but no window titles, URLs, or document content.
+
+## Settled remediation interpretation
+
+P4 applies to every close gesture performed while a measurement is in flight, not only `close/unfocused-red-button`: returning to a terminal or pressing Enter can overwrite the observed frontmost application in all three close scenarios. Arrangement setup may still require Enter because no measurement is then in flight.
