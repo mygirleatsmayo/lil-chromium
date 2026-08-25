@@ -11,3 +11,10 @@ Initial reviewed point: `2f737e3`
 ## Manager review note
 
 The required first `surfx output --diff` was truncated by raw snapshot content. A second, restricted inspection was necessary to finish acceptance review. Before commit, unrelated browsing rows were removed, the durable trace was sanitized, and the trace command was changed not to embed raw before/after snapshots.
+
+## Review status
+
+- Remediation review: S1 resolved; P1 resolved; no new defects.
+- Final Standards review: clean; no new findings.
+- Final Spec review: implemented behavior clean; no new findings or scope creep.
+- Closure remains gated by P2/P3: one green real-Helium run using the service-worker probe and a sanitized durable artifact.
