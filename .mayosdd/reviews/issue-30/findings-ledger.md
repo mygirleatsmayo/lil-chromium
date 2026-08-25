@@ -41,3 +41,9 @@ S1–S3, S5, S7–S9, P3–P4, and M1 resolved. No regression of S4/S6; P1/P2 re
 ## Second remediation review
 
 M2 and M3 resolved in `d02925e`. No new defects. P1/P2 remain live verification obligations, not code-review failures.
+
+## Final full review
+
+- Standards: clean; no new S10+ findings.
+- Spec: clean; no new P5+ findings.
+- P1/P2 remain the only open obligations and require the integrated live-Mac run before issue #30 can close.
