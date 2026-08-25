@@ -8,7 +8,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { closeVerdict, matchProbeWindow, openVerdict, risenSiblings, scenarioVerdict } from "./verdict.mjs";
+import {
+  closeVerdict,
+  foldRun,
+  matchProbeWindow,
+  openVerdict,
+  risenSiblings,
+  scenarioVerdict,
+} from "./verdict.mjs";
 
 const HELIUM = "net.imput.helium";
 
@@ -113,6 +120,47 @@ test("opening: the created lil is identified by its bounds, not by being newest"
   assert.equal(result.lil.number, NEW_LIL.number);
 });
 
+test("opening: a lil that lands on another display than the source app is red", () => {
+  // The reported false green: nothing overtook anything, but the lil the user
+  // asked for from Mail (display 1) appeared on the Primary window's display.
+  const result = openVerdict({
+    before: snap("before", [{ ...MAIL, display: 1 }, PRIMARY], front("com.apple.mail")),
+    after: snap("after", [NEW_LIL, { ...MAIL, display: 1 }, PRIMARY], front(HELIUM)),
+    bundleId: HELIUM,
+    createdBounds: { left: 500, top: 400, width: 1100, height: 800 },
+  });
+
+  assert.equal(result.verdict, "red");
+  assert.equal(result.onSourceDisplay, false);
+  assert.deepEqual(result.risenSiblings, [], "the display fault is detected independently of any rise");
+  assert.match(result.reason, /display 0.*display 1/);
+});
+
+test("opening: a lil that is not left as the focused front window is red", () => {
+  const result = openVerdict({
+    before: snap("before", [MAIL, PRIMARY], front("com.apple.mail")),
+    // The lil exists, on the right display, but Mail is still in front of it.
+    after: snap("after", [MAIL, NEW_LIL, PRIMARY], front("com.apple.mail")),
+    bundleId: HELIUM,
+    createdBounds: { left: 500, top: 400, width: 1100, height: 800 },
+  });
+
+  assert.equal(result.verdict, "red");
+  assert.equal(result.lilIsFrontWindow, false);
+  assert.match(result.reason, /not the focused front window/);
+});
+
+test("opening: an unreadable source display is inconclusive, never green", () => {
+  const result = openVerdict({
+    before: snap("before", [PRIMARY], undefined),
+    after: snap("after", [NEW_LIL, PRIMARY], front(HELIUM)),
+    bundleId: HELIUM,
+    createdBounds: { left: 500, top: 400, width: 1100, height: 800 },
+  });
+
+  assert.equal(result.verdict, "inconclusive");
+});
+
 test("closing: returning to the app that was in front is green", () => {
   const result = closeVerdict({
     before: snap("before", [TERMINAL, PRIMARY], front("com.cmuxterm.app")),
@@ -181,4 +229,24 @@ test("intermittent behaviour reports a reproduction rate, and a gap never reads 
   assert.equal(scenarioVerdict([{ verdict: "green" }, { verdict: "green" }]).verdict, "green");
   assert.equal(scenarioVerdict([{ verdict: "green" }, { verdict: "inconclusive" }]).verdict, "inconclusive");
   assert.equal(scenarioVerdict([]).verdict, "inconclusive");
+});
+
+test("one fold turns repetitions into the whole-run summary, for a live run and a replay alike", () => {
+  const folded = foldRun([
+    { scenario: "close/immediate", kind: "close", repetitions: [{ verdict: "red" }, { verdict: "red" }] },
+    { scenario: "open/same-display/no-other-lil", kind: "open", repetitions: [{ verdict: "green" }] },
+    { scenario: "open/cross-display/no-other-lil", kind: "open", repetitions: [] },
+  ]);
+
+  assert.deepEqual(folded.counts, { red: 1, green: 1, inconclusive: 1 });
+  assert.equal(folded.overall, "red");
+  assert.deepEqual(
+    folded.scenarios.map((s) => [s.scenario, s.kind, s.verdict, s.reproductions, s.rate]),
+    [
+      ["close/immediate", "close", "red", 2, 1],
+      ["open/same-display/no-other-lil", "open", "green", 0, 0],
+      ["open/cross-display/no-other-lil", "open", "inconclusive", 0, 0],
+    ]
+  );
+  assert.equal(folded.scenarios[0].repetitions.length, 2, "the repetitions travel with their scenario");
 });

@@ -151,6 +151,12 @@ final class Relay {
             // extension's reconnect get-context re-reads config.json fresh.
             forwardToExtension(line, kind: "config-update")
 
+        case MessageType.lilFocusTrace.rawValue:
+            // LILFOCUS (issue #30): the private diagnostic control. The host is
+            // the only way into the extension, so a line it cannot vouch for is
+            // dropped here rather than forwarded.
+            FocusTrace.forwardControl(line, forward: { forwardToExtension($0, kind: "lil-focus-trace") })
+
         default:
             // Unknown from socket -> forward to extension verbatim.
             forwardToExtension(line, kind: "unknown(\(env.type))")

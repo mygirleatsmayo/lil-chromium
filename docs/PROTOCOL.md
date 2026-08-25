@@ -140,6 +140,16 @@ All JSON with `type`. `id` for request/response matching.
 
 - `{"type":"ping","id"}` → `{"type":"pong","id","extensionConnected":bool,"browser":slug}` (browser field new in v2).
 
+### Private diagnostic control (issue #30, not product behavior)
+
+- `{"type":"lil-focus-trace","op":"arm"|"disarm"|"snapshot"|"close-lil", …}` — LILFOCUS, the diagnostic seam of the real-Mac focus loop (`scripts/focus-loop.mjs`). Written to a relay socket by that harness only; **never sent by the app or the host**. One explicitly tagged operation per message, carrying only its own payload:
+  - `arm` — `{"runId":string,"port":int,"ttlMs":int?}`. The extension **derives** its collector endpoint as `http://127.0.0.1:<port>/t/<runId>`; no endpoint is ever carried on the wire, so a control line cannot redirect the stream off the loopback interface or out of the run's own path. `runId` is `[A-Za-z0-9._-]{1,64}` (it is a URL path segment). TTL defaults to 15 minutes and is capped at 30, so a forgotten run disarms itself.
+  - `disarm` — no payload. Stops the stream at once.
+  - `snapshot` — `{"label":string}`. Emits one window reading under that label.
+  - `close-lil` — `{"runId":string,"windowId":int}`. Teardown between bounded repetitions, never a measurement. The extension closes the window **only** when the run id matches the armed run, the window is one that same armed run opened, and it is still a registered lil; Primary, a foreign lil, and a stale id are inert and are reported back as such. This is the seam's only mutating operation.
+
+  The host validates the line (`mac/Sources/LilShared/FocusTraceControl.swift`) and forwards only operations this contract defines, logging every decision under `[LILFOCUS]`; anything else is dropped, not forwarded. The extension (`extension/focus-trace.js`) ignores every operation while disarmed, is disarmed again by any service-worker restart, and never reads or writes this state from a page or from storage. Removing the seam entirely means deleting the sites `grep -rn LILFOCUS extension mac scripts docs` lists. Cleanup check: `node scripts/focus-loop.mjs cleanup`.
+
 ### Queueing
 
 As v1: host queues `open` (max 20 FIFO) while the port is down; `history-query` gets an immediate empty `history-result`.

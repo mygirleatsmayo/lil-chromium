@@ -5,12 +5,20 @@
 //   { do: "activate", app: "source"|"switch" }   harness activates that app
 //   { do: "open" }                                harness opens a lil through
 //                                                 the real default-browser path
-//   { do: "ask", prompt }                         the operator's gesture
+//   { do: "await", prompt, until }                the operator's gesture, which
+//                                                 the run watches the seam for
 // and every step ends with a probe reading under `probe`.
 //
-// Only gestures the harness genuinely cannot perform are `ask` steps: macOS
+// Only gestures the harness genuinely cannot perform are `await` steps: macOS
 // gives no permission-free way to press ⌘W or click a window's close control,
 // and this tooling deliberately claims no Accessibility permission.
+//
+// An `await` step asks for the gesture and nothing else. It never asks for a
+// keystroke to confirm, because pressing Enter in a terminal *is* an
+// application activation, and it would land between the gesture under test and
+// the reading that scores it — turning a correct restore into a false red.
+// `until` names the seam event that says the gesture happened:
+// "lil-closed" (the lil's window went away) or "lil-focused" (it came forward).
 
 /** Arrangements the operator sets up once per scenario, then the harness verifies. */
 const ARRANGEMENTS = {
@@ -74,7 +82,12 @@ const CLOSE_SCENARIOS = [
     steps: [
       { do: "activate", app: "source", probe: "before" },
       { do: "open", probe: "afterOpen" },
-      { do: "ask", prompt: "Close the focused lil (⌘W, or click its red close control).", probe: "afterClose" },
+      {
+        do: "await",
+        prompt: "Close the focused lil (⌘W, or click its red close control).",
+        until: "lil-closed",
+        probe: "afterClose",
+      },
     ],
   },
   {
@@ -88,8 +101,18 @@ const CLOSE_SCENARIOS = [
       { do: "activate", app: "source", probe: "before" },
       { do: "open", probe: "afterOpen" },
       { do: "activate", app: "switch", probe: "afterSwitch" },
-      { do: "ask", prompt: "Click the lil once to refocus it. Do not close it yet.", probe: "afterRefocus" },
-      { do: "ask", prompt: "Now close the focused lil (⌘W, or click its red close control).", probe: "afterClose" },
+      {
+        do: "await",
+        prompt: "Click the lil once to refocus it. Do not close it yet.",
+        until: "lil-focused",
+        probe: "afterRefocus",
+      },
+      {
+        do: "await",
+        prompt: "Now close the focused lil (⌘W, or click its red close control).",
+        until: "lil-closed",
+        probe: "afterClose",
+      },
     ],
   },
   {
@@ -104,10 +127,12 @@ const CLOSE_SCENARIOS = [
       { do: "open", probe: "afterOpen" },
       { do: "activate", app: "switch", probe: "afterSwitch" },
       {
-        do: "ask",
+        // One gesture, and nothing after it: the run notices the lil is gone.
+        do: "await",
         prompt:
           "WITHOUT focusing the lil first, click ONLY its red close control " +
-          "(one click on the button itself), then return to what you were doing.",
+          "(one click on the button itself). That is the whole gesture.",
+        until: "lil-closed",
         probe: "afterClose",
       },
     ],
@@ -122,7 +147,12 @@ export function selectScenarios(filter) {
   return SCENARIOS.filter((s) => patterns.some((p) => s.id === p || s.id.startsWith(p)));
 }
 
-/** True when the scenario needs a person at the keyboard. */
+/** The gestures a person has to make for this scenario, in order. */
+export function gestures(scenario) {
+  return scenario.steps.filter((step) => step.do === "await");
+}
+
+/** True when the scenario needs a person at the Mac. */
 export function needsOperator(scenario) {
-  return scenario.steps.some((step) => step.do === "ask");
+  return gestures(scenario).length > 0;
 }

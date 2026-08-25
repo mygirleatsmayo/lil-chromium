@@ -19,7 +19,7 @@ struct FocusProbeTests {
 
     /// Menus, status items, and window shades sit on non-zero layers. Letting
     /// them into the snapshot would make every stacking comparison noise.
-    @Test func onlyOrdinaryWindowsEnterTheSnapshot() {
+    @Test(.bug(id: 30)) func onlyOrdinaryWindowsEnterTheSnapshot() {
         let snapshot = FocusProbe.snapshot(
             windows: [
                 RawProbeWindow(number: 1, pid: 10, owner: "Window Server", layer: 2_147_483_630, bounds: rect(0, 0)),
@@ -39,7 +39,7 @@ struct FocusProbeTests {
 
     /// `order` is the front-to-back rank the whole verdict rests on, and it is
     /// numbered after filtering — otherwise a hidden menu layer would offset it.
-    @Test func orderIsFrontToBackAfterFiltering() {
+    @Test(.bug(id: 30)) func orderIsFrontToBackAfterFiltering() {
         let snapshot = FocusProbe.snapshot(
             windows: [
                 RawProbeWindow(number: 9, pid: 1, owner: "Window Server", layer: 25, bounds: rect(0, 0)),
@@ -59,7 +59,7 @@ struct FocusProbeTests {
 
     /// Cross-display scenarios are only distinguishable if a window is placed on
     /// the display holding its center, not the one holding its origin.
-    @Test func windowsLandOnTheDisplayHoldingTheirCenter() {
+    @Test(.bug(id: 30)) func windowsLandOnTheDisplayHoldingTheirCenter() {
         let snapshot = FocusProbe.snapshot(
             windows: [
                 // Straddles the seam, but its center is on display 1.
@@ -81,7 +81,7 @@ struct FocusProbeTests {
     /// The harness separates Helium's windows from every other app's by bundle
     /// id, so the pid -> bundle mapping has to survive into the snapshot — and a
     /// process with no bundle id must not invent one.
-    @Test func bundleIdentifiersAreCarriedPerProcess() {
+    @Test(.bug(id: 30)) func bundleIdentifiersAreCarriedPerProcess() {
         let snapshot = FocusProbe.snapshot(
             windows: [
                 RawProbeWindow(number: 1, pid: 100, owner: "Helium", layer: 0, bounds: rect(0, 0)),

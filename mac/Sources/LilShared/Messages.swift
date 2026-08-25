@@ -25,6 +25,9 @@ public enum MessageType: String, Codable, Sendable {
     case openSettings = "open-settings"
     // v4 (issue #12): app -> every relay -> extension, hot-applied Settings write.
     case configUpdate = "config-update"
+    // LILFOCUS (issue #30): private diagnostic control, harness -> relay ->
+    // extension. Never sent by the app or the host; see FocusTraceControl.swift.
+    case lilFocusTrace = "lil-focus-trace"
 }
 
 /// The exact context that was active before one lil took focus. Browser window

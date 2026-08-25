@@ -7,11 +7,18 @@
 // focus on close. None of that is observable from outside the browser, so this
 // module streams it to a local collector that `scripts/focus-loop.mjs` runs.
 //
-// Discipline, so this can stay in the tree without becoming product behavior:
-//   - Inert until armed. Arming arrives over the relay socket (the host already
-//     forwards unknown socket lines to the extension verbatim), never from a
-//     page, and never from storage — a worker restart disarms it.
+// It is a private diagnostic control, documented as such in docs/PROTOCOL.md and
+// validated by the host before it ever reaches here. Discipline, so it can stay
+// in the tree without becoming product behavior:
+//
+//   - Inert until armed. Arming arrives over the relay socket, never from a page
+//     and never from storage — a worker restart disarms it.
 //   - Every arm carries a TTL, so a forgotten run stops tracing on its own.
+//   - The collector is *derived*, never supplied: loopback, on the run's port,
+//     under the run's own path. A message cannot redirect the stream.
+//   - The one mutating operation can close only a lil this armed run itself
+//     opened and that is still registered — never Primary, never a foreign lil,
+//     never a stale id.
 //   - No awaits on the traced code path and every failure swallowed, so an
 //     armed worker behaves exactly like a disarmed one.
 //
@@ -21,8 +28,11 @@ const FOCUS_TRACE_TAG = "LILFOCUS";
 const FOCUS_TRACE_TYPE = "lil-focus-trace"; // control message type over the relay
 const FOCUS_TRACE_MAX_TTL_MS = 30 * 60 * 1000;
 const FOCUS_TRACE_DEFAULT_TTL_MS = 15 * 60 * 1000;
+// A run id is a path segment of the derived collector URL, so it is restricted
+// to characters that cannot leave that segment.
+const FOCUS_TRACE_RUN_ID = /^[A-Za-z0-9._-]{1,64}$/;
 
-// null while disarmed. { runId, endpoint, expiresAt, seq }
+// null while disarmed. { runId, endpoint, expiresAt, seq, ownedLils }
 let focusTraceRun = null;
 // Serializes posts so the collector receives events in emission order.
 let focusTraceTail = Promise.resolve();
@@ -46,48 +56,99 @@ function focusTraceActive() {
 /**
  * Consume a `lil-focus-trace` control message. Returns true when the message
  * belonged to this seam, so the worker can keep treating everything else as
- * unknown.
+ * unknown. One tagged `op` per message, each with only its own payload:
  *
- * Arm:      {type, runId, endpoint, ttlMs?}
- * Disarm:   {type, enabled: false}
- * Snapshot: {type, snapshot: "<label>"} — emit one window reading on demand.
+ *   {op:"arm",       runId, port, ttlMs?}
+ *   {op:"disarm"}
+ *   {op:"snapshot",  label}
+ *   {op:"close-lil", runId, windowId}
+ *
+ * Anything else — an unknown op, a malformed payload — is consumed and ignored.
  */
 function focusTraceControl(msg) {
   if (!msg || msg.type !== FOCUS_TRACE_TYPE) return false;
 
-  if (msg.enabled === false) {
-    focusTrace("trace-disarmed", {});
-    focusTraceRun = null;
-    return true;
-  }
-
-  if (typeof msg.endpoint === "string" && msg.endpoint) {
-    const ttl = Math.min(
-      Number.isFinite(msg.ttlMs) && msg.ttlMs > 0 ? msg.ttlMs : FOCUS_TRACE_DEFAULT_TTL_MS,
-      FOCUS_TRACE_MAX_TTL_MS
-    );
-    focusTraceRun = {
-      runId: String(msg.runId || "unknown"),
-      endpoint: msg.endpoint,
-      expiresAt: Date.now() + ttl,
-      seq: 0,
-    };
-    focusTrace("trace-armed", { ttlMs: ttl, worker: "background.js" });
-  }
-
-  if (typeof msg.snapshot === "string") {
-    focusTrace("windows", () => focusTraceWindows({ label: msg.snapshot }));
-  }
-
-  // Teardown between bounded repetitions, never a measurement: the harness
-  // names the exact window it watched being created, so a run can repeat an
-  // opening scenario without closing anything the operator opened. Only an
-  // armed run may ask.
-  if (Number.isInteger(msg.closeWindow) && focusTraceActive()) {
-    focusTrace("harness-close", { windowId: msg.closeWindow });
-    Promise.resolve(chrome.windows.remove(msg.closeWindow)).catch(() => {});
+  switch (msg.op) {
+    case "arm":
+      focusTraceArm(msg);
+      break;
+    case "disarm":
+      focusTrace("trace-disarmed", {});
+      focusTraceRun = null;
+      break;
+    case "snapshot":
+      if (typeof msg.label === "string" && msg.label) {
+        focusTrace("windows", () => focusTraceWindows({ label: msg.label }));
+      }
+      break;
+    case "close-lil":
+      focusTraceCloseLil(msg);
+      break;
   }
   return true;
+}
+
+/** Begin a run, or leave the seam exactly as it was if the arm is untrustworthy. */
+function focusTraceArm(msg) {
+  const runId = typeof msg.runId === "string" && FOCUS_TRACE_RUN_ID.test(msg.runId) ? msg.runId : null;
+  const port = Number.isInteger(msg.port) && msg.port > 0 && msg.port <= 65535 ? msg.port : null;
+  if (!runId || !port) return;
+
+  const ttl = Math.min(
+    Number.isFinite(msg.ttlMs) && msg.ttlMs > 0 ? msg.ttlMs : FOCUS_TRACE_DEFAULT_TTL_MS,
+    FOCUS_TRACE_MAX_TTL_MS
+  );
+  focusTraceRun = {
+    runId,
+    // Derived, never supplied: the stream can only reach this machine, on the
+    // port the run opened, under the run's own path.
+    endpoint: `http://127.0.0.1:${port}/t/${runId}`,
+    expiresAt: Date.now() + ttl,
+    seq: 0,
+    ownedLils: new Set(),
+  };
+  focusTrace("trace-armed", { ttlMs: ttl, worker: "background.js" });
+}
+
+/**
+ * Teardown between bounded repetitions, never a measurement: an opening
+ * scenario must be able to repeat from the arrangement it confirmed. The armed
+ * run may close only a lil it opened itself and that is still a registered lil,
+ * so a wrong, foreign, or stale id — Primary included — is inert and says so.
+ */
+function focusTraceCloseLil(msg) {
+  if (!focusTraceActive()) return;
+  const run = focusTraceRun;
+  if (msg.runId !== run.runId || !Number.isInteger(msg.windowId)) return;
+
+  if (!run.ownedLils.has(msg.windowId)) {
+    focusTrace("harness-close", { windowId: msg.windowId, outcome: "not-owned-by-this-run" });
+    return;
+  }
+  focusTrace("harness-close", () => focusTraceRemoveOwnedLil(run, msg.windowId));
+}
+
+/** Close one lil this run owns, and say what happened to it. */
+async function focusTraceRemoveOwnedLil(run, windowId) {
+  if (!(await focusTraceIsLil(windowId))) {
+    return { windowId, outcome: "no-longer-a-registered-lil" };
+  }
+  run.ownedLils.delete(windowId);
+  try {
+    await chrome.windows.remove(windowId);
+    return { windowId, outcome: "closed" };
+  } catch (_) {
+    return { windowId, outcome: "close-failed" };
+  }
+}
+
+/**
+ * Trace a lil this run caused to exist, and remember it as the only window the
+ * run is allowed to tear down again.
+ */
+function focusTraceLilCreated(windowId, detail) {
+  if (focusTraceActive() && Number.isInteger(windowId)) focusTraceRun.ownedLils.add(windowId);
+  focusTrace("lil-created", detail);
 }
 
 /**

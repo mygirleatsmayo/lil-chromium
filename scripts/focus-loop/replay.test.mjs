@@ -30,9 +30,16 @@ test("a trace carrying both v0.4 symptoms replays red, scenario by scenario", ()
 
   // Symptom 2: opening raises an unrelated sibling — intermittently, so the
   // reproduction rate is what a downstream fix has to move.
-  assert.equal(by["open/cross-display/no-other-lil"].verdict, "red");
-  assert.equal(by["open/cross-display/no-other-lil"].reproductions, 1);
-  assert.equal(by["open/cross-display/no-other-lil"].repetitions.length, 3);
+  const crossDisplay = by["open/cross-display/no-other-lil"];
+  assert.equal(crossDisplay.verdict, "red");
+  assert.equal(crossDisplay.reproductions, 2);
+  assert.equal(crossDisplay.repetitions.length, 3);
+  assert.match(crossDisplay.repetitions[0].reason, /came forward with the lil/);
+  // …including the arrangement that used to read green: nothing overtook
+  // anything, but the lil landed on the Primary window's display, not Mail's.
+  assert.equal(crossDisplay.repetitions[1].verdict, "green");
+  assert.deepEqual(crossDisplay.repetitions[2].risenSiblings, []);
+  assert.match(crossDisplay.repetitions[2].reason, /display 0 instead of the source application's display 1/);
 
   // …and correct behaviour still reads green, so the loop is not stuck red.
   assert.equal(by["open/same-display/lil-on-primary-display"].verdict, "green");
@@ -54,7 +61,7 @@ test("a trace with no extension records still scores from the native reading", (
   assert.equal(result.overall, "red");
   assert.equal(by["close/immediate"].verdict, "red");
   assert.equal(by["open/cross-display/no-other-lil"].verdict, "red");
-  assert.equal(by["open/cross-display/no-other-lil"].reproductions, 1);
+  assert.equal(by["open/cross-display/no-other-lil"].reproductions, 2);
   assert.equal(by["open/same-display/lil-on-primary-display"].verdict, "green");
   assert.equal(by["open/cross-display/no-other-lil"].repetitions[0].identifiedBy, "native");
 });

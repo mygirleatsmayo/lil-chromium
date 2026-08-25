@@ -288,6 +288,58 @@ struct MessageTests {
         #expect(envelope.id == "ctx-1")
     }
 
+    // MARK: - lil-focus-trace (private diagnostic control, issue #30)
+
+    /// Every operation the diagnostic control defines decodes to exactly the
+    /// payload docs/PROTOCOL.md gives it, and validates.
+    @Test("the diagnostic control's four operations decode and validate", .bug(id: 30))
+    func focusTraceControlOperationsDecode() throws {
+        let arm = try LilCodec.decodeLine(
+            FocusTraceControlMessage.self,
+            from: Data(#"{"type":"lil-focus-trace","op":"arm","runId":"2026-08-25T21-40-45-475Z","port":8931,"ttlMs":600000}"#.utf8)
+        )
+        #expect(arm.operation == .arm(runId: "2026-08-25T21-40-45-475Z", port: 8931, ttlMs: 600_000))
+
+        let disarm = try LilCodec.decodeLine(
+            FocusTraceControlMessage.self, from: Data(#"{"type":"lil-focus-trace","op":"disarm"}"#.utf8)
+        )
+        #expect(disarm.operation == .disarm)
+
+        let snapshot = try LilCodec.decodeLine(
+            FocusTraceControlMessage.self, from: Data(#"{"type":"lil-focus-trace","op":"snapshot","label":"before"}"#.utf8)
+        )
+        #expect(snapshot.operation == .snapshot(label: "before"))
+
+        let close = try LilCodec.decodeLine(
+            FocusTraceControlMessage.self,
+            from: Data(#"{"type":"lil-focus-trace","op":"close-lil","runId":"run-1","windowId":901}"#.utf8)
+        )
+        #expect(close.operation == .closeLil(runId: "run-1", windowId: 901))
+    }
+
+    /// The host is the only way into the extension, so a control line it cannot
+    /// recognise is dropped rather than forwarded. Each of these is a way the
+    /// seam could otherwise be pointed somewhere it must never reach.
+    @Test(
+        "a control line the host cannot vouch for never reaches the extension",
+        .bug(id: 30),
+        arguments: [
+            #"{"type":"lil-focus-trace"}"#,
+            #"{"type":"lil-focus-trace","op":"detonate"}"#,
+            #"{"type":"lil-focus-trace","op":"arm","runId":"run-1"}"#,
+            #"{"type":"lil-focus-trace","op":"arm","runId":"run-1","port":0}"#,
+            #"{"type":"lil-focus-trace","op":"arm","runId":"run-1","port":70000}"#,
+            #"{"type":"lil-focus-trace","op":"arm","runId":"../../etc","port":8931}"#,
+            #"{"type":"lil-focus-trace","op":"snapshot"}"#,
+            #"{"type":"lil-focus-trace","op":"close-lil","runId":"run-1"}"#,
+            #"{"type":"lil-focus-trace","op":"close-lil","windowId":901}"#,
+        ]
+    )
+    func unvouchableControlLinesAreDropped(_ line: String) throws {
+        let msg = try LilCodec.decodeLine(FocusTraceControlMessage.self, from: Data(line.utf8))
+        #expect(msg.operation == nil)
+    }
+
     // MARK: - Line framing
 
     /// The app <-> host transport is one compact JSON object per line.

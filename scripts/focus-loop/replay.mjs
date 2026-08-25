@@ -5,12 +5,15 @@
 // single gesture. That is what makes the loop fast, deterministic, and
 // agent-runnable — and what lets #31 and #32 check a fix against the recorded
 // symptom before booking anyone's Mac.
+//
+// This module owns only the trace format: reading records back and grouping
+// them into repetitions. Every judgement is `verdict.mjs`.
 
 import fs from "node:fs";
 import path from "node:path";
 
 import { SCENARIOS } from "./scenarios.mjs";
-import { closeVerdict, openVerdict, scenarioVerdict } from "./verdict.mjs";
+import { foldRun, scoreRepetition } from "./verdict.mjs";
 
 export function readTrace(traceFile) {
   return fs
@@ -18,44 +21,6 @@ export function readTrace(traceFile) {
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));
-}
-
-/**
- * Score one repetition's collected probes and creations.
- *
- * The native reading alone decides the verdict, so the loop still scores a
- * browser running an uninstrumented build — the extension's own report of what
- * it created only sharpens which new window was the lil when several appeared.
- */
-export function scoreRepetition({ scenario, probes, created, bundleId }) {
-  const kind = (scenario && scenario.kind) || "open";
-  const needed = kind === "open" ? ["before", "after"] : ["before", "afterClose"];
-  const missing = needed.filter((label) => !probes[label]);
-  if (missing.length) {
-    return { verdict: "inconclusive", reason: `missing native reading(s): ${missing.join(", ")}` };
-  }
-
-  const lastCreated = created[created.length - 1] || null;
-  if (kind === "open") {
-    return {
-      identifiedBy: lastCreated ? "extension" : "native",
-      ...openVerdict({
-        before: probes.before,
-        after: probes.after,
-        bundleId,
-        createdBounds: lastCreated && lastCreated.bounds,
-      }),
-    };
-  }
-
-  const expectedFrom = (scenario && scenario.expectedFrom) || "before";
-  const expected = probes[expectedFrom];
-  return closeVerdict({
-    before: probes.before,
-    after: probes.afterClose,
-    bundleId,
-    expectedBundleId: expected && expected.frontmost && expected.frontmost.bundleId,
-  });
 }
 
 /** Fold a whole trace into the same summary shape a live run writes. */
@@ -88,22 +53,12 @@ export function replayRecords(records, { bundleId }) {
   }
   flush();
 
-  const scenarios = [...perScenario.entries()].map(([id, reps]) => ({
-    scenario: id,
-    kind: (SCENARIOS.find((s) => s.id === id) || {}).kind,
-    ...scenarioVerdict(reps),
-    repetitions: reps,
+  const entries = [...perScenario.entries()].map(([scenario, repetitions]) => ({
+    scenario,
+    kind: (SCENARIOS.find((s) => s.id === scenario) || {}).kind,
+    repetitions,
   }));
-  const counts = { red: 0, green: 0, inconclusive: 0 };
-  for (const s of scenarios) counts[s.verdict]++;
-
-  return {
-    tag: "LILFOCUS",
-    issue: 30,
-    counts,
-    overall: counts.red ? "red" : counts.inconclusive ? "inconclusive" : "green",
-    scenarios,
-  };
+  return { tag: "LILFOCUS", issue: 30, ...foldRun(entries) };
 }
 
 export function replay(traceFile, { bundleId }) {

@@ -8,10 +8,11 @@ import assert from "node:assert/strict";
 import { boot } from "./harness.js";
 import { fixture } from "./fixture.js";
 
-const ENDPOINT = "http://127.0.0.1:8931/t";
+// The seam derives this from the arm's port and run id; nothing may redirect it.
+const ENDPOINT = "http://127.0.0.1:8931/t/run-1";
 
 function arm(extra = {}) {
-  return { type: "lil-focus-trace", runId: "run-1", endpoint: ENDPOINT, ...extra };
+  return { type: "lil-focus-trace", op: "arm", runId: "run-1", port: 8931, ...extra };
 }
 
 function events(env, name) {
@@ -24,9 +25,10 @@ async function openPrimaryWindow(env) {
   return env.chrome.windows.create({ url: "https://primary.example/", type: "normal", focused: true });
 }
 
+/** Open one lil and return it — the newest popup, never an earlier one. */
 async function openLil(env, extra = {}) {
   await env.deliver({ type: "open", url: "https://example.com/docs", left: 10, top: 10, ...extra });
-  return env.windows().find((w) => w.type === "popup");
+  return env.windows().filter((w) => w.type === "popup").pop();
 }
 
 test("the seam records nothing until it is armed", async () => {
@@ -46,7 +48,7 @@ test("arming is confirmed and disarming stops the stream", async () => {
   assert.equal(events(env, "trace-armed").length, 1);
   const armedAt = env.traced().length;
 
-  await env.deliver({ type: "lil-focus-trace", enabled: false });
+  await env.deliver({ type: "lil-focus-trace", op: "disarm" });
   await openLil(env);
 
   // The disarm notice itself is the last record; the open that followed is not.
@@ -179,7 +181,7 @@ test("an on-demand snapshot names every window's identity, type, and focus state
   const normal = await openPrimaryWindow(env);
   const lil = await openLil(env);
 
-  await env.deliver({ type: "lil-focus-trace", snapshot: "afterOpen" });
+  await env.deliver({ type: "lil-focus-trace", op: "snapshot", label: "afterOpen" });
 
   const [snapshot] = events(env, "windows");
   assert.equal(snapshot.detail.label, "afterOpen");
@@ -205,18 +207,96 @@ test("an unreachable collector leaves the traced path working", async () => {
   assert.ok(env.posts().length > 0, "posts were attempted");
 });
 
-test("teardown closes only the window the harness names, and only while armed", async () => {
+test("teardown closes only a lil this armed run opened", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));
-  const uninvited = await openLil(env);
-
-  // Disarmed: the request is ignored outright.
-  await env.deliver({ type: "lil-focus-trace", closeWindow: uninvited.id });
-  assert.ok(env.windows().some((w) => w.id === uninvited.id));
+  const uninvited = await openLil(env); // opened before the run existed
 
   await env.deliver(arm());
-  await env.deliver({ type: "lil-focus-trace", closeWindow: uninvited.id });
+  const ours = await openLil(env);
 
-  assert.equal(env.windows().some((w) => w.id === uninvited.id), false);
-  assert.equal(events(env, "harness-close")[0].detail.windowId, uninvited.id);
+  // Not this run's lil: inert, and said so.
+  await env.deliver({ type: "lil-focus-trace", op: "close-lil", runId: "run-1", windowId: uninvited.id });
+  assert.ok(env.windows().some((w) => w.id === uninvited.id));
+  assert.equal(events(env, "harness-close")[0].detail.outcome, "not-owned-by-this-run");
+
+  await env.deliver({ type: "lil-focus-trace", op: "close-lil", runId: "run-1", windowId: ours.id });
+  assert.equal(env.windows().some((w) => w.id === ours.id), false);
+  assert.deepEqual(events(env, "harness-close")[1].detail, { windowId: ours.id, outcome: "closed" });
+});
+
+test("teardown can never close Primary, a stale id, or the same lil twice", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver(arm());
+  const primary = await openPrimaryWindow(env);
+  const lil = await openLil(env);
+  const gone = await openLil(env);
+
+  const close = (windowId) => env.deliver({ type: "lil-focus-trace", op: "close-lil", runId: "run-1", windowId });
+
+  await close(primary.id);
+  assert.ok(env.windows().some((w) => w.id === primary.id), "the ordinary browsing window survives");
+
+  await close(999_999); // never existed
+  await close(lil.id);
+  await close(lil.id); // already torn down: no longer this run's to close
+
+  // A lil the run opened but the operator closed first is not closed again.
+  await env.chrome.windows.remove(gone.id);
+  await close(gone.id);
+
+  assert.deepEqual(
+    events(env, "harness-close").map((e) => e.detail.outcome),
+    [
+      "not-owned-by-this-run",
+      "not-owned-by-this-run",
+      "closed",
+      "not-owned-by-this-run",
+      "no-longer-a-registered-lil",
+    ]
+  );
+});
+
+test("teardown is inert while disarmed and for another run's id", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver(arm());
+  const lil = await openLil(env);
+
+  await env.deliver({ type: "lil-focus-trace", op: "close-lil", runId: "run-2", windowId: lil.id });
+  assert.ok(env.windows().some((w) => w.id === lil.id), "another run may not tear this one down");
+
+  await env.deliver({ type: "lil-focus-trace", op: "disarm" });
+  await env.deliver({ type: "lil-focus-trace", op: "close-lil", runId: "run-1", windowId: lil.id });
+  assert.ok(env.windows().some((w) => w.id === lil.id), "a disarmed seam closes nothing");
+});
+
+test("the collector is a loopback endpoint scoped to the run, and cannot be redirected", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver(arm({ endpoint: "https://exfil.example/collect", port: 8931 }));
+  await openLil(env);
+
+  assert.ok(env.posts().length > 0);
+  assert.ok(env.posts().every((p) => p.url === ENDPOINT), "every post goes to the derived run-scoped endpoint");
+});
+
+test("an arm the seam cannot trust leaves it disarmed", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+
+  for (const bad of [
+    { port: 0 },
+    { port: 70_000 },
+    { port: "8931" },
+    { runId: "../../etc" },
+    { runId: "" },
+    { op: "unheard-of" },
+  ]) {
+    await env.deliver(arm(bad));
+  }
+  await openLil(env);
+
+  assert.deepEqual(env.posts(), []);
 });

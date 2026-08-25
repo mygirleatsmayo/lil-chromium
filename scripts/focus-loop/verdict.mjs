@@ -90,9 +90,40 @@ export function risenSiblings({ before, after, bundleId, ignore = [] }) {
   return risen;
 }
 
+/** The display index of the frontmost window belonging to `bundleId`. */
+export function displayOfApp(snapshot, bundleId) {
+  const win = snapshot.windows.find((w) => w.bundleId === bundleId);
+  return win ? win.display : null;
+}
+
 /**
- * Opening scenario: the requested lil must come forward and nothing else of the
- * browser's may.
+ * Where the browser's own windows sit, by pairing the extension's window list
+ * (which knows what is a lil and what is Primary) with the native reading
+ * (which knows what display each window is on). This is how an arrangement the
+ * operator was asked to set up gets confirmed before anything is scored.
+ */
+export function browserLayout(snapshot, extensionWindows, bundleId) {
+  const browserWindows = snapshot.windows.filter((w) => w.bundleId === bundleId);
+  const place = (win) => {
+    const match = matchProbeWindow(browserWindows, win.bounds);
+    return match ? match.display : null;
+  };
+  const primary = extensionWindows.find((w) => w.type === "normal" && !w.isLil);
+  return {
+    primaryDisplay: primary ? place(primary) : null,
+    lilDisplays: extensionWindows.filter((w) => w.isLil).map(place).filter((d) => d !== null),
+  };
+}
+
+/**
+ * Opening scenario. Three independent requirements, all of which #30 names:
+ *
+ *   1. The requested lil landed on the display of the application it was opened
+ *      from. A lil that appears on the Primary window's display instead is the
+ *      cross-display symptom, and it shows even when nothing overtook anything.
+ *   2. It was left as the focused front window of the browser.
+ *   3. No *other* browser window came forward. This is computed from the raw
+ *      z-order alone, so it stays true whether or not the lil was identified.
  *
  * `createdBounds` is what the extension said it created, so the lil is exempted
  * by identity rather than by "the newest window", which would silently exempt a
@@ -118,17 +149,42 @@ export function openVerdict({ before, after, bundleId, createdBounds }) {
     };
   }
 
-  const frontmostIsBrowser = after.frontmost && after.frontmost.bundleId === bundleId;
-  return {
-    verdict: risen.length ? "red" : "green",
-    reason: risen.length
-      ? `${risen.length} unrelated ${bundleId} window(s) came forward with the lil`
-      : "only the requested lil came forward",
+  // The `before` reading is taken with the source application activated, so its
+  // frontmost app is the application the lil is opened from.
+  const sourceApp = before.frontmost || null;
+  const sourceDisplay = sourceApp ? displayOfApp(before, sourceApp.bundleId) : null;
+  const frontmostIsBrowser = !!after.frontmost && after.frontmost.bundleId === bundleId;
+  const lilIsFrontWindow = lil.order === 0;
+  const observed = {
     lil: { number: lil.number, display: lil.display, order: lil.order },
-    lilIsFrontWindow: lil.order === 0,
+    sourceApp,
+    sourceDisplay,
+    onSourceDisplay: sourceDisplay !== null && lil.display === sourceDisplay,
+    lilIsFrontWindow,
     frontmostApp: after.frontmost || null,
-    frontmostIsBrowser: !!frontmostIsBrowser,
+    frontmostIsBrowser,
     risenSiblings: risen,
+  };
+
+  if (sourceDisplay === null) {
+    return { verdict: "inconclusive", reason: "could not read the source application's display", ...observed };
+  }
+
+  const faults = [];
+  if (!observed.onSourceDisplay) {
+    faults.push(`the lil opened on display ${lil.display} instead of the source application's display ${sourceDisplay}`);
+  }
+  if (!lilIsFrontWindow || !frontmostIsBrowser) {
+    faults.push("the requested lil is not the focused front window");
+  }
+  if (risen.length) {
+    faults.push(`${risen.length} unrelated ${bundleId} window(s) came forward with the lil`);
+  }
+
+  return {
+    verdict: faults.length ? "red" : "green",
+    reason: faults.length ? faults.join("; ") : "only the requested lil came forward, on the source display",
+    ...observed,
   };
 }
 
@@ -174,4 +230,60 @@ export function scenarioVerdict(reps) {
     inconclusive,
     rate: total ? Number((red / total).toFixed(3)) : 0,
   };
+}
+
+/**
+ * Score one repetition's collected probes and creations.
+ *
+ * The native reading alone decides the verdict, so the loop still scores a
+ * browser running an uninstrumented build — the extension's own report of what
+ * it created only sharpens which new window was the lil when several appeared.
+ */
+export function scoreRepetition({ scenario, probes, created, bundleId }) {
+  const kind = (scenario && scenario.kind) || "open";
+  const needed = kind === "open" ? ["before", "after"] : ["before", "afterClose"];
+  const missing = needed.filter((label) => !probes[label]);
+  if (missing.length) {
+    return { verdict: "inconclusive", reason: `missing native reading(s): ${missing.join(", ")}` };
+  }
+
+  const lastCreated = created[created.length - 1] || null;
+  if (kind === "open") {
+    return {
+      identifiedBy: lastCreated ? "extension" : "native",
+      ...openVerdict({
+        before: probes.before,
+        after: probes.after,
+        bundleId,
+        createdBounds: lastCreated && lastCreated.bounds,
+      }),
+    };
+  }
+
+  const expectedFrom = (scenario && scenario.expectedFrom) || "before";
+  const expected = probes[expectedFrom];
+  return closeVerdict({
+    before: probes.before,
+    after: probes.afterClose,
+    bundleId,
+    expectedBundleId: expected && expected.frontmost && expected.frontmost.bundleId,
+  });
+}
+
+/**
+ * Fold scored repetitions into the whole-run result. The live run and a replay
+ * both end here, so an artifact can never disagree with the run that wrote it.
+ *
+ * `entries` are `{ scenario, kind, repetitions }` in report order.
+ */
+export function foldRun(entries) {
+  const scenarios = entries.map(({ scenario, kind, repetitions }) => ({
+    scenario,
+    kind,
+    ...scenarioVerdict(repetitions),
+    repetitions,
+  }));
+  const counts = { red: 0, green: 0, inconclusive: 0 };
+  for (const s of scenarios) counts[s.verdict]++;
+  return { counts, overall: counts.red ? "red" : counts.inconclusive ? "inconclusive" : "green", scenarios };
 }

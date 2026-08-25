@@ -711,7 +711,7 @@ async function openLil(spec) {
     return null;
   }
 
-  focusTrace("lil-created", {
+  focusTraceLilCreated(win.id, {
     windowId: win.id,
     focusRequested: focus,
     createdFocused: !!win.focused,
