@@ -37,3 +37,7 @@ S1–S3, S5, S7–S9, P3–P4, and M1 resolved. No regression of S4/S6; P1/P2 re
 
 - M2 · `focusTraceRemoveOwnedLil` drops ownership before `chrome.windows.remove` succeeds · **fix**: retain ownership after `close-failed` so the final sweep can retry; forget the id only after confirmed removal or a truthful terminal stale/not-lil outcome.
 - M3 · live teardown failure adds an inconclusive result that replay cannot reconstruct from the trace · **fix**: durably record the repetition/outcome through the same replay contract so live and replay fold identically, including teardown failure.
+
+## Second remediation review
+
+M2 and M3 resolved in `d02925e`. No new defects. P1/P2 remain live verification obligations, not code-review failures.
