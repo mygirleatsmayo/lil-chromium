@@ -1,0 +1,797 @@
+{
+  "tag": "LILFOCUS",
+  "issue": 30,
+  "runId": "2026-08-26T22-01-38-768Z",
+  "startedAt": "2026-08-26T22:13:25.815Z",
+  "environment": {
+    "platform": "darwin 27.0.0",
+    "browserVersion": "0.15.7.1",
+    "appVersion": "v0.2-205-gf38dd44",
+    "extensionVersion": "0.4.0-trial",
+    "worktreeCommit": "f38dd44"
+  },
+  "settings": {
+    "browser": "helium",
+    "bundleId": "net.imput.helium",
+    "sourceApp": "com.apple.mail",
+    "switchApp": "com.cmuxterm.app",
+    "url": "https://example.com/",
+    "settleMs": 900
+  },
+  "seamLive": true,
+  "counts": {
+    "red": 4,
+    "green": 5,
+    "inconclusive": 0
+  },
+  "overall": "red",
+  "scenarios": [
+    {
+      "scenario": "close/immediate",
+      "kind": "close",
+      "verdict": "red",
+      "reproductions": 2,
+      "repetitions": [
+        {
+          "repetition": 1,
+          "verdict": "red",
+          "reason": "focus landed on net.imput.helium instead of com.apple.mail",
+          "expected": "com.apple.mail",
+          "actual": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "landedOnBrowser": true,
+          "risenSiblings": [
+            {
+              "number": 51716,
+              "display": 0,
+              "orderBefore": 2,
+              "orderAfter": 0,
+              "overtook": [
+                {
+                  "number": 116,
+                  "bundleId": "com.apple.mail",
+                  "owner": "Mail"
+                },
+                {
+                  "number": 26452,
+                  "bundleId": "com.cmuxterm.app",
+                  "owner": "cmux"
+                }
+              ]
+            }
+          ],
+          "createdWindowId": 110441294
+        },
+        {
+          "repetition": 2,
+          "verdict": "red",
+          "reason": "focus landed on net.imput.helium instead of com.apple.mail",
+          "expected": "com.apple.mail",
+          "actual": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "landedOnBrowser": true,
+          "risenSiblings": [
+            {
+              "number": 51716,
+              "display": 0,
+              "orderBefore": 1,
+              "orderAfter": 0,
+              "overtook": [
+                {
+                  "number": 116,
+                  "bundleId": "com.apple.mail",
+                  "owner": "Mail"
+                }
+              ]
+            }
+          ],
+          "createdWindowId": 110441299
+        }
+      ],
+      "inconclusive": 0,
+      "rate": 1
+    },
+    {
+      "scenario": "close/switch-then-refocus",
+      "kind": "close",
+      "verdict": "red",
+      "reproductions": 2,
+      "repetitions": [
+        {
+          "repetition": 1,
+          "verdict": "red",
+          "reason": "focus landed on net.imput.helium instead of com.cmuxterm.app",
+          "expected": "com.cmuxterm.app",
+          "actual": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "landedOnBrowser": true,
+          "risenSiblings": [
+            {
+              "number": 51716,
+              "display": 0,
+              "orderBefore": 1,
+              "orderAfter": 0,
+              "overtook": [
+                {
+                  "number": 116,
+                  "bundleId": "com.apple.mail",
+                  "owner": "Mail"
+                }
+              ]
+            }
+          ],
+          "createdWindowId": 110441304
+        },
+        {
+          "repetition": 2,
+          "verdict": "red",
+          "reason": "focus landed on net.imput.helium instead of com.cmuxterm.app",
+          "expected": "com.cmuxterm.app",
+          "actual": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "landedOnBrowser": true,
+          "risenSiblings": [
+            {
+              "number": 51716,
+              "display": 0,
+              "orderBefore": 1,
+              "orderAfter": 0,
+              "overtook": [
+                {
+                  "number": 116,
+                  "bundleId": "com.apple.mail",
+                  "owner": "Mail"
+                }
+              ]
+            }
+          ],
+          "createdWindowId": 110441309
+        }
+      ],
+      "inconclusive": 0,
+      "rate": 1
+    },
+    {
+      "scenario": "close/unfocused-red-button",
+      "kind": "close",
+      "verdict": "green",
+      "reproductions": 0,
+      "repetitions": [
+        {
+          "repetition": 1,
+          "verdict": "green",
+          "reason": "focus returned to com.cmuxterm.app",
+          "expected": "com.cmuxterm.app",
+          "actual": {
+            "bundleId": "com.cmuxterm.app",
+            "name": "cmux",
+            "pid": 35623
+          },
+          "landedOnBrowser": false,
+          "risenSiblings": [
+            {
+              "number": 51716,
+              "display": 0,
+              "orderBefore": 1,
+              "orderAfter": 1,
+              "overtook": [
+                {
+                  "number": 116,
+                  "bundleId": "com.apple.mail",
+                  "owner": "Mail"
+                }
+              ]
+            }
+          ],
+          "createdWindowId": 110441314
+        },
+        {
+          "repetition": 2,
+          "verdict": "green",
+          "reason": "focus returned to com.cmuxterm.app",
+          "expected": "com.cmuxterm.app",
+          "actual": {
+            "bundleId": "com.cmuxterm.app",
+            "name": "cmux",
+            "pid": 35623
+          },
+          "landedOnBrowser": false,
+          "risenSiblings": [
+            {
+              "number": 51716,
+              "display": 0,
+              "orderBefore": 2,
+              "orderAfter": 1,
+              "overtook": [
+                {
+                  "number": 116,
+                  "bundleId": "com.apple.mail",
+                  "owner": "Mail"
+                }
+              ]
+            }
+          ],
+          "createdWindowId": 110441319
+        }
+      ],
+      "inconclusive": 0,
+      "rate": 0
+    },
+    {
+      "scenario": "open/same-display/no-other-lil",
+      "kind": "open",
+      "verdict": "green",
+      "reproductions": 0,
+      "repetitions": [
+        {
+          "repetition": 1,
+          "identifiedBy": "extension",
+          "verdict": "green",
+          "reason": "only the requested lil came forward, on the source display",
+          "lil": {
+            "number": 52706,
+            "display": 2,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": true,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441324,
+          "teardown": "closed"
+        },
+        {
+          "repetition": 2,
+          "identifiedBy": "extension",
+          "verdict": "green",
+          "reason": "only the requested lil came forward, on the source display",
+          "lil": {
+            "number": 52707,
+            "display": 2,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": true,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441329,
+          "teardown": "closed"
+        },
+        {
+          "repetition": 3,
+          "identifiedBy": "extension",
+          "verdict": "green",
+          "reason": "only the requested lil came forward, on the source display",
+          "lil": {
+            "number": 52708,
+            "display": 2,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": true,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441334,
+          "teardown": "closed"
+        }
+      ],
+      "inconclusive": 0,
+      "rate": 0
+    },
+    {
+      "scenario": "open/same-display/lil-on-source-display",
+      "kind": "open",
+      "verdict": "green",
+      "reproductions": 0,
+      "repetitions": [
+        {
+          "repetition": 1,
+          "identifiedBy": "extension",
+          "verdict": "green",
+          "reason": "only the requested lil came forward, on the source display",
+          "lil": {
+            "number": 52771,
+            "display": 2,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": true,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441341,
+          "teardown": "closed"
+        },
+        {
+          "repetition": 2,
+          "identifiedBy": "extension",
+          "verdict": "green",
+          "reason": "only the requested lil came forward, on the source display",
+          "lil": {
+            "number": 52772,
+            "display": 2,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": true,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441346,
+          "teardown": "closed"
+        },
+        {
+          "repetition": 3,
+          "identifiedBy": "extension",
+          "verdict": "green",
+          "reason": "only the requested lil came forward, on the source display",
+          "lil": {
+            "number": 52773,
+            "display": 2,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": true,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441351,
+          "teardown": "closed"
+        }
+      ],
+      "inconclusive": 0,
+      "rate": 0
+    },
+    {
+      "scenario": "open/same-display/lil-on-primary-display",
+      "kind": "open",
+      "verdict": "green",
+      "reproductions": 0,
+      "repetitions": [
+        {
+          "repetition": 1,
+          "identifiedBy": "extension",
+          "verdict": "green",
+          "reason": "only the requested lil came forward, on the source display",
+          "lil": {
+            "number": 52774,
+            "display": 2,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": true,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441356,
+          "teardown": "closed"
+        },
+        {
+          "repetition": 2,
+          "identifiedBy": "extension",
+          "verdict": "green",
+          "reason": "only the requested lil came forward, on the source display",
+          "lil": {
+            "number": 52775,
+            "display": 2,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": true,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441361,
+          "teardown": "closed"
+        },
+        {
+          "repetition": 3,
+          "identifiedBy": "extension",
+          "verdict": "green",
+          "reason": "only the requested lil came forward, on the source display",
+          "lil": {
+            "number": 52776,
+            "display": 2,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": true,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441366,
+          "teardown": "closed"
+        }
+      ],
+      "inconclusive": 0,
+      "rate": 0
+    },
+    {
+      "scenario": "open/cross-display/no-other-lil",
+      "kind": "open",
+      "verdict": "red",
+      "reproductions": 3,
+      "repetitions": [
+        {
+          "repetition": 1,
+          "identifiedBy": "extension",
+          "verdict": "red",
+          "reason": "the lil opened on display 0 instead of the source application's display 2",
+          "lil": {
+            "number": 52803,
+            "display": 0,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": false,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441374,
+          "teardown": "closed"
+        },
+        {
+          "repetition": 2,
+          "identifiedBy": "extension",
+          "verdict": "red",
+          "reason": "the lil opened on display 0 instead of the source application's display 2",
+          "lil": {
+            "number": 52804,
+            "display": 0,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": false,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441379,
+          "teardown": "closed"
+        },
+        {
+          "repetition": 3,
+          "identifiedBy": "extension",
+          "verdict": "red",
+          "reason": "the lil opened on display 0 instead of the source application's display 2",
+          "lil": {
+            "number": 52805,
+            "display": 0,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": false,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441384,
+          "teardown": "closed"
+        }
+      ],
+      "inconclusive": 0,
+      "rate": 1
+    },
+    {
+      "scenario": "open/cross-display/lil-on-source-display",
+      "kind": "open",
+      "verdict": "green",
+      "reproductions": 0,
+      "repetitions": [
+        {
+          "repetition": 1,
+          "identifiedBy": "extension",
+          "verdict": "green",
+          "reason": "only the requested lil came forward, on the source display",
+          "lil": {
+            "number": 52816,
+            "display": 2,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": true,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441391,
+          "teardown": "closed"
+        },
+        {
+          "repetition": 2,
+          "identifiedBy": "extension",
+          "verdict": "green",
+          "reason": "only the requested lil came forward, on the source display",
+          "lil": {
+            "number": 52817,
+            "display": 2,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": true,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441396,
+          "teardown": "closed"
+        },
+        {
+          "repetition": 3,
+          "identifiedBy": "extension",
+          "verdict": "green",
+          "reason": "only the requested lil came forward, on the source display",
+          "lil": {
+            "number": 52818,
+            "display": 2,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": true,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441401,
+          "teardown": "closed"
+        }
+      ],
+      "inconclusive": 0,
+      "rate": 0
+    },
+    {
+      "scenario": "open/cross-display/lil-on-primary-display",
+      "kind": "open",
+      "verdict": "red",
+      "reproductions": 3,
+      "repetitions": [
+        {
+          "repetition": 1,
+          "identifiedBy": "extension",
+          "verdict": "red",
+          "reason": "the lil opened on display 0 instead of the source application's display 2",
+          "lil": {
+            "number": 52823,
+            "display": 0,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": false,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441406,
+          "teardown": "closed"
+        },
+        {
+          "repetition": 2,
+          "identifiedBy": "extension",
+          "verdict": "red",
+          "reason": "the lil opened on display 0 instead of the source application's display 2",
+          "lil": {
+            "number": 52824,
+            "display": 0,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": false,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441411,
+          "teardown": "closed"
+        },
+        {
+          "repetition": 3,
+          "identifiedBy": "extension",
+          "verdict": "red",
+          "reason": "the lil opened on display 0 instead of the source application's display 2",
+          "lil": {
+            "number": 52825,
+            "display": 0,
+            "order": 0
+          },
+          "sourceApp": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 1365
+          },
+          "sourceDisplay": 2,
+          "onSourceDisplay": false,
+          "lilIsFrontWindow": true,
+          "frontmostApp": {
+            "bundleId": "net.imput.helium",
+            "name": "Helium",
+            "pid": 70187
+          },
+          "frontmostIsBrowser": true,
+          "risenSiblings": [],
+          "createdWindowId": 110441416,
+          "teardown": "closed"
+        }
+      ],
+      "inconclusive": 0,
+      "rate": 1
+    }
+  ]
+}
