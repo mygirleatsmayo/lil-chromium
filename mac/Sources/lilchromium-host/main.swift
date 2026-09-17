@@ -43,8 +43,6 @@ final class Relay {
         self.socketPath = LilPaths.socketPath(forBrowser: slug)
         self.server = SocketServer(path: self.socketPath)
         self.activationHistory = activationHistory
-        // Route logging to host-<slug>.log as early as possible.
-        HostLog.shared.configure(slug: slug)
     }
 
     // Map: history-query id -> the socket connection awaiting its result.
@@ -367,11 +365,15 @@ final class Relay {
     }
 }
 
-// Entry point. The activation history is AppKit-backed and main-actor
-// isolated, so it is born here on the main thread and handed to the relay.
-// Top-level code is not main-actor isolated in Swift 5 mode; the process is
-// single-threaded until the relay starts its workers, so the assumption holds.
+// Entry point. Route logging to host-<slug>.log before anything else runs.
 let browserSlug = BrowserDetect.detectParentBrowser()
+HostLog.shared.configure(slug: browserSlug)
+// The activation history is AppKit-backed and main-actor isolated, so it is
+// born here on the main thread and handed to the relay. The process is
+// single-threaded until the relay starts its workers, so the assumption holds.
+// verified: Apple Swift 6.4 toolchain in Swift 5 mode, 2026-09-17 — top-level
+// code is not main-actor isolated; without assumeIsolated the compiler rejects
+// this call as main actor-isolated from a nonisolated context.
 let activationHistory = MainActor.assumeIsolated { ActivationHistory.observing(forBrowser: browserSlug) }
 let relay = Relay(browserSlug: browserSlug, activationHistory: activationHistory)
 relay.run()

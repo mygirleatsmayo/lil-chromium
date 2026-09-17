@@ -2783,6 +2783,22 @@ test("a worker that wakes with a normal window focused reads it as the context t
   assert.ok(!env.outgoing().some((msg) => msg.type === "restore-focus"));
 });
 
+test("a worker that wakes with a normal window focused still converts a Command+T tab opened there from a lil", async () => {
+  const env = await boot({ windows: [{ type: "normal", url: "https://host.example/", focused: true }] });
+  await env.deliver(fixture("message-context"));
+  const normal = env.windows().find((w) => w.type === "normal");
+  await env.deliver({ type: "open", url: "https://lil.example/", left: 10, top: 10 });
+  const source = env.windows().find((w) => w.type === "popup");
+  assert.equal(source.focused, true);
+
+  const created = await env.chrome.tabs.create({ windowId: normal.id, active: true, url: "chrome://newtab/" });
+  await env.flush();
+
+  const converted = env.windows().find((w) => w.type === "popup" && w.id !== source.id);
+  assert.ok(converted, "the browser-created tab was adopted into a new lil");
+  assert.equal(converted.tabs[0].id, created.id);
+});
+
 test("an incognito lil is focused, in-memory only, and never restored", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));

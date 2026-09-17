@@ -14,7 +14,7 @@ One line per finding: `ID · location · verdict · settled interpretation`.
 - S4 · duplicated `focusOrder` splice in test/chrome.js · **fix** · `forgetFocus(id)` helper.
 - S5 · Data Clumps: window-keyed sets + `lastTransfer`; three deletes in `onRemoved` · **won't-fix** · Each set has one meaning and one consumer; a per-window record would couple teardown, explicit-focus, and creation state that change for different reasons. Revisit if a fourth lifecycle mark appears.
 - S6 · `focusGainsSeen` name · **fix** · renamed `everFocused`.
-- S7 · tuple unpack of `ActivatedApp` · **fix** · gone with the `target` extraction.
+- S7 · tuple unpack of `ActivatedApp` · **fix** · gone with the `target` extraction; the residual `let (pid, bundleId) = (target.pid, target.bundleId)` (remediation round 1) is replaced by direct member access.
 
 ## Spec
 
@@ -25,3 +25,12 @@ One line per finding: `ID · location · verdict · settled interpretation`.
 - P5 (c2) · `focusedWindowId` never seeded, so a respawned worker fabricates an external-app context · **fix** · seeded from `windows.getLastFocused` when it reports `focused:true` and no focus event has arrived; harness gains `options.windows` to boot with pre-existing windows; test "a worker that wakes with a normal window focused reads it as the context the user came from".
 - P6 (c3) · `.launchServicesRequested` returned before `openApplication` completes, so `frontmost-after` may sample early · **won't-fix** · The completion handler logs its own LILFOCUS line; the 350 ms settle read is a second sample, and the two together are what the live run needs. Revisit only if the trace shows the request completing later than the settle read.
 - AC1 / AC9 (live half) · `#30 command` red-before / green-after · **pending live run** · Lucas runs `node scripts/focus-loop.mjs run --scenarios close/` from this worktree after `make install` and extension reload.
+
+## Remediation round 1 (pre-fix point `0850be9` → `f44d593`)
+
+All fix-marked findings resolved except the S7 residual above. New in the delta:
+
+- R1 · `lastNormalWindowId` left unseeded on a respawned worker (same root as P5) · **fix** · the seed sets it too when the focused window is normal; test "a worker that wakes with a normal window focused still converts a Command+T tab opened there from a lil".
+- R2 · `HostLog.configure` now runs after the activation history is created · **fix** · logging is configured at the entry point, first thing after slug detection; `Relay.init` no longer configures it.
+- R3 · top-level isolation comment carries an unmarked toolchain claim · **fix** · `verified:` marker with the toolchain and the compiler diagnostic observed.
+- R4 · ledger exists only on the branch, `main` owns `.mayosdd/` · **settled, no action** · this branch merges into `main`; the ledger and the live evidence land there with it, never only on the trial worktree.

@@ -39,12 +39,10 @@ enum ExternalAppRestorer {
         guard let target = target(pid: recordedPid, bundleId: recordedBundleId, history: history) else {
             return .noActivationHistory
         }
-        let (pid, bundleId) = (target.pid, target.bundleId)
-
-        let exact = NSRunningApplication(processIdentifier: pid)
-        let sameBundle = bundleId.map(NSRunningApplication.runningApplications(withBundleIdentifier:)) ?? []
-        let eligible = ([exact].compactMap { $0 } + sameBundle.filter { $0.processIdentifier != pid })
-            .filter { isEligible($0, bundleId: bundleId) }
+        let exact = NSRunningApplication(processIdentifier: target.pid)
+        let sameBundle = target.bundleId.map(NSRunningApplication.runningApplications(withBundleIdentifier:)) ?? []
+        let eligible = ([exact].compactMap { $0 } + sameBundle.filter { $0.processIdentifier != target.pid })
+            .filter { isEligible($0, bundleId: target.bundleId) }
         guard let first = eligible.first else { return .noEligibleProcess }
 
         for app in eligible where app.activate(options: [.activateIgnoringOtherApps]) {

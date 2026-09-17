@@ -268,14 +268,16 @@ function consumeClickHint(url) {
 // ===========================================================================
 
 let focusedWindowId = chrome.windows.WINDOW_ID_NONE;
+let lastNormalWindowId = chrome.windows.WINDOW_ID_NONE;
 // A worker that wakes while the browser already holds focus must not read
-// that focus as "outside the browser": seed from Chromium unless a focus
+// that focus as "outside the browser": seed both from Chromium unless a focus
 // event has already said otherwise.
 let focusEventSeen = false;
 safe(chrome.windows.getLastFocused({}), "getLastFocused seed").then((win) => {
-  if (!focusEventSeen && win && win.focused) focusedWindowId = win.id;
+  if (focusEventSeen || !win || !win.focused) return;
+  focusedWindowId = win.id;
+  if (win.type === "normal") lastNormalWindowId = win.id;
 });
-let lastNormalWindowId = chrome.windows.WINDOW_ID_NONE;
 
 // Teardown reading (issue #31). Chromium removes a closing window's tabs
 // first, hands key status to a sibling window, and only then fires
