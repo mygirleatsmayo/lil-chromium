@@ -21,6 +21,18 @@ struct ActivationHistoryTests {
         #expect(history.lastExternal == finder)
     }
 
+    /// An app that quit is no longer somewhere the user can return to; the
+    /// history falls back to the app they were in before it.
+    @Test(.bug(id: 31)) func aQuitAppFallsOutOfTheHistory() {
+        let history = ActivationHistory(browserBundleIds: ["net.imput.helium"])
+
+        history.note(mail, policy: .regular)
+        history.note(finder, policy: .regular)
+        history.forget(pid: finder.pid)
+
+        #expect(history.lastExternal == mail)
+    }
+
     /// The palette scenario (#31 QA addendum): LilChromiumApp is an accessory
     /// app, so its activation over Mail must not make it the place to return to.
     @Test(.bug(id: 31)) func anAccessoryAppActivatingOverTheUsersAppIsPassedOver() {

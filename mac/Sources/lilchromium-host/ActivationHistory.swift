@@ -17,15 +17,19 @@ struct ActivatedApp: Equatable {
     }
 }
 
-/// Which app a lil returns to when its prior context is an external app with
-/// no recorded process (ADR-0004, issue #31): the last regular app the user
-/// activated other than the browser hosting this relay. The extension cannot
-/// know it — Chromium only reports that no browser window is focused — so the
-/// host watches app activations on the browser's behalf for as long as it lives.
+/// Which app a lil returns to when its prior context is an external app
+/// (ADR-0004, issue #31): the last regular app the user activated other than
+/// the browser hosting this relay, among those still running. The extension
+/// cannot know it — Chromium only reports that no browser window is focused —
+/// so the host watches app activations on the browser's behalf for as long as
+/// it lives.
 @MainActor
 final class ActivationHistory {
     private let browserBundleIds: Set<String>
-    private(set) var lastExternal: ActivatedApp?
+    /// Regular apps in activation order, most recent last, each once.
+    private var external: [ActivatedApp] = []
+
+    var lastExternal: ActivatedApp? { external.last }
 
     init(browserBundleIds: Set<String>) {
         self.browserBundleIds = browserBundleIds
@@ -39,13 +43,20 @@ final class ActivationHistory {
     func note(_ app: ActivatedApp, policy: NSApplication.ActivationPolicy) {
         guard policy == .regular else { return }
         if let bundleId = app.bundleId, browserBundleIds.contains(bundleId) { return }
-        lastExternal = app
+        forget(pid: app.pid)
+        external.append(app)
+    }
+
+    /// An app that quit is nowhere the user can return to; the one they were
+    /// in before it takes its place.
+    func forget(pid: pid_t) {
+        external.removeAll { $0.pid == pid }
     }
 
     /// A history for the browser that launched this host — known by its slug's
     /// bundle and, in case the slug is unknown, by the launching process —
     /// seeded with the current frontmost app and kept current from
-    /// NSWorkspace's activation notifications.
+    /// NSWorkspace's activation and termination notifications.
     static func observing(forBrowser slug: String) -> ActivationHistory {
         let browserBundleIds = Set(
             [BrowserTable.bundleId(forSlug: slug), NSRunningApplication(processIdentifier: getppid())?.bundleIdentifier]
@@ -59,6 +70,13 @@ final class ActivationHistory {
             guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
             else { return }
             MainActor.assumeIsolated { history.note(app) }
+        }
+        _ = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
+        ) { notification in
+            guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            else { return }
+            MainActor.assumeIsolated { history.forget(pid: app.processIdentifier) }
         }
         return history
     }

@@ -54,3 +54,9 @@ Two axes again; ledger passed along. New findings only.
 - F8 · AC6 "unfocused red-button close leaves the active app unchanged" untested with the browser frontmost · **fix** · test "closing an unfocused lil by its red button while a sibling lil holds focus restores nothing, even after a wake" — the wake swap makes the stale-reading case real, and the close still restores nothing.
 - F9 · ADR-0004 and glossary silent on host-resolved external-app identity · **fix (ADR only)** · one paragraph added to ADR-0004. The glossary entry already states the invariant ("not permanently fixed when the lil is created") without naming a mechanism, which is the glossary's job.
 - F10 · restore precedence inverted relative to the plan (recorded pid before history) · **needs adjudication → fix** · Settled per ADR-0004 and the plan: the host's live activation history wins; the recorded pid is the last resort only when the host has no history. A recorded pid before the history is creation-time identity, which the ADR supersedes. Host, tests, and PROTOCOL now say so.
+
+## Remediation round 2 (pre-fix point `50452d9` → `83d5d0d`)
+
+F1–F10 resolved. New in the delta:
+
+- F11 · a history entry for an app that has quit shadows the recorded pid, so nothing is restored · **needs adjudication → fix** · Settled: the history holds only running apps. It is an ordered list in activation order, each app once; a termination notification removes the app and the one the user was in before it takes its place (what macOS itself would reveal). Only an empty history falls back to the recorded pid. Test "aQuitAppFallsOutOfTheHistory".
