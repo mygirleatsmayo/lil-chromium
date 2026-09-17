@@ -372,7 +372,7 @@ test("explicit switching between lils updates the prior context, so closing retu
   );
 });
 
-test("a stale predecessor lil is ignored without focusing an unrelated normal window", async () => {
+test("a stale prior-context lil is ignored without focusing an unrelated normal window", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));
   await env.deliver({ type: "open", url: "https://first.example/", left: 10, top: 10 });
@@ -2797,6 +2797,31 @@ test("a worker that wakes with a normal window focused still converts a Command+
   const converted = env.windows().find((w) => w.type === "popup" && w.id !== source.id);
   assert.ok(converted, "the browser-created tab was adopted into a new lil");
   assert.equal(converted.tabs[0].id, created.id);
+});
+
+test("closing an unfocused lil by its red button while a sibling lil holds focus restores nothing, even after a wake", async () => {
+  const env = await boot({ clock: true });
+  const first = await openTitledLil(env);
+  await env.message({ action: "sleepThisLil" }, sender(first));
+  const napping = env.windows().find((w) => w.id === first.id);
+  const reply = env.messageLater({ action: "wakeLil" }, sender(napping));
+  await env.flush();
+  const fresh = env.windows().find((w) => w.id === first.id).tabs.find((t) => t.id !== napping.tabs[0].id);
+  await env.clock.advance(180);
+  await env.setTabState(fresh.id, { status: "complete" });
+  assert.equal((await reply).ok, true, "the focused lil woke in place");
+  assert.deepEqual(env.windows().find((w) => w.id === first.id).tabs.map((t) => t.id), [fresh.id]);
+
+  await env.deliver({ type: "open", url: "https://second.example/", left: 10, top: 10 });
+  const second = env.windows().find((w) => w.type === "popup" && w.id !== first.id);
+  assert.equal(second.focused, true);
+  const requestsBefore = env.outgoing().filter((m) => m.type === "restore-focus").length;
+
+  await env.chrome.windows.remove(first.id);
+  await env.flush();
+
+  assert.equal(env.windows().find((w) => w.id === second.id).focused, true, "the active lil is left alone");
+  assert.equal(env.outgoing().filter((m) => m.type === "restore-focus").length, requestsBefore);
 });
 
 test("an incognito lil is focused, in-memory only, and never restored", async () => {

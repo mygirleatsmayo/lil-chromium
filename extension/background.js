@@ -288,37 +288,18 @@ safe(chrome.windows.getLastFocused({}), "getLastFocused seed").then((win) => {
 // verified: Helium, issue #30 live trace 2026-08-26 — the handoff
 // `focus-changed` preceded `window-removed` in 26/26 focused closes, so a gate
 // read at removal said "unfocused" every time.
+// A removal that keeps the window open (a Lil Nap wake swap) also writes a
+// reading, but the window's last tab is removed before the window is, so the
+// reading in force at windows.onRemoved is always the teardown's own.
 const teardownFocus = new Map(); // windowId -> held focus when teardown began
-// Tab removals that keep their lil open (Lil Nap wake swaps) declare themselves
-// so they are never read as a teardown.
-const inPlaceRemovals = new Set();
 
 chrome.tabs.onRemoved.addListener((tabId, info) => {
-  const inPlace = inPlaceRemovals.delete(tabId);
   const heldFocus = focusedWindowId === info.windowId;
   // LILFOCUS: the reading itself, plus Chromium's own closing flag so the
   // live loop can tell whether that flag would have sufficed.
-  focusTrace("tab-removed", {
-    tabId,
-    windowId: info.windowId,
-    isWindowClosing: !!info.isWindowClosing,
-    inPlace,
-    heldFocus,
-  });
-  if (inPlace) return;
+  focusTrace("tab-removed", { tabId, windowId: info.windowId, isWindowClosing: !!info.isWindowClosing, heldFocus });
   teardownFocus.set(info.windowId, heldFocus);
 });
-
-// Remove a tab whose window stays open. Rejects like chrome.tabs.remove.
-async function removeTabInPlace(tabId) {
-  inPlaceRemovals.add(tabId);
-  try {
-    await chrome.tabs.remove(tabId);
-  } catch (err) {
-    inPlaceRemovals.delete(tabId);
-    throw err;
-  }
-}
 
 // LILFOCUS: let the diagnostic seam tell lils from ordinary windows without
 // exporting the registry to it.
@@ -338,7 +319,7 @@ focusTraceInit({ isLil: (windowId) => isEphemeralWindow(windowId) });
 //     what it overwrote and onRemoved puts it back (revertHandoffFrom).
 const explicitFocus = new Set(); // window ids whose next focus event is the worker's doing
 const everFocused = new Set(); // window ids that have had a focus event (creation focus included)
-let lastTransfer = null; // { to, from, written: Promise<overwrote> } for the latest focus event
+let lastTransfer = null; // { to, from, displaced: Promise<prior context the record replaced> } for the latest focus event
 
 // Explicit focus. Used after windows.create when a lil is asked to take focus.
 // A window Chromium already reports focused raises no event for the update,
@@ -363,7 +344,7 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
   // Decided synchronously: a handoff's onRemoved may run before any await here resumes.
   everFocused.add(windowId);
   const skipHistory = explicitFocus.delete(windowId) || previous === windowId;
-  lastTransfer = skipHistory ? null : { to: windowId, from: previous, written: recordFocusHistory(windowId, previous) };
+  lastTransfer = skipHistory ? null : { to: windowId, from: previous, displaced: recordFocusHistory(windowId, previous) };
   const win = await safe(chrome.windows.get(windowId), "windows.get last-normal");
   focusTrace("focus-changed", async () => ({
     windowId,
@@ -395,8 +376,8 @@ async function revertHandoffFrom(closingWindowId) {
   const transfer = lastTransfer;
   if (!transfer || transfer.from !== closingWindowId) return;
   lastTransfer = null;
-  const overwrote = await transfer.written;
-  if (overwrote !== undefined) await setPriorContext(transfer.to, overwrote);
+  const displaced = await transfer.displaced;
+  if (displaced !== undefined) await setPriorContext(transfer.to, displaced);
 }
 
 // Write a lil's prior context; returns the value it replaced, or undefined
@@ -712,8 +693,10 @@ function normalizePriorContext(value) {
     // Without a pid the external app is whichever one the user came from;
     // only the host's activation history knows it (PROTOCOL restore-focus).
     const context = { kind: "external-app" };
-    if (Number.isInteger(value.pid) && value.pid > 0) context.pid = value.pid;
-    if (typeof value.bundleId === "string" && value.bundleId) context.bundleId = value.bundleId;
+    if (Number.isInteger(value.pid) && value.pid > 0) {
+      context.pid = value.pid;
+      if (typeof value.bundleId === "string" && value.bundleId) context.bundleId = value.bundleId;
+    }
     return context;
   }
   return null;
@@ -1618,7 +1601,7 @@ async function wakeLil(windowId) {
     // place, clear nap state, or report success.
     if (freshTab && freshTab.id !== undefined) {
       try {
-        await removeTabInPlace(freshTab.id);
+        await chrome.tabs.remove(freshTab.id);
       } catch (err) {
         log("wakeLil: misplaced preload cleanup failed for", windowId, err && err.message ? err.message : err);
         return false;
@@ -1643,18 +1626,18 @@ async function wakeLil(windowId) {
   // reports failure, so the nap page's own fallback can fire.
   const activated = await safe(chrome.tabs.update(freshTab.id, { active: true }), "tabs.update wake activate");
   if (!activated) {
-    await safe(removeTabInPlace(freshTab.id), "tabs.remove wake preload");
+    await safe(chrome.tabs.remove(freshTab.id), "tabs.remove wake preload");
     log("wakeLil: fresh tab activation failed for", windowId);
     return false;
   }
   try {
-    await removeTabInPlace(napTab.id);
+    await chrome.tabs.remove(napTab.id);
   } catch (err) {
     // The nap document survived: put it back in front and drop the preload so
     // the visible lil and the registry tell the same nap truth.
     log("wakeLil: nap tab removal failed for", windowId, err && err.message ? err.message : err);
     await safe(chrome.tabs.update(napTab.id, { active: true }), "tabs.update wake rollback");
-    await safe(removeTabInPlace(freshTab.id), "tabs.remove wake preload");
+    await safe(chrome.tabs.remove(freshTab.id), "tabs.remove wake preload");
     return false;
   }
   await clearNapState(windowId, originalUrl, captureKey);
@@ -1820,7 +1803,7 @@ async function moveTabIntoHostBrowser(tabId, groupId) {
         const g = await safe(chrome.tabGroups.get(groupId), "tabGroups.get");
         if (g && g.windowId !== undefined) {
           await safe(chrome.tabs.update(tabId, { active: true }), "tabs.update active group");
-          await safe(chrome.windows.update(g.windowId, { focused: true }), "windows.update focus group");
+          await focusWindow(g.windowId);
         }
         ok = true;
       }
@@ -1830,7 +1813,7 @@ async function moveTabIntoHostBrowser(tabId, groupId) {
         const moved = await safe(chrome.tabs.move(tabId, { windowId: target.id, index: -1 }), "tabs.move promote");
         if (moved !== null) {
           await safe(chrome.tabs.update(tabId, { active: true }), "tabs.update active");
-          await safe(chrome.windows.update(target.id, { focused: true }), "windows.update focus");
+          await focusWindow(target.id);
           ok = true;
         }
       }

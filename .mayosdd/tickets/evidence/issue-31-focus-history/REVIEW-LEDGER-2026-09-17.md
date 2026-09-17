@@ -34,3 +34,23 @@ All fix-marked findings resolved except the S7 residual above. New in the delta:
 - R2 · `HostLog.configure` now runs after the activation history is created · **fix** · logging is configured at the entry point, first thing after slug detection; `Relay.init` no longer configures it.
 - R3 · top-level isolation comment carries an unmarked toolchain claim · **fix** · `verified:` marker with the toolchain and the compiler diagnostic observed.
 - R4 · ledger exists only on the branch, `main` owns `.mayosdd/` · **settled, no action** · this branch merges into `main`; the ledger and the live evidence land there with it, never only on the trial worktree.
+
+## Final full review (fixed point `ffddb3c`, HEAD `50450d9`)
+
+Two axes again; ledger passed along. New findings only.
+
+### Standards
+
+- F1 · `bundleId` accepted without `pid` by the extension normaliser and PROTOCOL, but dropped by the host · **fix** · Contract tightened: `bundleId` accompanies a recorded `pid` and is never sent alone; the normaliser keeps it only with one.
+- F2 · glossary drift: test title "a stale predecessor lil" (in the diff); trace outcome string `no-predecessor` (pre-existing, not in the diff) · **fix the title; won't-fix the string** · A trace outcome string is part of the loop's replay vocabulary and outside this change.
+- F3 · `AGENTS.md` still says "Swift 6.2 toolchain"; the toolchain is 6.4 · **won't-fix here** · `AGENTS.md` is Lucas's prose on `main`; flagged to Lucas.
+- F4 · `for app in eligible where app.activate(...)` hides a system mutation in a predicate clause; `first` names its role poorly · **fix** · explicit `guard … else { continue }` loop; `preferred`.
+- F5 · `lastTransfer.written` names a promise of the displaced prior context · **fix** · renamed `displaced`. `setPriorContext` returning the displaced value stays: the revert needs it and the doc comment says so.
+- F6 · the promote path focused normal windows around `focusWindow`, contradicting the "tracked per window in `explicitFocus`" comment · **fix** · both sites route through `focusWindow`; the fallback `windows.create({focused:true})` for a brand-new normal window is not a refocus and is left alone.
+
+### Spec
+
+- F7 · in-place removal declaration (`removeTabInPlace`) untested · **fix by deletion** · Settled: a window's last tab is removed before the window itself, so the reading in force at `windows.onRemoved` is always the teardown's own; earlier readings (wake swaps) are overwritten, never consumed. The declaration was dead code. Plan design item 1's "declare themselves" clause is withdrawn; its guarantee ("never read as a teardown") holds by ordering. The `tab-removed` trace keeps `isWindowClosing` and `heldFocus`.
+- F8 · AC6 "unfocused red-button close leaves the active app unchanged" untested with the browser frontmost · **fix** · test "closing an unfocused lil by its red button while a sibling lil holds focus restores nothing, even after a wake" — the wake swap makes the stale-reading case real, and the close still restores nothing.
+- F9 · ADR-0004 and glossary silent on host-resolved external-app identity · **fix (ADR only)** · one paragraph added to ADR-0004. The glossary entry already states the invariant ("not permanently fixed when the lil is created") without naming a mechanism, which is the glossary's job.
+- F10 · restore precedence inverted relative to the plan (recorded pid before history) · **needs adjudication → fix** · Settled per ADR-0004 and the plan: the host's live activation history wins; the recorded pid is the last resort only when the host has no history. A recorded pid before the history is creation-time identity, which the ADR supersedes. Host, tests, and PROTOCOL now say so.

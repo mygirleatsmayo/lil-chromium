@@ -19,15 +19,12 @@ enum ExternalAppRestorer {
         case launchServicesRequested = "launch-services-requested"
     }
 
-    /// The process a restore request names: the one recorded on the prior
-    /// context, or — when it recorded none because the user came back to the
-    /// browser from outside it — the app the activation history saw them leave.
+    /// The process a restore request brings forward: the app the activation
+    /// history saw the user leave (ADR-0004: live history, not creation
+    /// time), or, when the host has no history, the process the app recorded
+    /// when the lil opened.
     nonisolated static func target(pid: pid_t?, bundleId: String?, history: ActivatedApp?) -> ActivatedApp? {
-        switch (pid, history) {
-        case let (pid?, _): return ActivatedApp(pid: pid, bundleId: bundleId)
-        case let (nil, history?): return history
-        case (nil, nil): return nil
-        }
+        history ?? pid.map { ActivatedApp(pid: $0, bundleId: bundleId) }
     }
 
     @discardableResult
@@ -43,15 +40,16 @@ enum ExternalAppRestorer {
         let sameBundle = target.bundleId.map(NSRunningApplication.runningApplications(withBundleIdentifier:)) ?? []
         let eligible = ([exact].compactMap { $0 } + sameBundle.filter { $0.processIdentifier != target.pid })
             .filter { isEligible($0, bundleId: target.bundleId) }
-        guard let first = eligible.first else { return .noEligibleProcess }
+        guard let preferred = eligible.first else { return .noEligibleProcess }
 
-        for app in eligible where app.activate(options: [.activateIgnoringOtherApps]) {
+        for app in eligible {
+            guard app.activate(options: [.activateIgnoringOtherApps]) else { continue }
             return app === exact ? .activatedExactPid : .activatedByBundleId
         }
         // Direct activation from a faceless host is a request macOS may refuse
         // (research r01 §Q3); opening the bundle through NSWorkspace is the
         // documented cooperative-activation path, the one `open -a` takes.
-        guard let bundleURL = first.bundleURL else { return .activationRefused }
+        guard let bundleURL = preferred.bundleURL else { return .activationRefused }
         NSWorkspace.shared.openApplication(at: bundleURL, configuration: NSWorkspace.OpenConfiguration()) { _, error in
             hlog("[\(FocusTrace.tag)] restore-focus launch-services bundle=\(bundleURL.lastPathComponent)"
                  + " \(error.map { "error=\($0.localizedDescription)" } ?? "requested")")
