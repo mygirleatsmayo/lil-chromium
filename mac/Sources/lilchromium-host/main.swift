@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import LilShared
 
@@ -371,9 +372,15 @@ HostLog.shared.configure(slug: browserSlug)
 // The activation history is AppKit-backed and main-actor isolated, so it is
 // born here on the main thread and handed to the relay. The process is
 // single-threaded until the relay starts its workers, so the assumption holds.
+// The browser is excluded by its slug's bundle and, in case the slug is
+// unknown, by the process that launched this host.
 // verified: Apple Swift 6.4 toolchain in Swift 5 mode, 2026-09-17 — top-level
 // code is not main-actor isolated; without assumeIsolated the compiler rejects
 // this call as main actor-isolated from a nonisolated context.
-let activationHistory = MainActor.assumeIsolated { ActivationHistory.observing(forBrowser: browserSlug) }
+let browserBundleIds = Set(
+    [BrowserTable.bundleId(forSlug: browserSlug), NSRunningApplication(processIdentifier: getppid())?.bundleIdentifier]
+        .compactMap { $0 }
+)
+let activationHistory = MainActor.assumeIsolated { ActivationHistory.observing(excluding: browserBundleIds) }
 let relay = Relay(browserSlug: browserSlug, activationHistory: activationHistory)
 relay.run()

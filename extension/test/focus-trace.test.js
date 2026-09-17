@@ -146,6 +146,26 @@ test("closing a focused lil records what it restored and why", async () => {
   assert.deepEqual(restore.detail.priorContext, { kind: "normal-window", windowId: normal.id });
 });
 
+// Live trace 2026-09-17: Chromium hands key to a sibling window ~30 ms after
+// the closing lil's tab goes and before the window itself is reported gone.
+// A restoration that waits for window-removed lands after that handoff.
+test("a focused lil restores its prior context before Chromium hands key to a sibling", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver(arm());
+  const normal = await openPrimaryWindow(env);
+  const lil = await openLil(env);
+
+  await env.chrome.windows.remove(lil.id);
+
+  const restores = events(env, "restore-attempt");
+  const [removed] = events(env, "window-removed");
+  assert.equal(restores.length, 1, "restored exactly once across the teardown");
+  assert.equal(restores[0].detail.at, "tab-removed");
+  assert.ok(restores[0].seq < removed.seq, "restored before the window was reported gone");
+  assert.equal(env.windows().find((w) => w.focused).id, normal.id);
+});
+
 test("closing an unfocused lil records that no restoration was attempted", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));

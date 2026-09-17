@@ -1,4 +1,5 @@
 import Testing
+import LilShared
 @testable import lilchromium_host
 
 /// ADR-0004 (issue #31): which process a restore-focus request brings forward.
