@@ -69,3 +69,14 @@ Loop: `node scripts/focus-loop.mjs run --scenarios close/` — all three close s
 - L2 · after a focused close the restored app is frontmost but the primary browser window has risen one step (probe `afterClose` z-order: Mail 0, Helium 1, cmux 2 where `before` had Helium 2) · **fix** · Chromium's key handoff to the sibling fires 27–32 ms after `tab-removed` and before `window-removed`; the restoration was sent 2 ms after the handoff. The extension now restores at `tabs.onRemoved` when `isWindowClosing && heldFocus` (true in 6/6 closes in the trace), while the lil still holds key; `windows.onRemoved` restores only what teardown did not. Trace `restore-attempt` gains `at`. Test "a focused lil restores its prior context before Chromium hands key to a sibling" (red at `deaf518`).
 - L3 · extension manifest still `0.4.0` / `0.4.0-trial` on a changed build · **fix** · `0.4.1` / `0.4.1-issue-31`; the app footer already reads `git describe`.
 - L4 · "different apps respond differently" (Mail vs Finder vs Obsidian) · **settled, no action** · they were different paths, not different apps: a Mail link goes through LaunchServices (L1); the palette records a pid from the app's own history; the loop sends `open` from a script with Mail frontmost.
+
+## Remediation round 3 (pre-fix point `deaf518` → `68af155`)
+
+L1–L3 resolved. New in the delta:
+
+- N1 · `restoredAtTeardown` was set after an await, so `windows.onRemoved` (~30 ms later live) could restore a second time · **fix** · the teardown takes a promise per window synchronously (`teardownRestores`); `windows.onRemoved` awaits it instead of racing it.
+- N2 · the teardown path lacked the promotion guard `windows.onRemoved` has · **fix** · one predicate, `unwindsFocus`, used by both.
+- N3 · a two-tab lil (wake swap) restored once per tab · **fix** · same promise, taken once per window; the test now closes a two-tab lil and asserts one restoration.
+- N4 · with restoration earlier, a focus event that records nothing (`onFocusChanged(NONE)` as the restored app comes forward, or the refocus of the prior lil) can land between the handoff and `window-removed`, and both discarded the handoff transfer before `revertHandoffFrom` ran · **fix** · a non-recording focus event keeps a transfer whose source is mid-teardown (`endTransferUnlessHandoff`). Pinned by the existing test "each lil restores its recorded prior context from a nested external-app chain", which went red on the promise-based teardown for exactly this ordering.
+- N5 · `AGENTS.md` toolchain edit contradicts F3's "won't-fix here" · **settled, no action** · Lucas directed it ("AGENTS.md is stale then update it"); F3's disposition is superseded by that instruction.
+- N6 · `_ = OpenRouter.activationHistory` names nothing · **fix** · `OpenRouter.startActivationHistory()`.

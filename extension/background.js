@@ -292,8 +292,10 @@ safe(chrome.windows.getLastFocused({}), "getLastFocused seed").then((win) => {
 // reading, but the window's last tab is removed before the window is, so the
 // reading in force at windows.onRemoved is always the teardown's own.
 const teardownFocus = new Map(); // windowId -> held focus when teardown began
-// Lils whose prior context was restored at teardown, before the window went.
-const restoredAtTeardown = new Set();
+// windowId -> Promise<boolean>: whether the teardown restored the lil's prior
+// context itself. Taken once per window, so a multi-tab close restores once
+// and windows.onRemoved waits for it rather than racing it.
+const teardownRestores = new Map();
 
 // Restoring here, while the closing lil is still the key window, keeps the
 // key handoff from raising a sibling: once the prior context is in front
@@ -303,17 +305,29 @@ const restoredAtTeardown = new Set();
 // true in 6/6 closes (red button and windows.remove); the handoff to the
 // primary window fired 27–32 ms after tab-removed and left that window one
 // step below the restored app.
-chrome.tabs.onRemoved.addListener(async (tabId, info) => {
+chrome.tabs.onRemoved.addListener((tabId, info) => {
   const heldFocus = focusedWindowId === info.windowId;
   // LILFOCUS: the reading itself, plus Chromium's own closing flag.
   focusTrace("tab-removed", { tabId, windowId: info.windowId, isWindowClosing: !!info.isWindowClosing, heldFocus });
   teardownFocus.set(info.windowId, heldFocus);
-  if (!info.isWindowClosing || !heldFocus) return;
-  const prior = await lilPriorContext(info.windowId);
-  if (prior === undefined) return;
-  restoredAtTeardown.add(info.windowId);
-  await restorePriorContext(prior, "tab-removed");
+  if (info.isWindowClosing && unwindsFocus(info.windowId, heldFocus) && !teardownRestores.has(info.windowId)) {
+    teardownRestores.set(info.windowId, restoreAtTeardown(info.windowId));
+  }
 });
+
+// Whether a closing window that held focus gives it back. A successful
+// host/group promotion is a transfer, not an unwind.
+function unwindsFocus(windowId, heldFocus) {
+  return heldFocus && !promotingWindowIds.has(windowId);
+}
+
+// Resolves to whether `windowId` was a lil whose prior context was consulted.
+async function restoreAtTeardown(windowId) {
+  const prior = await lilPriorContext(windowId);
+  if (prior === undefined) return false;
+  await restorePriorContext(prior, "tab-removed");
+  return true;
+}
 
 // A registered lil's stored prior context; undefined for anything else.
 async function lilPriorContext(windowId) {
@@ -359,14 +373,15 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
   const previous = focusedWindowId;
   focusedWindowId = windowId;
   if (windowId === chrome.windows.WINDOW_ID_NONE) {
-    lastTransfer = null;
+    endTransferUnlessHandoff();
     focusTrace("focus-changed", { windowId, kind: "none" });
     return;
   }
   // Decided synchronously: a handoff's onRemoved may run before any await here resumes.
   everFocused.add(windowId);
   const skipHistory = explicitFocus.delete(windowId) || previous === windowId;
-  lastTransfer = skipHistory ? null : { to: windowId, from: previous, displaced: recordFocusHistory(windowId, previous) };
+  if (skipHistory) endTransferUnlessHandoff();
+  else lastTransfer = { to: windowId, from: previous, displaced: recordFocusHistory(windowId, previous) };
   const win = await safe(chrome.windows.get(windowId), "windows.get last-normal");
   focusTrace("focus-changed", async () => ({
     windowId,
@@ -377,6 +392,14 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     lastNormalWindowId = windowId;
   }
 });
+
+// A focus event that records no history ends the latest transfer, except a
+// key handoff from a window mid-teardown, which onRemoved has yet to revert:
+// the prior context restored at tab-removed can bring another window or app
+// forward before Chromium reports the closing window gone.
+function endTransferUnlessHandoff() {
+  if (lastTransfer && !teardownFocus.has(lastTransfer.from)) lastTransfer = null;
+}
 
 // The context a lil came from when the user brought it forward. Non-lil popups
 // (OAuth windows, DevTools) are transient and leave the history untouched.
@@ -1064,7 +1087,8 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
 
   const wasFocused = teardownFocus.has(windowId) ? teardownFocus.get(windowId) : focusedWindowId === windowId;
   teardownFocus.delete(windowId);
-  const restoredEarly = restoredAtTeardown.delete(windowId);
+  const teardownRestore = teardownRestores.get(windowId);
+  teardownRestores.delete(windowId);
   everFocused.delete(windowId);
   explicitFocus.delete(windowId);
   if (focusedWindowId === windowId) focusedWindowId = chrome.windows.WINDOW_ID_NONE;
@@ -1080,9 +1104,10 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
 
   await revertHandoffFrom(windowId);
 
-  // Consult the prior context exactly once, before deleting the lil's state.
-  // Successful host/group promotion is a transfer: skip unwind there only.
-  if (wasLil && wasFocused && !promoting && !restoredEarly) {
+  // Consult the prior context exactly once, before deleting the lil's state,
+  // unless the teardown already did.
+  const restoredEarly = (await teardownRestore) === true;
+  if (wasLil && unwindsFocus(windowId, wasFocused) && !restoredEarly) {
     await restorePriorContext(entry ? entry.priorContext : incognitoPriorContext, "window-removed");
   }
 

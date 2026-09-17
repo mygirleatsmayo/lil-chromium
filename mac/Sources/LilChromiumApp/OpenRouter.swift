@@ -108,7 +108,11 @@ enum OpenRouter {
     // with Lil Chromium itself frontmost (host log `appPriorContext=none`),
     // while the same URL sent by `open` from a script arrived with Mail
     // frontmost. LaunchServices activates the URL handler on the way in.
-    @MainActor static let activationHistory = ActivationHistory.observing()
+    @MainActor private static let activationHistory = ActivationHistory.observing()
+
+    /// Start watching now, while the app the user launched us from is still
+    /// frontmost; the first `open` is too late.
+    @MainActor static func startActivationHistory() { _ = activationHistory }
 
     /// The app the user was in, as an exact pid with a bundle-id fallback.
     /// Nil means no regular app has been active since launch.

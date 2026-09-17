@@ -43,11 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupStatusItem()
         registerHotKey()
-
-        // Start watching app activations now, while the app the user launched
-        // us from is still frontmost; an open reads this history, never the
-        // frontmost app of the moment.
-        _ = OpenRouter.activationHistory
+        OpenRouter.startActivationHistory()
 
         // First launch with no config: open Settings for onboarding.
         if isFirstRun {

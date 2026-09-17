@@ -149,12 +149,15 @@ test("closing a focused lil records what it restored and why", async () => {
 // Live trace 2026-09-17: Chromium hands key to a sibling window ~30 ms after
 // the closing lil's tab goes and before the window itself is reported gone.
 // A restoration that waits for window-removed lands after that handoff.
-test("a focused lil restores its prior context before Chromium hands key to a sibling", async () => {
+test("a focused lil restores its prior context once, before Chromium hands key to a sibling", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));
   await env.deliver(arm());
   const normal = await openPrimaryWindow(env);
   const lil = await openLil(env);
+  // Chromium reports each tab's removal as a window close; a wake swap can
+  // leave a lil with two.
+  await env.chrome.tabs.create({ windowId: lil.id, url: "https://example.com/second" });
 
   await env.chrome.windows.remove(lil.id);
 
