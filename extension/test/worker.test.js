@@ -2752,6 +2752,37 @@ test("restart restoration remaps a nested lil chain, which yields to live focus 
   assert.deepEqual(env.outgoing().at(-1), fixture("message-restore-focus-live"));
 });
 
+test("a worker that wakes with a normal window focused reads it as the context the user came from", async () => {
+  const parked = {
+    41: {
+      url: "https://parked.example/",
+      bounds: { left: 100, top: 100, width: 900, height: 700 },
+      expiry: "never",
+      lastInteraction: 1,
+      priorContext: { kind: "external-app", pid: 4242, bundleId: "com.apple.mail" },
+    },
+  };
+  const env = await boot({
+    windows: [{ type: "normal", url: "https://primary.example/", focused: true }],
+    storage: { ephemeralWindows: parked },
+  });
+  await env.startup();
+  const primary = env.windows().find((win) => win.type === "normal");
+  const lil = env.windows().find((win) => win.tabs[0].url === "https://parked.example/");
+
+  await env.chrome.windows.update(lil.id, { focused: true });
+  await env.flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(env.registry()[String(lil.id)].priorContext)), {
+    kind: "normal-window",
+    windowId: primary.id,
+  });
+
+  await env.chrome.windows.remove(lil.id);
+  await env.flush();
+  assert.equal(env.windows().find((win) => win.id === primary.id).focused, true);
+  assert.ok(!env.outgoing().some((msg) => msg.type === "restore-focus"));
+});
+
 test("an incognito lil is focused, in-memory only, and never restored", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));

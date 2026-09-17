@@ -143,10 +143,14 @@ export function createChrome(options = {}) {
   // macOS keys the application's most recently focused remaining window when
   // the key window closes; this order is what that handoff reads.
   const focusOrder = [];
-  function focusExclusive(id) {
-    for (const w of windows.values()) w.focused = w.id === id;
+  function forgetFocus(id) {
     const at = focusOrder.indexOf(id);
     if (at !== -1) focusOrder.splice(at, 1);
+  }
+
+  function focusExclusive(id) {
+    for (const w of windows.values()) w.focused = w.id === id;
+    forgetFocus(id);
     if (id !== WINDOW_ID_NONE) focusOrder.push(id);
   }
 
@@ -206,10 +210,12 @@ export function createChrome(options = {}) {
     return closeWindow(win);
   }
 
-  // Window teardown in the order Chromium on macOS produces it (issue #30 live
-  // trace, issue #31): the closing window's tabs are already gone; if it held
-  // focus, the key handoff to a sibling fires `onFocusChanged` *before*
-  // `onRemoved`, and only then does the window disappear.
+  // Window teardown in the order Chromium produces it (issue #31): the closing
+  // window's tabs are already gone; if it held focus, the key handoff to a
+  // sibling fires `onFocusChanged` *before* `onRemoved`, and only then does the
+  // window disappear.
+  // verified: Helium, issue #30 live trace 2026-08-26 — `focus-changed` to the
+  // sibling preceded `window-removed` in 26/26 focused closes.
   async function closeWindow(win) {
     if (win.focused) {
       const next = [...focusOrder].reverse().find((id) => id !== win.id && windows.has(id));
@@ -217,8 +223,7 @@ export function createChrome(options = {}) {
       await events.windows.onFocusChanged.fire(next === undefined ? WINDOW_ID_NONE : next);
     }
     windows.delete(win.id);
-    const at = focusOrder.indexOf(win.id);
-    if (at !== -1) focusOrder.splice(at, 1);
+    forgetFocus(win.id);
     record("windows.remove", { windowId: win.id });
     await events.windows.onRemoved.fire(win.id);
   }
@@ -280,6 +285,16 @@ export function createChrome(options = {}) {
     if (createdTab) await events.tabs.onCreated.fire(snapshotTab(createdTab));
     if (win.focused) await events.windows.onFocusChanged.fire(id);
     return snapshotWindow(win, tabs);
+  }
+
+  // Windows that exist before the worker boots (a worker respawn), created
+  // silently: Chromium raised their events before this worker lived.
+  for (const spec of options.windows || []) {
+    const id = nextWindowId++;
+    const win = { id, type: spec.type || "normal", left: 0, top: 0, width: 1100, height: 800, focused: false, incognito: false, tabIds: [] };
+    windows.set(id, win);
+    win.tabIds.push(addTab({ windowId: id, url: spec.url, active: true }).id);
+    if (spec.focused) focusExclusive(id);
   }
 
   const state = {

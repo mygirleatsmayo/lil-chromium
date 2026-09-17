@@ -268,22 +268,43 @@ function consumeClickHint(url) {
 // ===========================================================================
 
 let focusedWindowId = chrome.windows.WINDOW_ID_NONE;
+// A worker that wakes while the browser already holds focus must not read
+// that focus as "outside the browser": seed from Chromium unless a focus
+// event has already said otherwise.
+let focusEventSeen = false;
+safe(chrome.windows.getLastFocused({}), "getLastFocused seed").then((win) => {
+  if (!focusEventSeen && win && win.focused) focusedWindowId = win.id;
+});
 let lastNormalWindowId = chrome.windows.WINDOW_ID_NONE;
 
-// Teardown reading (issue #31). Chromium on macOS removes a closing window's
-// tabs first, hands key status to a sibling window, and only then fires
+// Teardown reading (issue #31). Chromium removes a closing window's tabs
+// first, hands key status to a sibling window, and only then fires
 // windows.onRemoved — so `focusedWindowId` at removal already names that
-// sibling (issue #30 live trace: 26/26 removals read "unfocused"). tabs.onRemoved
-// is the last event that still sees the closing window's own focus; the reading
-// taken there is consumed exactly once by windows.onRemoved.
+// sibling. tabs.onRemoved is the last event that still sees the closing
+// window's own focus; the reading taken there is consumed exactly once by
+// windows.onRemoved.
+// verified: Helium, issue #30 live trace 2026-08-26 — the handoff
+// `focus-changed` preceded `window-removed` in 26/26 focused closes, so a gate
+// read at removal said "unfocused" every time.
 const teardownFocus = new Map(); // windowId -> held focus when teardown began
 // Tab removals that keep their lil open (Lil Nap wake swaps) declare themselves
 // so they are never read as a teardown.
 const inPlaceRemovals = new Set();
 
 chrome.tabs.onRemoved.addListener((tabId, info) => {
-  if (inPlaceRemovals.delete(tabId)) return;
-  teardownFocus.set(info.windowId, focusedWindowId === info.windowId);
+  const inPlace = inPlaceRemovals.delete(tabId);
+  const heldFocus = focusedWindowId === info.windowId;
+  // LILFOCUS: the reading itself, plus Chromium's own closing flag so the
+  // live loop can tell whether that flag would have sufficed.
+  focusTrace("tab-removed", {
+    tabId,
+    windowId: info.windowId,
+    isWindowClosing: !!info.isWindowClosing,
+    inPlace,
+    heldFocus,
+  });
+  if (inPlace) return;
+  teardownFocus.set(info.windowId, heldFocus);
 });
 
 // Remove a tab whose window stays open. Rejects like chrome.tabs.remove.
@@ -314,7 +335,7 @@ focusTraceInit({ isLil: (windowId) => isEphemeralWindow(windowId) });
 //     recognisable once onRemoved follows, so the latest transfer remembers
 //     what it overwrote and onRemoved puts it back (revertHandoffFrom).
 const explicitFocus = new Set(); // window ids whose next focus event is the worker's doing
-const focusGainsSeen = new Set(); // window ids whose creation focus event has arrived
+const everFocused = new Set(); // window ids that have had a focus event (creation focus included)
 let lastTransfer = null; // { to, from, written: Promise<overwrote> } for the latest focus event
 
 // Explicit focus. Used after windows.create when a lil is asked to take focus.
@@ -329,6 +350,7 @@ async function focusWindow(windowId) {
 }
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
+  focusEventSeen = true;
   const previous = focusedWindowId;
   focusedWindowId = windowId;
   if (windowId === chrome.windows.WINDOW_ID_NONE) {
@@ -337,7 +359,7 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     return;
   }
   // Decided synchronously: a handoff's onRemoved may run before any await here resumes.
-  focusGainsSeen.add(windowId);
+  everFocused.add(windowId);
   const skipHistory = explicitFocus.delete(windowId) || previous === windowId;
   lastTransfer = skipHistory ? null : { to: windowId, from: previous, written: recordFocusHistory(windowId, previous) };
   const win = await safe(chrome.windows.get(windowId), "windows.get last-normal");
@@ -812,7 +834,7 @@ async function openLil(spec) {
   // The creation focus event is the worker's doing whichever side of this
   // line it lands on; if it is still to come, mark it so it keeps the
   // creation-time prior context chosen above.
-  if (focus && !focusGainsSeen.has(win.id)) explicitFocus.add(win.id);
+  if (focus && !everFocused.has(win.id)) explicitFocus.add(win.id);
 
   focusTraceLilCreated(win.id, {
     windowId: win.id,
@@ -1034,7 +1056,7 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
 
   const wasFocused = teardownFocus.has(windowId) ? teardownFocus.get(windowId) : focusedWindowId === windowId;
   teardownFocus.delete(windowId);
-  focusGainsSeen.delete(windowId);
+  everFocused.delete(windowId);
   explicitFocus.delete(windowId);
   if (focusedWindowId === windowId) focusedWindowId = chrome.windows.WINDOW_ID_NONE;
 

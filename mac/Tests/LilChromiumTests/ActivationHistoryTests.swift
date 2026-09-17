@@ -1,3 +1,4 @@
+import AppKit
 import Testing
 @testable import lilchromium_host
 
@@ -14,10 +15,21 @@ struct ActivationHistoryTests {
     @Test(.bug(id: 31)) func remembersTheLastAppActivatedOutsideTheBrowser() {
         let history = ActivationHistory(browserBundleIds: ["net.imput.helium"])
 
-        history.note(mail)
-        history.note(finder)
+        history.note(mail, policy: .regular)
+        history.note(finder, policy: .regular)
 
         #expect(history.lastExternal == finder)
+    }
+
+    /// The palette scenario (#31 QA addendum): LilChromiumApp is an accessory
+    /// app, so its activation over Mail must not make it the place to return to.
+    @Test(.bug(id: 31)) func anAccessoryAppActivatingOverTheUsersAppIsPassedOver() {
+        let history = ActivationHistory(browserBundleIds: ["net.imput.helium"])
+
+        history.note(mail, policy: .regular)
+        history.note(ActivatedApp(pid: 400, bundleId: "com.lilchromium.app"), policy: .accessory)
+
+        #expect(history.lastExternal == mail)
     }
 
     /// Bringing the browser forward (to click a lil) is the activation that
@@ -25,8 +37,8 @@ struct ActivationHistoryTests {
     @Test(.bug(id: 31)) func theBrowsersOwnActivationKeepsTheAppTheUserCameFrom() {
         let history = ActivationHistory(browserBundleIds: ["net.imput.helium"])
 
-        history.note(mail)
-        history.note(browser)
+        history.note(mail, policy: .regular)
+        history.note(browser, policy: .regular)
 
         #expect(history.lastExternal == mail)
     }

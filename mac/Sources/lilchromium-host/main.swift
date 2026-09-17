@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import LilShared
 
@@ -36,23 +35,16 @@ final class Relay {
     private let socketPath: String
     private let server: SocketServer
     // Where the user was before the browser, for restore-focus without a pid
-    // (ADR-0004). Created here, on the main thread, before the run loop parks.
+    // (ADR-0004). Main-actor state the entry point creates and hands in.
     private let activationHistory: ActivationHistory
 
-    init() {
-        let slug = BrowserDetect.detectParentBrowser()
+    init(browserSlug slug: String, activationHistory: ActivationHistory) {
         self.browserSlug = slug
         self.socketPath = LilPaths.socketPath(forBrowser: slug)
         self.server = SocketServer(path: self.socketPath)
+        self.activationHistory = activationHistory
         // Route logging to host-<slug>.log as early as possible.
         HostLog.shared.configure(slug: slug)
-        // The browser is known by its slug's bundle and, in case the slug is
-        // unknown, by the process that launched this host.
-        let browserBundleIds = Set(
-            [BrowserTable.bundleId(forSlug: slug), NSRunningApplication(processIdentifier: getppid())?.bundleIdentifier]
-                .compactMap { $0 }
-        )
-        self.activationHistory = MainActor.assumeIsolated { ActivationHistory.observing(browserBundleIds: browserBundleIds) }
     }
 
     // Map: history-query id -> the socket connection awaiting its result.
@@ -375,6 +367,11 @@ final class Relay {
     }
 }
 
-// Entry point.
-let relay = Relay()
+// Entry point. The activation history is AppKit-backed and main-actor
+// isolated, so it is born here on the main thread and handed to the relay.
+// Top-level code is not main-actor isolated in Swift 5 mode; the process is
+// single-threaded until the relay starts its workers, so the assumption holds.
+let browserSlug = BrowserDetect.detectParentBrowser()
+let activationHistory = MainActor.assumeIsolated { ActivationHistory.observing(forBrowser: browserSlug) }
+let relay = Relay(browserSlug: browserSlug, activationHistory: activationHistory)
 relay.run()

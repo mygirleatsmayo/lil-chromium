@@ -1,4 +1,5 @@
 import AppKit
+import LilShared
 
 /// A running application as the activation history sees it: enough to
 /// reactivate it later (exact process first, same bundle as fallback).
@@ -30,32 +31,39 @@ final class ActivationHistory {
         self.browserBundleIds = browserBundleIds
     }
 
-    /// Record an activation. The browser's own activations are the user coming
-    /// back to it; the app they left stays on record.
-    func note(_ app: ActivatedApp) {
+    /// Record an activation. Only regular apps (Dock, app switcher) are places
+    /// the user returns to: accessory apps such as menu-bar agents — this
+    /// relay's own LilChromiumApp among them — are passed over, and the
+    /// browser's own activations are the user coming back to it. Neither
+    /// displaces the app they left.
+    func note(_ app: ActivatedApp, policy: NSApplication.ActivationPolicy) {
+        guard policy == .regular else { return }
         if let bundleId = app.bundleId, browserBundleIds.contains(bundleId) { return }
         lastExternal = app
     }
 
-    /// A history seeded with the current frontmost app and kept current from
-    /// NSWorkspace's activation notifications. Only regular apps count: menu-bar
-    /// agents and other accessory apps (LilChromiumApp's palette among them)
-    /// activate briefly over the regular app the user is actually in.
-    static func observing(browserBundleIds: Set<String>) -> ActivationHistory {
+    /// A history for the browser that launched this host — known by its slug's
+    /// bundle and, in case the slug is unknown, by the launching process —
+    /// seeded with the current frontmost app and kept current from
+    /// NSWorkspace's activation notifications.
+    static func observing(forBrowser slug: String) -> ActivationHistory {
+        let browserBundleIds = Set(
+            [BrowserTable.bundleId(forSlug: slug), NSRunningApplication(processIdentifier: getppid())?.bundleIdentifier]
+                .compactMap { $0 }
+        )
         let history = ActivationHistory(browserBundleIds: browserBundleIds)
-        if let app = NSWorkspace.shared.frontmostApplication { history.noteIfRegular(app) }
+        if let app = NSWorkspace.shared.frontmostApplication { history.note(app) }
         _ = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { notification in
             guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
             else { return }
-            MainActor.assumeIsolated { history.noteIfRegular(app) }
+            MainActor.assumeIsolated { history.note(app) }
         }
         return history
     }
 
-    private func noteIfRegular(_ app: NSRunningApplication) {
-        guard app.activationPolicy == .regular else { return }
-        note(ActivatedApp(app))
+    private func note(_ app: NSRunningApplication) {
+        note(ActivatedApp(app), policy: app.activationPolicy)
     }
 }

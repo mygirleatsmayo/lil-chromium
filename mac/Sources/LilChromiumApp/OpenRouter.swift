@@ -75,9 +75,9 @@ enum OpenRouter {
     /// incognito open that finds no relay degrades to a normal browser launch.
     static func open(_ urlString: String, left: Int, top: Int, incognito: Bool = false) {
         // Capture before the relay can ask Chromium to create/focus the lil.
-        // A browser-focused predecessor is identified more precisely by the
-        // extension; this native value is used only when Chromium reports no
-        // focused window.
+        // A browser-focused prior context is identified more precisely by the
+        // extension; this native value starts the lil's focus history only
+        // when Chromium reports no focused window.
         let priorContext = externalPriorContext()
         DispatchQueue.global(qos: .userInitiated).async {
             do {
@@ -102,7 +102,7 @@ enum OpenRouter {
     }
 
     /// The frontmost non-Lil-Chromium process, recorded as an exact pid with a
-    /// bundle-id fallback. Nil means there is no eligible external predecessor.
+    /// bundle-id fallback. Nil means there is no eligible external app.
     private static func externalPriorContext() -> PriorContext? {
         guard let app = NSWorkspace.shared.frontmostApplication,
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {

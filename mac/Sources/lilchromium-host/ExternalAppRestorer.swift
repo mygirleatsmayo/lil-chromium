@@ -19,20 +19,25 @@ enum ExternalAppRestorer {
         case launchServicesRequested = "launch-services-requested"
     }
 
-    /// A prior context that names a process is restored as recorded; one that
-    /// does not (the user came back to the browser from outside it) is the
-    /// app the activation history saw them leave.
+    /// The process a restore request names: the one recorded on the prior
+    /// context, or — when it recorded none because the user came back to the
+    /// browser from outside it — the app the activation history saw them leave.
+    nonisolated static func target(pid: pid_t?, bundleId: String?, history: ActivatedApp?) -> ActivatedApp? {
+        switch (pid, history) {
+        case let (pid?, _): return ActivatedApp(pid: pid, bundleId: bundleId)
+        case let (nil, history?): return history
+        case (nil, nil): return nil
+        }
+    }
+
     @discardableResult
     static func restore(_ priorContext: PriorContext, history: ActivatedApp?) -> Outcome {
         guard case let .externalApp(recordedPid, recordedBundleId) = priorContext else {
             hlog("host: restore-focus ignored non-external prior context")
             return .notExternal
         }
-        let target: ActivatedApp
-        switch (recordedPid, history) {
-        case let (pid?, _): target = ActivatedApp(pid: pid, bundleId: recordedBundleId)
-        case let (nil, history?): target = history
-        case (nil, nil): return .noActivationHistory
+        guard let target = target(pid: recordedPid, bundleId: recordedBundleId, history: history) else {
+            return .noActivationHistory
         }
         let (pid, bundleId) = (target.pid, target.bundleId)
 
