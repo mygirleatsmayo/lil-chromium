@@ -16,6 +16,7 @@ enum ExternalAppRestorer {
         case noEligibleProcess = "no-eligible-process"
         case activationRefused = "activation-refused"
         case noActivationHistory = "no-activation-history"
+        case launchServicesRequested = "launch-services-requested"
     }
 
     /// A prior context that names a process is restored as recorded; one that
@@ -36,20 +37,23 @@ enum ExternalAppRestorer {
         let (pid, bundleId) = (target.pid, target.bundleId)
 
         let exact = NSRunningApplication(processIdentifier: pid)
-        if let exact, isEligible(exact, bundleId: bundleId),
-           exact.activate(options: [.activateIgnoringOtherApps]) {
-            return .activatedExactPid
-        }
-
-        guard let bundleId, !bundleId.isEmpty else {
-            return exact == nil ? .noEligibleProcess : .activationRefused
-        }
-        let siblings = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId)
+        let sameBundle = bundleId.map(NSRunningApplication.runningApplications(withBundleIdentifier:)) ?? []
+        let eligible = ([exact].compactMap { $0 } + sameBundle.filter { $0.processIdentifier != pid })
             .filter { isEligible($0, bundleId: bundleId) }
-        for app in siblings {
-            if app.activate(options: [.activateIgnoringOtherApps]) { return .activatedByBundleId }
+        guard let first = eligible.first else { return .noEligibleProcess }
+
+        for app in eligible where app.activate(options: [.activateIgnoringOtherApps]) {
+            return app === exact ? .activatedExactPid : .activatedByBundleId
         }
-        return siblings.isEmpty && exact == nil ? .noEligibleProcess : .activationRefused
+        // Direct activation from a faceless host is a request macOS may refuse
+        // (research r01 §Q3); opening the bundle through NSWorkspace is the
+        // documented cooperative-activation path, the one `open -a` takes.
+        guard let bundleURL = first.bundleURL else { return .activationRefused }
+        NSWorkspace.shared.openApplication(at: bundleURL, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            hlog("[\(FocusTrace.tag)] restore-focus launch-services bundle=\(bundleURL.lastPathComponent)"
+                 + " \(error.map { "error=\($0.localizedDescription)" } ?? "requested")")
+        }
+        return .launchServicesRequested
     }
 
     private static func isEligible(_ app: NSRunningApplication, bundleId: String?) -> Bool {
