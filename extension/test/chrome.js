@@ -106,7 +106,7 @@ export function createChrome(options = {}) {
   const events = {
     runtime: { onMessage: makeEvent(), onStartup: makeEvent(), onInstalled: makeEvent() },
     windows: { onFocusChanged: makeEvent(), onBoundsChanged: makeEvent(), onRemoved: makeEvent() },
-    tabs: { onCreated: makeEvent(), onUpdated: makeEvent(), onActivated: makeEvent() },
+    tabs: { onCreated: makeEvent(), onUpdated: makeEvent(), onActivated: makeEvent(), onRemoved: makeEvent() },
     webNavigation: { onCreatedNavigationTarget: makeEvent() },
     alarms: { onAlarm: makeEvent() },
     contextMenus: { onClicked: makeEvent() },
@@ -140,8 +140,14 @@ export function createChrome(options = {}) {
     return Promise.reject(new Error(`No ${kind} with id ${id}`));
   }
 
+  // macOS keys the application's most recently focused remaining window when
+  // the key window closes; this order is what that handoff reads.
+  const focusOrder = [];
   function focusExclusive(id) {
     for (const w of windows.values()) w.focused = w.id === id;
+    const at = focusOrder.indexOf(id);
+    if (at !== -1) focusOrder.splice(at, 1);
+    if (id !== WINDOW_ID_NONE) focusOrder.push(id);
   }
 
   function addTab({ windowId, url, active = true, openerTabId, incognito = false, title = "" }) {
@@ -197,9 +203,32 @@ export function createChrome(options = {}) {
   function closeWindowIfEmpty(windowId) {
     const win = windows.get(windowId);
     if (!win || win.tabIds.length) return Promise.resolve();
-    windows.delete(windowId);
-    record("windows.remove", { windowId });
-    return events.windows.onRemoved.fire(windowId);
+    return closeWindow(win);
+  }
+
+  // Window teardown in the order Chromium on macOS produces it (issue #30 live
+  // trace, issue #31): the closing window's tabs are already gone; if it held
+  // focus, the key handoff to a sibling fires `onFocusChanged` *before*
+  // `onRemoved`, and only then does the window disappear.
+  async function closeWindow(win) {
+    if (win.focused) {
+      const next = [...focusOrder].reverse().find((id) => id !== win.id && windows.has(id));
+      focusExclusive(next === undefined ? WINDOW_ID_NONE : next);
+      await events.windows.onFocusChanged.fire(next === undefined ? WINDOW_ID_NONE : next);
+    }
+    windows.delete(win.id);
+    const at = focusOrder.indexOf(win.id);
+    if (at !== -1) focusOrder.splice(at, 1);
+    record("windows.remove", { windowId: win.id });
+    await events.windows.onRemoved.fire(win.id);
+  }
+
+  async function removeTab(tab, isWindowClosing) {
+    const win = windows.get(tab.windowId);
+    if (win) win.tabIds = win.tabIds.filter((tid) => tid !== tab.id);
+    tabs.delete(tab.id);
+    record("tabs.remove", { tabId: tab.id });
+    await events.tabs.onRemoved.fire(tab.id, { windowId: tab.windowId, isWindowClosing });
   }
 
   async function createWindow(opts = {}) {
@@ -355,10 +384,8 @@ export function createChrome(options = {}) {
       async remove(id) {
         if (!windows.has(id)) return rejectMissing("window", id);
         const win = windows.get(id);
-        for (const tabId of [...win.tabIds]) tabs.delete(tabId);
-        windows.delete(id);
-        record("windows.remove", { windowId: id });
-        await events.windows.onRemoved.fire(id);
+        for (const tabId of [...win.tabIds]) await removeTab(tabs.get(tabId), true);
+        await closeWindow(win);
       },
       onFocusChanged: events.windows.onFocusChanged,
       onBoundsChanged: events.windows.onBoundsChanged,
@@ -415,10 +442,7 @@ export function createChrome(options = {}) {
         if (!tab) return rejectMissing("tab", id);
         if (rejectTabRemove(id)) return Promise.reject(new Error("tabs.remove failed"));
         const windowId = tab.windowId;
-        const win = windows.get(windowId);
-        if (win) win.tabIds = win.tabIds.filter((tid) => tid !== id);
-        tabs.delete(id);
-        record("tabs.remove", { tabId: id });
+        await removeTab(tab, false);
         await closeWindowIfEmpty(windowId);
       },
       async create(opts = {}) {
@@ -494,6 +518,7 @@ export function createChrome(options = {}) {
       onCreated: events.tabs.onCreated,
       onUpdated: events.tabs.onUpdated,
       onActivated: events.tabs.onActivated,
+      onRemoved: events.tabs.onRemoved,
     },
     runtime: {
       get lastError() {

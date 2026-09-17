@@ -270,6 +270,33 @@ function consumeClickHint(url) {
 let focusedWindowId = chrome.windows.WINDOW_ID_NONE;
 let lastNormalWindowId = chrome.windows.WINDOW_ID_NONE;
 
+// Teardown reading (issue #31). Chromium on macOS removes a closing window's
+// tabs first, hands key status to a sibling window, and only then fires
+// windows.onRemoved — so `focusedWindowId` at removal already names that
+// sibling (issue #30 live trace: 26/26 removals read "unfocused"). tabs.onRemoved
+// is the last event that still sees the closing window's own focus; the reading
+// taken there is consumed exactly once by windows.onRemoved.
+const teardownFocus = new Map(); // windowId -> held focus when teardown began
+// Tab removals that keep their lil open (Lil Nap wake swaps) declare themselves
+// so they are never read as a teardown.
+const inPlaceRemovals = new Set();
+
+chrome.tabs.onRemoved.addListener((tabId, info) => {
+  if (inPlaceRemovals.delete(tabId)) return;
+  teardownFocus.set(info.windowId, focusedWindowId === info.windowId);
+});
+
+// Remove a tab whose window stays open. Rejects like chrome.tabs.remove.
+async function removeTabInPlace(tabId) {
+  inPlaceRemovals.add(tabId);
+  try {
+    await chrome.tabs.remove(tabId);
+  } catch (err) {
+    inPlaceRemovals.delete(tabId);
+    throw err;
+  }
+}
+
 // LILFOCUS: let the diagnostic seam tell lils from ordinary windows without
 // exporting the registry to it.
 focusTraceInit({ isLil: (windowId) => isEphemeralWindow(windowId) });
@@ -929,8 +956,9 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
   const entry = reg[String(windowId)];
   const wasLil = !!entry || wasIncognito;
 
-  const wasFocused = focusedWindowId === windowId;
-  if (wasFocused) focusedWindowId = chrome.windows.WINDOW_ID_NONE;
+  const wasFocused = teardownFocus.has(windowId) ? teardownFocus.get(windowId) : focusedWindowId === windowId;
+  teardownFocus.delete(windowId);
+  if (focusedWindowId === windowId) focusedWindowId = chrome.windows.WINDOW_ID_NONE;
 
   const promoting = promotingWindowIds.has(windowId);
   focusTrace("window-removed", {
@@ -1486,7 +1514,7 @@ async function wakeLil(windowId) {
     // place, clear nap state, or report success.
     if (freshTab && freshTab.id !== undefined) {
       try {
-        await chrome.tabs.remove(freshTab.id);
+        await removeTabInPlace(freshTab.id);
       } catch (err) {
         log("wakeLil: misplaced preload cleanup failed for", windowId, err && err.message ? err.message : err);
         return false;
@@ -1511,18 +1539,18 @@ async function wakeLil(windowId) {
   // reports failure, so the nap page's own fallback can fire.
   const activated = await safe(chrome.tabs.update(freshTab.id, { active: true }), "tabs.update wake activate");
   if (!activated) {
-    await safe(chrome.tabs.remove(freshTab.id), "tabs.remove wake preload");
+    await safe(removeTabInPlace(freshTab.id), "tabs.remove wake preload");
     log("wakeLil: fresh tab activation failed for", windowId);
     return false;
   }
   try {
-    await chrome.tabs.remove(napTab.id);
+    await removeTabInPlace(napTab.id);
   } catch (err) {
     // The nap document survived: put it back in front and drop the preload so
     // the visible lil and the registry tell the same nap truth.
     log("wakeLil: nap tab removal failed for", windowId, err && err.message ? err.message : err);
     await safe(chrome.tabs.update(napTab.id, { active: true }), "tabs.update wake rollback");
-    await safe(chrome.tabs.remove(freshTab.id), "tabs.remove wake preload");
+    await safe(removeTabInPlace(freshTab.id), "tabs.remove wake preload");
     return false;
   }
   await clearNapState(windowId, originalUrl, captureKey);
