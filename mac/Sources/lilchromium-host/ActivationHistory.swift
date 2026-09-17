@@ -47,8 +47,9 @@ final class ActivationHistory {
         external.append(app)
     }
 
-    /// An app that quit is nowhere the user can return to; the one they were
-    /// in before it takes its place.
+    /// Drop an app from the history: one that quit is nowhere the user can
+    /// return to (the one they were in before it takes its place), and one
+    /// being re-noted moves to the most recent slot.
     func forget(pid: pid_t) {
         external.removeAll { $0.pid == pid }
     }
@@ -71,6 +72,8 @@ final class ActivationHistory {
             else { return }
             MainActor.assumeIsolated { history.note(app) }
         }
+        // verified: macOS 27, 2026-09-17 — the terminated NSRunningApplication in
+        // the notification still reports its real pid (isTerminated true), not -1.
         _ = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
         ) { notification in
