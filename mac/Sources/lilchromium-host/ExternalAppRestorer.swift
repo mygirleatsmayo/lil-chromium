@@ -15,14 +15,25 @@ enum ExternalAppRestorer {
         case activatedByBundleId = "activated-by-bundle-id"
         case noEligibleProcess = "no-eligible-process"
         case activationRefused = "activation-refused"
+        case noActivationHistory = "no-activation-history"
     }
 
+    /// A prior context that names a process is restored as recorded; one that
+    /// does not (the user came back to the browser from outside it) is the
+    /// app the activation history saw them leave.
     @discardableResult
-    static func restore(_ priorContext: PriorContext) -> Outcome {
-        guard case let .externalApp(pid, bundleId) = priorContext else {
+    static func restore(_ priorContext: PriorContext, history: ActivatedApp?) -> Outcome {
+        guard case let .externalApp(recordedPid, recordedBundleId) = priorContext else {
             hlog("host: restore-focus ignored non-external prior context")
             return .notExternal
         }
+        let target: ActivatedApp
+        switch (recordedPid, history) {
+        case let (pid?, _): target = ActivatedApp(pid: pid, bundleId: recordedBundleId)
+        case let (nil, history?): target = history
+        case (nil, nil): return .noActivationHistory
+        }
+        let (pid, bundleId) = (target.pid, target.bundleId)
 
         let exact = NSRunningApplication(processIdentifier: pid)
         if let exact, isEligible(exact, bundleId: bundleId),

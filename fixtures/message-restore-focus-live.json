@@ -1,0 +1,6 @@
+{
+  "type": "restore-focus",
+  "priorContext": {
+    "kind": "external-app"
+  }
+}

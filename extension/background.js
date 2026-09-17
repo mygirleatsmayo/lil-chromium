@@ -301,18 +301,45 @@ async function removeTabInPlace(tabId) {
 // exporting the registry to it.
 focusTraceInit({ isLil: (windowId) => isEphemeralWindow(windowId) });
 
+// Focus history (ADR-0004, issue #31). A lil follows ordinary macOS focus
+// history as if it were its own app: each time the user brings a registered
+// lil forward, its prior context becomes the context they came from — the
+// previously focused lil, the previously focused normal window, or the
+// external app when Chromium had no focused window. Two kinds of focus change
+// are not the user coming from somewhere and leave the history alone:
+//   - explicit focus the worker asked for (creation focus, restoration, the
+//     same-lil refocus), tracked per window in `explicitFocus`;
+//   - Chromium's key handoff to a sibling when a focused window closes, which
+//     on macOS arrives before that window's onRemoved. The handoff is only
+//     recognisable once onRemoved follows, so the latest transfer remembers
+//     what it overwrote and onRemoved puts it back (revertHandoffFrom).
+const explicitFocus = new Set(); // window ids whose next focus event is the worker's doing
+const focusGainsSeen = new Set(); // window ids whose creation focus event has arrived
+let lastTransfer = null; // { to, from, written: Promise<overwrote> } for the latest focus event
+
 // Explicit focus. Used after windows.create when a lil is asked to take focus.
+// A window Chromium already reports focused raises no event for the update,
+// so it is not marked: the mark would outlive the update and swallow the
+// user's next genuine focus of that window.
 async function focusWindow(windowId) {
   if (typeof windowId !== "number") return;
-  await safe(chrome.windows.update(windowId, { focused: true }), "windows.update focus");
+  if (focusedWindowId !== windowId) explicitFocus.add(windowId);
+  const win = await safe(chrome.windows.update(windowId, { focused: true }), "windows.update focus");
+  if (!win) explicitFocus.delete(windowId);
 }
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
+  const previous = focusedWindowId;
   focusedWindowId = windowId;
   if (windowId === chrome.windows.WINDOW_ID_NONE) {
+    lastTransfer = null;
     focusTrace("focus-changed", { windowId, kind: "none" });
     return;
   }
+  // Decided synchronously: a handoff's onRemoved may run before any await here resumes.
+  focusGainsSeen.add(windowId);
+  const skipHistory = explicitFocus.delete(windowId) || previous === windowId;
+  lastTransfer = skipHistory ? null : { to: windowId, from: previous, written: recordFocusHistory(windowId, previous) };
   const win = await safe(chrome.windows.get(windowId), "windows.get last-normal");
   focusTrace("focus-changed", async () => ({
     windowId,
@@ -323,6 +350,47 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     lastNormalWindowId = windowId;
   }
 });
+
+// The context a lil came from when the user brought it forward. Non-lil popups
+// (OAuth windows, DevTools) are transient and leave the history untouched.
+async function priorContextOf(previousWindowId) {
+  if (previousWindowId === chrome.windows.WINDOW_ID_NONE) return { kind: "external-app" };
+  if (await isEphemeralWindow(previousWindowId)) return { kind: "lil", windowId: previousWindowId };
+  const win = await safe(chrome.windows.get(previousWindowId), "windows.get prior context");
+  return win && win.type === "normal" ? { kind: "normal-window", windowId: previousWindowId } : undefined;
+}
+
+// Resolves to the prior context this write replaced (see setPriorContext).
+async function recordFocusHistory(windowId, previousWindowId) {
+  const prior = await priorContextOf(previousWindowId);
+  return prior === undefined ? undefined : setPriorContext(windowId, prior);
+}
+
+// Put back the prior context a key handoff from `closingWindowId` overwrote.
+async function revertHandoffFrom(closingWindowId) {
+  const transfer = lastTransfer;
+  if (!transfer || transfer.from !== closingWindowId) return;
+  lastTransfer = null;
+  const overwrote = await transfer.written;
+  if (overwrote !== undefined) await setPriorContext(transfer.to, overwrote);
+}
+
+// Write a lil's prior context; returns the value it replaced, or undefined
+// when `windowId` is not a lil.
+async function setPriorContext(windowId, prior) {
+  if (incognitoLils.has(windowId)) {
+    const overwrote = incognitoPriorContexts.get(windowId) || null;
+    incognitoPriorContexts.set(windowId, prior);
+    return overwrote;
+  }
+  const reg = await getRegistry();
+  const entry = reg[String(windowId)];
+  if (!entry) return undefined;
+  const overwrote = normalizePriorContext(entry.priorContext);
+  entry.priorContext = prior;
+  await setRegistry(reg);
+  return overwrote;
+}
 
 // ===========================================================================
 // NATIVE PORT — load-bearing keep-alive (unchanged from v2 except handshake).
@@ -616,8 +684,11 @@ function normalizePriorContext(value) {
   if ((value.kind === "lil" || value.kind === "normal-window") && Number.isInteger(value.windowId)) {
     return { kind: value.kind, windowId: value.windowId };
   }
-  if (value.kind === "external-app" && Number.isInteger(value.pid) && value.pid > 0) {
-    const context = { kind: "external-app", pid: value.pid };
+  if (value.kind === "external-app") {
+    // Without a pid the external app is whichever one the user came from;
+    // only the host's activation history knows it (PROTOCOL restore-focus).
+    const context = { kind: "external-app" };
+    if (Number.isInteger(value.pid) && value.pid > 0) context.pid = value.pid;
     if (typeof value.bundleId === "string" && value.bundleId) context.bundleId = value.bundleId;
     return context;
   }
@@ -692,7 +763,7 @@ async function restorePriorContext(priorContext) {
  *   size         {width, height}; defaults to the remembered last user size.
  *   focus        Ask for focus after create (default true).
  *   incognito    In-memory-only lil: never registered, never restored.
- *   priorContext Explicit related lil/normal-window predecessor.
+ *   priorContext Explicit related lil/normal-window the focus history starts from.
  *   appSuppliedPriorContext App-supplied prior-context candidate, eligible
  *                only when Chromium has no focused window.
  *   recordUrl    URL to store in the registry. Defaults to `url`, then the
@@ -737,6 +808,11 @@ async function openLil(spec) {
     focusTrace("lil-create-failed", { url: spec.url });
     return null;
   }
+
+  // The creation focus event is the worker's doing whichever side of this
+  // line it lands on; if it is still to come, mark it so it keeps the
+  // creation-time prior context chosen above.
+  if (focus && !focusGainsSeen.has(win.id)) explicitFocus.add(win.id);
 
   focusTraceLilCreated(win.id, {
     windowId: win.id,
@@ -958,6 +1034,8 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
 
   const wasFocused = teardownFocus.has(windowId) ? teardownFocus.get(windowId) : focusedWindowId === windowId;
   teardownFocus.delete(windowId);
+  focusGainsSeen.delete(windowId);
+  explicitFocus.delete(windowId);
   if (focusedWindowId === windowId) focusedWindowId = chrome.windows.WINDOW_ID_NONE;
 
   const promoting = promotingWindowIds.has(windowId);
@@ -969,7 +1047,9 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
     priorContext: normalizePriorContext(entry ? entry.priorContext : incognitoPriorContext),
   });
 
-  // Consult the predecessor exactly once, before deleting the lil's state.
+  await revertHandoffFrom(windowId);
+
+  // Consult the prior context exactly once, before deleting the lil's state.
   // Successful host/group promotion is a transfer: skip unwind there only.
   if (wasLil && wasFocused && !promoting) {
     await restorePriorContext(entry ? entry.priorContext : incognitoPriorContext);
@@ -1787,7 +1867,7 @@ async function openLinkInThisLil(windowId, url) {
   }
 }
 
-// Fresh lil for a link. Names the invoking window as predecessor so a normal
+// Fresh lil for a link. Names the invoking window as prior context so a normal
 // tab's "new lil" action does not pretend the source was already a lil.
 async function openLinkInNewLil(tab, url) {
   if (typeof url !== "string" || !url || !tab || tab.windowId === undefined) return null;

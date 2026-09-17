@@ -43,7 +43,7 @@ let package = Package(
         // which the Node/MV3 suite reads too — nothing is bundled into the target.
         .testTarget(
             name: "LilChromiumTests",
-            dependencies: ["LilShared", "LilChromiumApp", "LilFocusProbe"],
+            dependencies: ["LilShared", "LilChromiumApp", "LilFocusProbe", "lilchromium-host"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         )
     ]
