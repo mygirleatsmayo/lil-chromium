@@ -35,7 +35,7 @@ All fix-marked findings resolved except the S7 residual above. New in the delta:
 - R3 · top-level isolation comment carries an unmarked toolchain claim · **fix** · `verified:` marker with the toolchain and the compiler diagnostic observed.
 - R4 · ledger exists only on the branch, `main` owns `.mayosdd/` · **settled, no action** · this branch merges into `main`; the ledger and the live evidence land there with it, never only on the trial worktree.
 
-## Final full review (fixed point `ffddb3c`, HEAD `50450d9`)
+## Final full review (fixed point `ffddb3c`, HEAD `50452d9`)
 
 Two axes again; ledger passed along. New findings only.
 
