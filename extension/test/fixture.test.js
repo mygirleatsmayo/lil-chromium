@@ -8,11 +8,16 @@ import { fixture, fixtureBytes, fixtureDirectory } from "./fixture.js";
 const SHARED = [
   "config-v1-legacy",
   "config-v2-complete",
+  "config-v3-complete",
   "config-with-unknown-fields",
+  "message-config-update",
   "message-context",
   "message-history-result",
   "message-open-legacy",
+  "message-open-prior-context",
+  "message-open-settings",
   "message-pong-legacy",
+  "message-restore-focus",
 ];
 
 test("fixture directory is repo-root fixtures, resolved from this file", () => {

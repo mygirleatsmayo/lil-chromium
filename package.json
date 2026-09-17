@@ -3,10 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test extension/test/*.test.js"
+    "test": "node --test extension/test/*.test.js scripts/focus-loop/*.test.mjs"
   },
   "engines": {
     "node": ">=20"
   },
-  "packageManager": "pnpm@11.21.0"
+  "packageManager": "pnpm@11.21.0",
+  "devDependencies": {
+    "linkedom": "^0.18.13"
+  }
 }

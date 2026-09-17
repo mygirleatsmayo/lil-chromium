@@ -18,8 +18,67 @@ public enum MessageType: String, Codable, Sendable {
     case getContext = "get-context"
     case context
     case openExternal = "open-external"
+    case restoreFocus = "restore-focus"
     // v3: extension -> host, edits sleep.whitelist in config.json.
     case whitelistOp = "whitelist-op"
+    // v4: extension -> host, open native Settings (never forwarded).
+    case openSettings = "open-settings"
+    // v4 (issue #12): app -> every relay -> extension, hot-applied Settings write.
+    case configUpdate = "config-update"
+    // LILFOCUS (issue #30): private diagnostic control, harness -> relay ->
+    // extension. Never sent by the app or the host; see FocusTraceControl.swift.
+    case lilFocusTrace = "lil-focus-trace"
+}
+
+/// The exact context that was active before one lil took focus. Browser window
+/// identities are meaningful only to the extension instance that recorded
+/// them; external applications carry an exact process id plus an optional
+/// bundle-id fallback for native restoration.
+public enum PriorContext: Codable, Equatable, Sendable {
+    case lil(windowId: Int)
+    case normalWindow(windowId: Int)
+    case externalApp(pid: Int32, bundleId: String?)
+
+    private enum Kind: String, Codable {
+        case lil
+        case normalWindow = "normal-window"
+        case externalApp = "external-app"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, windowId, pid, bundleId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .lil:
+            self = .lil(windowId: try container.decode(Int.self, forKey: .windowId))
+        case .normalWindow:
+            self = .normalWindow(windowId: try container.decode(Int.self, forKey: .windowId))
+        case .externalApp:
+            self = .externalApp(
+                pid: try container.decode(Int32.self, forKey: .pid),
+                bundleId: try container.decodeIfPresent(String.self, forKey: .bundleId)
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .lil(windowId):
+            try container.encode(Kind.lil, forKey: .kind)
+            try container.encode(windowId, forKey: .windowId)
+        case let .normalWindow(windowId):
+            try container.encode(Kind.normalWindow, forKey: .kind)
+            try container.encode(windowId, forKey: .windowId)
+        case let .externalApp(pid, bundleId):
+            try container.encode(Kind.externalApp, forKey: .kind)
+            try container.encode(pid, forKey: .pid)
+            try container.encodeIfPresent(bundleId, forKey: .bundleId)
+        }
+    }
 }
 
 /// Minimal envelope: decode just enough to route/dispatch, ignore the rest.
@@ -44,19 +103,27 @@ public struct OpenMessage: Codable, Sendable {
     public let left: Int
     public let top: Int
     public let incognito: Bool?
+    public let priorContext: PriorContext?
 
     // Explicit CodingKeys: both init(from:) and encode(to:) are custom, so we
     // declare the keys rather than depend on synthesis.
     private enum CodingKeys: String, CodingKey {
-        case type, url, left, top, incognito
+        case type, url, left, top, incognito, priorContext
     }
 
-    public init(url: String, left: Int, top: Int, incognito: Bool? = nil) {
+    public init(
+        url: String,
+        left: Int,
+        top: Int,
+        incognito: Bool? = nil,
+        priorContext: PriorContext? = nil
+    ) {
         self.type = MessageType.open.rawValue
         self.url = url
         self.left = left
         self.top = top
         self.incognito = incognito
+        self.priorContext = priorContext
     }
 
     // Tolerate a v1/v2 open that lacks `incognito`.
@@ -69,6 +136,7 @@ public struct OpenMessage: Codable, Sendable {
         // decodeIfPresent -> Bool?; wrap in try? and flatten the Bool?? so a
         // decode error or a missing/null key both collapse to nil.
         self.incognito = (try? c.decodeIfPresent(Bool.self, forKey: .incognito)) ?? nil
+        self.priorContext = try c.decodeIfPresent(PriorContext.self, forKey: .priorContext)
     }
 
     // Encode `incognito` only when present so we never emit `"incognito":null`.
@@ -79,6 +147,20 @@ public struct OpenMessage: Codable, Sendable {
         try c.encode(left, forKey: .left)
         try c.encode(top, forKey: .top)
         try c.encodeIfPresent(incognito, forKey: .incognito)
+        try c.encodeIfPresent(priorContext, forKey: .priorContext)
+    }
+}
+
+/// extension -> host: restore an external app after its successor lil closes.
+/// Browser-window predecessors are restored inside the extension and never
+/// cross the native boundary.
+public struct RestoreFocusMessage: Codable, Sendable {
+    public let type: String
+    public let priorContext: PriorContext
+
+    public init(priorContext: PriorContext) {
+        self.type = MessageType.restoreFocus.rawValue
+        self.priorContext = priorContext
     }
 }
 
@@ -214,8 +296,8 @@ public struct ContextMessage: Codable, Sendable {
     public let id: String
     public let browser: String
     public let browserName: String
-    public let defaultBrowser: String
-    public let defaultBrowserName: String
+    public let primaryBrowser: String
+    public let primaryBrowserName: String
     public let fallbackBrowser: String
     public let linkBehavior: String
     public let ephemeralDefault: String
@@ -228,8 +310,8 @@ public struct ContextMessage: Codable, Sendable {
         id: String,
         browser: String,
         browserName: String,
-        defaultBrowser: String,
-        defaultBrowserName: String,
+        primaryBrowser: String,
+        primaryBrowserName: String,
         fallbackBrowser: String,
         linkBehavior: String,
         ephemeralDefault: String,
@@ -242,8 +324,8 @@ public struct ContextMessage: Codable, Sendable {
         self.id = id
         self.browser = browser
         self.browserName = browserName
-        self.defaultBrowser = defaultBrowser
-        self.defaultBrowserName = defaultBrowserName
+        self.primaryBrowser = primaryBrowser
+        self.primaryBrowserName = primaryBrowserName
         self.fallbackBrowser = fallbackBrowser
         self.linkBehavior = linkBehavior
         self.ephemeralDefault = ephemeralDefault
@@ -251,6 +333,90 @@ public struct ContextMessage: Codable, Sendable {
         self.searchEngine = searchEngine
         self.hoverBar = hoverBar
         self.knownBrowsers = knownBrowsers
+    }
+
+    /// Fresh-read reconnect reply: host identity plus the same ContextPayload
+    /// mapping `config-update` uses, so the two wires cannot drift.
+    public init(id: String, browser: String, config: LilConfig) {
+        self.init(
+            id: id,
+            browser: browser,
+            browserName: BrowserTable.name(forSlug: browser),
+            primaryBrowser: config.primaryBrowser,
+            primaryBrowserName: ContextPayload.displayName(forSlug: config.primaryBrowser, in: config),
+            fallbackBrowser: config.fallbackBrowser,
+            linkBehavior: config.linkBehavior,
+            ephemeralDefault: config.ephemeralDefault,
+            sleep: config.sleep,
+            searchEngine: config.searchEngine,
+            hoverBar: config.hoverBar,
+            knownBrowsers: ContextPayload.browsers(from: config)
+        )
+    }
+}
+
+/// The config payload mapping shared by `context` (host -> its extension) and
+/// `config-update` (app -> every relay -> every extension). One mapping so the
+/// two messages can never diverge in shape or normalization (issue #12).
+public enum ContextPayload {
+    /// knownBrowsers in the trimmed wire shape (no bundle ids). An empty
+    /// config list falls back to the full catalog marked not-installed, so
+    /// the extension always has a menu to build from.
+    public static func browsers(from config: LilConfig) -> [ContextBrowser] {
+        if config.knownBrowsers.isEmpty {
+            return BrowserTable.all.map {
+                ContextBrowser(slug: $0.slug, name: $0.name, installed: false)
+            }
+        }
+        return config.knownBrowsers.map {
+            ContextBrowser(slug: $0.slug, name: $0.name, installed: $0.installed)
+        }
+    }
+
+    /// Display name for a slug: the config's knownBrowsers first, then the
+    /// catalog (which capitalizes unknown slugs so callers always get a name).
+    public static func displayName(forSlug slug: String, in config: LilConfig) -> String {
+        if let kb = config.knownBrowsers.first(where: { $0.slug == slug }), !kb.name.isEmpty {
+            return kb.name
+        }
+        return BrowserTable.name(forSlug: slug)
+    }
+}
+
+/// app -> every live relay -> extension (v4, issue #12): a native Settings
+/// write published to ALL relays, not just the current routing target. The
+/// payload is the normalized full configuration — the `context` config fields
+/// minus the host identity (`browser`/`browserName`), which each service
+/// worker keeps for itself when it replaces its cached context.
+///
+/// The host forwards the line verbatim and never queues it: a relay that
+/// misses the broadcast catches up from config.json on the extension's next
+/// (re)connect `get-context`, which the host always answers with a fresh read.
+public struct ConfigUpdateMessage: Codable, Sendable {
+    public let type: String
+    public let primaryBrowser: String
+    public let primaryBrowserName: String
+    public let fallbackBrowser: String
+    public let linkBehavior: String
+    public let ephemeralDefault: String
+    public let sleep: SleepConfig
+    public let searchEngine: SearchEngineConfig
+    public let hoverBar: HoverBarConfig
+    public let knownBrowsers: [ContextBrowser]
+
+    /// The broadcast for the config the app just persisted. Values arrive
+    /// already normalized by the model (e.g. clamped `hoverBar.revealHeight`).
+    public init(config: LilConfig) {
+        self.type = MessageType.configUpdate.rawValue
+        self.primaryBrowser = config.primaryBrowser
+        self.primaryBrowserName = ContextPayload.displayName(forSlug: config.primaryBrowser, in: config)
+        self.fallbackBrowser = config.fallbackBrowser
+        self.linkBehavior = config.linkBehavior
+        self.ephemeralDefault = config.ephemeralDefault
+        self.sleep = config.sleep
+        self.searchEngine = config.searchEngine
+        self.hoverBar = config.hoverBar
+        self.knownBrowsers = ContextPayload.browsers(from: config)
     }
 }
 
@@ -275,6 +441,18 @@ public struct WhitelistOpMessage: Codable, Sendable {
         self.type = (try? c.decode(String.self, forKey: .type)) ?? MessageType.whitelistOp.rawValue
         self.op = (try? c.decode(String.self, forKey: .op)) ?? ""
         self.domain = (try? c.decode(String.self, forKey: .domain)) ?? ""
+    }
+}
+
+/// extension -> host: open Lil Chromium's native Settings window.
+/// Fire-and-forget; no extra fields. The host launches the dedicated
+/// app-owned Settings URL targeted at Lil Chromium and never forwards
+/// this to a browser.
+public struct OpenSettingsMessage: Codable, Sendable {
+    public let type: String
+
+    public init() {
+        self.type = MessageType.openSettings.rawValue
     }
 }
 

@@ -114,6 +114,9 @@ final class SettingsStore: ObservableObject {
         didSet {
             guard !suppressSave else { return }
             config.save()  // atomic, unknown-field-preserving (see ConfigMerge)
+            // Hot-apply (issue #12): publish the normalized full config to
+            // EVERY live relay so all browsers and lils converge at once.
+            RelayClient.broadcastConfigAsync(config)
         }
     }
 
@@ -140,10 +143,24 @@ final class SettingsStore: ObservableObject {
         BrowserCatalog.installedChoices(from: config.knownBrowsers)
     }
 
-    /// True when the chosen default browser is not currently installed (drives
+    var fallbackBrowsers: [KnownBrowser] {
+        BrowserCatalog.fallbackChoices(
+            from: config.knownBrowsers,
+            primaryBrowser: config.primaryBrowser
+        )
+    }
+
+    /// True when the chosen Primary browser is not currently installed (drives
     /// the Settings warning indicator).
-    var defaultBrowserMissing: Bool {
-        !BrowserCatalog.isInstalled(config.defaultBrowser, in: config)
+    var primaryBrowserMissing: Bool {
+        !BrowserCatalog.isInstalled(config.primaryBrowser, in: config)
+    }
+
+    /// A legacy file may contain identical targets. Keep it readable, but make
+    /// the invalid Fallback visible until the user selects another installation.
+    var fallbackBrowserUnavailable: Bool {
+        config.fallbackBrowser == config.primaryBrowser
+            || !BrowserCatalog.isInstalled(config.fallbackBrowser, in: config)
     }
 
     // Launch-at-Login (SMAppService). Reflects the real system state.
@@ -172,22 +189,45 @@ struct SettingsRoot: View {
     // Local editing state for the sleep whitelist add field.
     @State private var newWhitelistDomain: String = ""
 
+    /// Hit area for the Form's icon-only row controls. Scales with Dynamic Type
+    /// so the target grows with the text it sits beside.
+    @ScaledMetric(relativeTo: .body) private var rowControlSide = 22.0
+
     var body: some View {
         // Three sections, in the order the parent spec fixes them: General
         // (what Lil Chromium itself does), Lils (what a lil does), Hoverbar
-        // (how a lil's overlay looks).
-        Form {
-            generalSection
-            lilsSection
-            hoverbarSection
+        // (how a lil's overlay looks). Version sits under the Form so it is a
+        // window footer, not a fourth settings group.
+        VStack(spacing: 0) {
+            Form {
+                generalSection
+                lilsSection
+                hoverbarSection
+            }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            versionFooter
         }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
         // Fixed size, not a minimum: the window styleMask has no .resizable and
         // NSHostingController otherwise sizes to fit content, which would make
         // the first-placement top edge drift off the 20% rule as sections grow.
         // Same size as the NSWindow contentRect / setContentSize above.
         .frame(width: SettingsPaneSize.size.width, height: SettingsPaneSize.size.height)
+    }
+
+    private var versionFooter: some View {
+        Text(versionLine)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 12)
+    }
+
+    /// Bundled `CFBundleShortVersionString` from Info.plist (`make app`).
+    private var versionLine: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        return version.isEmpty ? "Lil Chromium" : "Lil Chromium \(version)"
     }
 
     // MARK: General
@@ -201,17 +241,28 @@ struct SettingsRoot: View {
             } label: {
                 HStack(spacing: 6) {
                     Text("Primary browser")
-                    if store.defaultBrowserMissing {
+                    if store.primaryBrowserMissing {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.yellow)
+                            .symbolRenderingMode(.multicolor)
                             .help("The selected Primary browser isn't installed.")
+                            .accessibilityLabel("The selected Primary browser isn't installed.")
                     }
                 }
             }
 
-            Picker("Fallback browser", selection: fallbackBrowserBinding) {
-                ForEach(store.installedBrowsers, id: \.slug) { b in
-                    Text(b.name).tag(b.slug)
+            Picker(selection: fallbackBrowserBinding) {
+                ForEach(store.fallbackBrowsers, id: \.slug) { browser in
+                    Text(browser.name).tag(browser.slug)
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Fallback browser")
+                    if store.fallbackBrowserUnavailable {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .symbolRenderingMode(.multicolor)
+                            .help("Choose an installed browser other than Primary.")
+                            .accessibilityLabel("Choose an installed browser other than Primary.")
+                    }
                 }
             }
 
@@ -258,21 +309,21 @@ struct SettingsRoot: View {
     // MARK: Sleep (inside Lils)
 
     @ViewBuilder private var sleepControls: some View {
-        Toggle("Put idle lils to sleep", isOn: sleepEnabledBinding)
-        Text("Sleeping frees the page’s memory; click a sleeping lil to wake it.")
+        Toggle("Let idle lils nap", isOn: sleepEnabledBinding)
+        Text("Lil Nap frees the page’s memory; click a napping lil to Wake This Lil.")
             .font(.caption)
             .foregroundStyle(.secondary)
 
         // Only expose the detail controls when sleep is enabled.
         if store.config.sleep.enabled {
-            Picker("Sleep after", selection: sleepMinutesBinding) {
+            Picker("Lil Nap after", selection: sleepMinutesBinding) {
                 Text("15 minutes").tag(15)
                 Text("30 minutes").tag(30)
                 Text("60 minutes").tag(60)
                 Text("120 minutes").tag(120)
             }
-            Toggle("Don’t sleep lils playing audio", isOn: audioGuardBinding)
-            Toggle("Don’t sleep lils with unsaved form input", isOn: formGuardBinding)
+            Toggle("Don’t nap lils playing audio", isOn: audioGuardBinding)
+            Toggle("Don’t nap lils with unsaved form input", isOn: formGuardBinding)
 
             TintEditor(
                 committed: sleepTintBinding,
@@ -299,14 +350,17 @@ struct SettingsRoot: View {
                     } label: {
                         Image(systemName: "minus.circle.fill")
                             .foregroundStyle(.secondary)
+                            .frame(width: rowControlSide, height: rowControlSide)
+                            .contentShape(.rect)
                     }
                     .buttonStyle(.borderless)
                     .help("Remove \(domain) from the whitelist")
+                    .accessibilityLabel("Remove \(domain) from the whitelist")
                 }
             }
         }
         HStack {
-            TextField("Add domain (never sleep)", text: $newWhitelistDomain)
+            TextField("Add domain (never nap)", text: $newWhitelistDomain)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { addWhitelistDomain() }
             Button("Add") { addWhitelistDomain() }
@@ -327,6 +381,23 @@ struct SettingsRoot: View {
                 reloadToken: store.reloadToken,
                 label: "Tint"
             )
+            LabeledContent("Reveal zone") {
+                HStack {
+                    Slider(
+                        value: revealHeightBinding,
+                        in: Double(HoverBarConfig.revealHeightRange.lowerBound)
+                            ... Double(HoverBarConfig.revealHeightRange.upperBound),
+                        step: 1
+                    )
+                    .accessibilityValue("\(store.config.hoverBar.revealHeight) px")
+                    Text("\(store.config.hoverBar.revealHeight) px")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Text("Cursor distance from the top edge that reveals the bar. 0 disables mouse reveal; ⌘L still reveals it.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -349,8 +420,8 @@ struct SettingsRoot: View {
     // MARK: - Bindings (route through store.config so didSet -> save())
 
     private var primaryBrowserBinding: Binding<String> {
-        Binding(get: { store.config.defaultBrowser },
-                set: { store.config.defaultBrowser = $0 })
+        Binding(get: { store.config.primaryBrowser },
+                set: { store.config.primaryBrowser = $0 })
     }
     private var fallbackBrowserBinding: Binding<String> {
         Binding(get: { store.config.fallbackBrowser },
@@ -415,6 +486,12 @@ struct SettingsRoot: View {
     private var hoverStyleBinding: Binding<String> {
         Binding(get: { store.config.hoverBar.style },
                 set: { store.config.hoverBar.style = $0 })
+    }
+    /// Slider is Double; the model is Int pixels (and clamps on set, so the
+    /// write through store.config stays inside the documented range).
+    private var revealHeightBinding: Binding<Double> {
+        Binding(get: { Double(store.config.hoverBar.revealHeight) },
+                set: { store.config.hoverBar.revealHeight = Int($0) })
     }
     private var hoverTintBinding: Binding<String?> {
         Binding(

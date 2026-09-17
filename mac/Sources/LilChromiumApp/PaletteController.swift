@@ -19,6 +19,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
 
     private var currentRows: [PaletteRow] = []
     private var selectedIndex: Int = 0
+    private var currentReturnChord: PaletteReturnChord = .plain
 
     // Inline autocomplete state.
     /// The text the user has actually typed (excludes auto-appended completion).
@@ -37,6 +38,12 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     private let resultRowHeight: CGFloat = 44
     private let maxResultRows = 8
     private let cornerRadius = PaletteGlass.cornerRadius
+
+    /// The palette's two functional controls (Settings, Close) share one symbol
+    /// size and one square hit area, so neither reads as the smaller of the
+    /// pair and both stay comfortably clickable inside the 56pt input row.
+    private static let paletteSymbolPointSize: CGFloat = 15
+    private static let paletteControlSide: CGFloat = 28
 
     // MARK: - Public entry points (called by AppDelegate)
 
@@ -58,6 +65,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         inputField.stringValue = ""
         committedQuery = ""
         selectedIndex = 0
+        currentReturnChord = .plain
 
         // Read config fresh at each show() (always current), cache for the
         // session so per-keystroke reposition/row-building doesn't re-hit the
@@ -85,6 +93,13 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// deactivation path exists.
     func close() {
         panel?.orderOut(nil)
+    }
+
+    /// The shared Settings launch path: dismiss the palette first so the
+    /// surfaces never compete for focus, then present the singleton window.
+    func requestSettings() {
+        close()
+        SettingsWindowController.show()
     }
 
     // MARK: - Panel construction
@@ -135,22 +150,39 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         field.configureAsPaletteInput()
         field.delegate = self
 
+        let settingsButton = NSButton()
+        settingsButton.translatesAutoresizingMaskIntoConstraints = false
+        settingsButton.isBordered = false
+        settingsButton.bezelStyle = .regularSquare
+        settingsButton.imagePosition = .imageOnly
+        let gearCfg = NSImage.SymbolConfiguration(pointSize: Self.paletteSymbolPointSize, weight: .regular)
+        let gearImg = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")?
+            .withSymbolConfiguration(gearCfg)
+        gearImg?.isTemplate = true
+        settingsButton.image = gearImg
+        settingsButton.contentTintColor = .secondaryLabelColor
+        settingsButton.setAccessibilityLabel("Settings")
+        settingsButton.target = self
+        settingsButton.action = #selector(settingsButtonPressed)
+
         // X close button (circular xmark), top-right of the input row.
         let closeButton = NSButton()
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         closeButton.isBordered = false
         closeButton.bezelStyle = .regularSquare
         closeButton.imagePosition = .imageOnly
-        let xCfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        let xCfg = NSImage.SymbolConfiguration(pointSize: Self.paletteSymbolPointSize, weight: .regular)
         let xImg = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Close")?
             .withSymbolConfiguration(xCfg)
         xImg?.isTemplate = true
         closeButton.image = xImg
         closeButton.contentTintColor = .secondaryLabelColor
+        closeButton.setAccessibilityLabel("Close")
         closeButton.target = self
         closeButton.action = #selector(closeButtonPressed)
 
         inputRow.addSubview(field)
+        inputRow.addSubview(settingsButton)
         inputRow.addSubview(closeButton)
 
         // --- Results stack ---
@@ -171,13 +203,18 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
 
             // Field: leading inset 20, vertically centered, intrinsic height.
             field.leadingAnchor.constraint(equalTo: inputRow.leadingAnchor, constant: 20),
-            field.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -10),
+            field.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -10),
             field.centerYAnchor.constraint(equalTo: inputRow.centerYAnchor),
+
+            settingsButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -8),
+            settingsButton.centerYAnchor.constraint(equalTo: inputRow.centerYAnchor),
+            settingsButton.widthAnchor.constraint(equalToConstant: Self.paletteControlSide),
+            settingsButton.heightAnchor.constraint(equalToConstant: Self.paletteControlSide),
 
             closeButton.trailingAnchor.constraint(equalTo: inputRow.trailingAnchor, constant: -18),
             closeButton.centerYAnchor.constraint(equalTo: inputRow.centerYAnchor),
-            closeButton.widthAnchor.constraint(equalToConstant: 22),
-            closeButton.heightAnchor.constraint(equalToConstant: 22),
+            closeButton.widthAnchor.constraint(equalToConstant: Self.paletteControlSide),
+            closeButton.heightAnchor.constraint(equalToConstant: Self.paletteControlSide),
 
             stack.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: root.trailingAnchor),
@@ -278,7 +315,8 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         for (i, row) in currentRows.prefix(maxResultRows).enumerated() {
             let rowView = PaletteRowView()
             rowView.configure(row, selected: i == selectedIndex,
-                              showHint: i == selectedIndex, index: i)
+                              hint: i == selectedIndex ? actionHint(for: row) : nil,
+                              index: i)
             rowView.heightAnchor.constraint(equalToConstant: resultRowHeight).isActive = true
             rowView.onHover = { [weak self] idx in self?.hoverSelect(idx) }
             rowView.onClick = { [weak self] idx in self?.clickRow(idx) }
@@ -324,30 +362,65 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         for (i, view) in stack.arrangedSubviews.enumerated() {
             guard let rowView = view as? PaletteRowView, i < currentRows.count else { continue }
             rowView.configure(currentRows[i], selected: i == selectedIndex,
-                              showHint: i == selectedIndex, index: i)
+                              hint: i == selectedIndex ? actionHint(for: currentRows[i]) : nil,
+                              index: i)
         }
     }
 
-    /// Open the current selection. `incognito` (palette ⌘-Enter) opens the
-    /// selection as an incognito lil (open.incognito:true), passed through to the
-    /// relay open call.
-    private func activateSelection(incognito: Bool = false) {
-        guard !currentRows.isEmpty, selectedIndex < currentRows.count else { return }
-        let row = currentRows[selectedIndex]
-        let urlString = row.actionURL
-        let (left, top) = paletteAnchorCoords()
-        close()
-        OpenRouter.open(urlString, left: left, top: top, incognito: incognito)
+    private func actionHint(for row: PaletteRow) -> String? {
+        model.action(
+            for: committedQuery,
+            selectedRow: row,
+            chord: currentReturnChord
+        )?.hint
     }
 
-    /// True when the current AppKit event has Command as its only non-Return
-    /// modifier — used to detect ⌘-Enter, which shares the `insertNewline:`
-    /// selector with a plain Return in the field editor.
+    /// Resolve and open the current Return action. Mouse clicks use the plain
+    /// chord; keyboard submission uses the current event's semantic chord.
+    private func activateSelection(chord: PaletteReturnChord = .plain) {
+        guard !currentRows.isEmpty, selectedIndex < currentRows.count else { return }
+        guard let action = model.action(
+            for: committedQuery,
+            selectedRow: currentRows[selectedIndex],
+            chord: chord
+        ) else { return }
+        if action.kind == .settings {
+            requestSettings()
+            return
+        }
+        let (left, top) = paletteAnchorCoords()
+        close()
+        OpenRouter.open(action.url, left: left, top: top, incognito: action.incognito)
+    }
+
+    /// Return variants share the `insertNewline:` selector. AppKit flags are
+    /// reduced here to the four keys that participate in the action chord.
     /// verified: see research (SO 61806458) — distinguish ⌘-Return from Return
     /// via NSApp.currentEvent.modifierFlags in doCommandBySelector.
-    private func commandHeldOnCurrentEvent() -> Bool {
-        guard let flags = NSApp.currentEvent?.modifierFlags else { return false }
-        return flags.intersection(.deviceIndependentFlagsMask).contains(.command)
+    private func returnChordOnCurrentEvent() -> PaletteReturnChord {
+        guard let flags = NSApp.currentEvent?.modifierFlags else {
+            return currentReturnChord
+        }
+        return Self.returnChord(from: flags)
+    }
+
+    /// Lock state and key-origin metadata are intentionally not chord keys.
+    static func returnChord(from flags: NSEvent.ModifierFlags) -> PaletteReturnChord {
+        var chord: PaletteReturnChord = .plain
+        if flags.contains(.shift) { chord.insert(.shift) }
+        if flags.contains(.command) { chord.insert(.command) }
+        if flags.contains(.option) { chord.insert(.option) }
+        if flags.contains(.control) { chord.insert(.control) }
+        return chord
+    }
+
+    /// Called by PalettePanel for each flagsChanged event while it is key.
+    /// Reconfiguring the selected row makes its hint follow held modifiers.
+    func modifierFlagsDidChange(_ flags: NSEvent.ModifierFlags) {
+        let chord = Self.returnChord(from: flags)
+        guard chord != currentReturnChord else { return }
+        currentReturnChord = chord
+        refreshSelectionHighlight()
     }
 
     /// Chrome-space coordinates anchored to the palette's current position.
@@ -366,6 +439,10 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         close()
     }
 
+    @objc private func settingsButtonPressed() {
+        requestSettings()
+    }
+
     // MARK: - NSTextFieldDelegate
 
     /// The verified key-handling hook. Returning `true` CONSUMES the command and
@@ -375,10 +452,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         switch selector {
         case #selector(NSResponder.insertNewline(_:)):
-            // Plain Return opens normally; ⌘-Return opens as an incognito lil.
-            // Both arrive as insertNewline: — the modifier is read off the
-            // current AppKit event.
-            activateSelection(incognito: commandHeldOnCurrentEvent())
+            activateSelection(chord: returnChordOnCurrentEvent())
             return true
         case #selector(NSResponder.moveUp(_:)):
             moveSelection(.up)

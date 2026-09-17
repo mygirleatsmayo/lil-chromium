@@ -1,0 +1,30 @@
+{
+  "type": "config-update",
+  "primaryBrowser": "vivaldi",
+  "primaryBrowserName": "Vivaldi",
+  "fallbackBrowser": "chrome",
+  "linkBehavior": "same-lil",
+  "ephemeralDefault": "12h",
+  "sleep": {
+    "enabled": true,
+    "afterMinutes": 60,
+    "audioGuard": false,
+    "formGuard": true,
+    "tint": "#ff8800",
+    "whitelist": ["example.com", "mail.google.com"]
+  },
+  "searchEngine": {
+    "provider": "bing",
+    "name": "Bing",
+    "template": "https://www.bing.com/search?q=%s"
+  },
+  "hoverBar": {
+    "style": "glass",
+    "tint": "#4455ff",
+    "revealHeight": 8
+  },
+  "knownBrowsers": [
+    {"slug": "vivaldi", "name": "Vivaldi", "installed": true},
+    {"slug": "chrome", "name": "Google Chrome", "installed": true}
+  ]
+}

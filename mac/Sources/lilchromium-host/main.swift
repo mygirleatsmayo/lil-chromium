@@ -22,6 +22,7 @@ import Darwin
 //   socket "ping"          -> answer directly with pong (extensionConnected:true
 //                             while this process lives).
 //   stdin "history-result" -> route to the connection that issued the query.
+//   stdin "restore-focus"  -> reactivate the recorded external app.
 //   unknown from socket     -> forward to extension.
 //   unknown from extension  -> drop.
 
@@ -134,6 +135,7 @@ final class Relay {
             forwardToExtension(line, kind: "history-query")
 
         case MessageType.open.rawValue:
+            FocusTrace.logOpen(line)
             if extensionUp {
                 if !forwardToExtension(line, kind: "open") {
                     enqueueOpen(line)
@@ -141,6 +143,19 @@ final class Relay {
             } else {
                 enqueueOpen(line)
             }
+
+        case MessageType.configUpdate.rawValue:
+            // Hot-apply (issue #12): the app published the normalized full
+            // config; forward it to the extension verbatim. Never queued —
+            // if the port is down this host is exiting anyway, and the
+            // extension's reconnect get-context re-reads config.json fresh.
+            forwardToExtension(line, kind: "config-update")
+
+        case MessageType.lilFocusTrace.rawValue:
+            // LILFOCUS (issue #30): the private diagnostic control. The host is
+            // the only way into the extension, so a line it cannot vouch for is
+            // dropped here rather than forwarded.
+            FocusTrace.forwardControl(line, forward: { forwardToExtension($0, kind: "lil-focus-trace") })
 
         default:
             // Unknown from socket -> forward to extension verbatim.
@@ -212,6 +227,12 @@ final class Relay {
         case MessageType.whitelistOp.rawValue:
             handleWhitelistOp(data)
 
+        case MessageType.restoreFocus.rawValue:
+            handleRestoreFocus(data)
+
+        case MessageType.openSettings.rawValue:
+            handleOpenSettings()
+
         default:
             // Unknown from extension -> drop (per PROTOCOL.md).
             hlog("extension: dropping unforwarded type \(env.type)")
@@ -225,44 +246,10 @@ final class Relay {
     private func handleGetContext(id: String) {
         let cfg = LilConfig.load()
 
-        // Prefer a name from the config's knownBrowsers, fall back to the table.
-        func displayName(forSlug slug: String) -> String {
-            if let kb = cfg.knownBrowsers.first(where: { $0.slug == slug }), !kb.name.isEmpty {
-                return kb.name
-            }
-            return BrowserTable.name(forSlug: slug)
-        }
-
-        // Prefer config's knownBrowsers list; if empty (no scan yet) fall back
-        // to the full table marked not-installed so the extension always has a
-        // menu to build from.
-        let known: [ContextBrowser]
-        if cfg.knownBrowsers.isEmpty {
-            known = BrowserTable.all.map {
-                ContextBrowser(slug: $0.slug, name: $0.name, installed: false)
-            }
-        } else {
-            known = cfg.knownBrowsers.map {
-                ContextBrowser(slug: $0.slug, name: $0.name, installed: $0.installed)
-            }
-        }
-
         // v3: carry the full config objects verbatim so the extension has the
         // whole runtime picture (ephemerality, sleep, search, hover bar).
-        let ctx = ContextMessage(
-            id: id,
-            browser: browserSlug,
-            browserName: BrowserTable.name(forSlug: browserSlug),
-            defaultBrowser: cfg.defaultBrowser,
-            defaultBrowserName: displayName(forSlug: cfg.defaultBrowser),
-            fallbackBrowser: cfg.fallbackBrowser,
-            linkBehavior: cfg.linkBehavior,
-            ephemeralDefault: cfg.ephemeralDefault,
-            sleep: cfg.sleep,
-            searchEngine: cfg.searchEngine,
-            hoverBar: cfg.hoverBar,
-            knownBrowsers: known
-        )
+        // Browser/name mapping is ContextPayload — the same path as config-update.
+        let ctx = ContextMessage(id: id, browser: browserSlug, config: cfg)
 
         guard let payload = try? LilCodec.encode(ctx) else {
             hlog("host: failed to encode context reply")
@@ -330,6 +317,37 @@ final class Relay {
             hlog("host: open-external \(msg.browser) \(msg.url)")
         } catch {
             hlog("host: open-external launch failed: \(error)")
+        }
+    }
+
+    /// Launch Lil Chromium's dedicated Settings URL targeted at this app —
+    /// never at a browser. Fire-and-forget; failures are logged.
+    private func handleOpenSettings() {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        proc.arguments = SettingsAction.openArguments
+        do {
+            try proc.run()
+            hlog("host: open-settings \(SettingsAction.urlString)")
+        } catch {
+            hlog("host: open-settings launch failed: \(error)")
+        }
+    }
+
+    /// Ask macOS to reactivate the exact recorded external process, falling
+    /// back only to another live process of the same bundle.
+    private func handleRestoreFocus(_ data: Data) {
+        guard let msg = try? LilCodec.decode(RestoreFocusMessage.self, from: data) else {
+            hlog("host: undecodable restore-focus dropped")
+            return
+        }
+        Task { @MainActor in
+            let outcome = ExternalAppRestorer.restore(msg.priorContext)
+            // LILFOCUS (issue #30): host receipt, activation result, and the
+            // frontmost application the request actually produced. Public
+            // NSWorkspace reads only — no Accessibility, no private API.
+            hlog("[\(FocusTrace.tag)] restore-focus target=\(FocusTrace.describe(msg.priorContext)) outcome=\(outcome.rawValue)")
+            FocusTrace.logFrontmostAfterSettling(label: "restore-focus")
         }
     }
 

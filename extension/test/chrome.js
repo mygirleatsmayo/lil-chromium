@@ -4,6 +4,8 @@
  * Event listeners are awaited so tests observe the worker's async handlers.
  */
 
+import vm from "node:vm";
+
 const EXTENSION_ID = "oofeehjoocddelicpmnpbafmbalaakge";
 const WINDOW_ID_NONE = -1;
 const DEFAULT_DISPLAY = {
@@ -25,6 +27,10 @@ function makeEvent() {
     addListener(fn) {
       listeners.push(fn);
     },
+    removeListener(fn) {
+      const i = listeners.indexOf(fn);
+      if (i >= 0) listeners.splice(i, 1);
+    },
     async fire(...args) {
       await Promise.all(listeners.map((fn) => Promise.resolve().then(() => fn(...args))));
     },
@@ -35,7 +41,8 @@ function makeEvent() {
 }
 
 function snapshotTab(tab) {
-  return { ...tab };
+  const { sessionHistory, ...publicTab } = tab;
+  return { ...publicTab };
 }
 
 function snapshotWindow(win, tabs) {
@@ -65,14 +72,41 @@ export function createChrome(options = {}) {
   let incognitoAllowed = options.incognitoAllowed !== false;
   // Fault injection: predicate over windows.create options; true ⇒ the call rejects.
   const rejectWindowCreate = options.rejectWindowCreate || (() => false);
+  // Fault injection: `scripting: false` omits chrome.scripting (permission absent);
+  // rejectScripting predicate over tabId; true ⇒ executeScript rejects.
+  const scriptingAvailable = options.scripting !== false;
+  const rejectScripting = options.rejectScripting || (() => false);
+  // Fault injection: predicate over tabs.create options; true ⇒ the call rejects.
+  const rejectTabCreate = options.rejectTabCreate || (() => false);
+  // Fault injection: mapper from tabs.create options to a different destination
+  // windowId. When it returns a live id, the created tab is placed there while
+  // the call still succeeds — a harness model of a successful create whose tab
+  // is not in the requested lil (issue #33 / #21 F4).
+  // verified: Helium 0.15.7.1 red trace: napping lil 110440991 gone after
+  // wake; original URL appeared as a new tab in Primary 110440584. tabs.create
+  // request/return window ids were not observed inside the worker.
+  const relocateTabCreate = options.relocateTabCreate || (() => undefined);
+  // Fault injection: predicates over tabs.update(id, opts) / tabs.remove(id);
+  // true ⇒ the call rejects.
+  const rejectTabUpdate = options.rejectTabUpdate || (() => false);
+  const rejectTabRemove = options.rejectTabRemove || (() => false);
+  // Fault injection: predicate over the tabs.query filter; true ⇒ the call rejects.
+  const rejectTabQuery = options.rejectTabQuery || (() => false);
   let lastError = undefined;
   let nextWindowId = 1;
   let nextTabId = 1;
+  // Settle-race injection: `options.settleMisses` maps a creation URL to the
+  // number of initial tabs.get calls that reject for the resulting tab,
+  // simulating Chromium's transient post-spawn state before the tab settles.
+  const tabGetMisses = new Map();
+  // Document identity: every navigation assigns a fresh id, so tests can tell a
+  // newly loaded document apart from a resumed one.
+  let nextDocumentId = 1;
 
   const events = {
     runtime: { onMessage: makeEvent(), onStartup: makeEvent(), onInstalled: makeEvent() },
     windows: { onFocusChanged: makeEvent(), onBoundsChanged: makeEvent(), onRemoved: makeEvent() },
-    tabs: { onUpdated: makeEvent(), onActivated: makeEvent() },
+    tabs: { onCreated: makeEvent(), onUpdated: makeEvent(), onActivated: makeEvent() },
     webNavigation: { onCreatedNavigationTarget: makeEvent() },
     alarms: { onAlarm: makeEvent() },
     contextMenus: { onClicked: makeEvent() },
@@ -89,12 +123,17 @@ export function createChrome(options = {}) {
       for (const fn of native.incoming) await fn(copy);
     },
     disconnectPort() {
-      for (const fn of native.disconnect) fn();
+      // A dead port takes its listeners with it: a later reconnectNative gets
+      // a fresh port whose listeners are the only ones deliver() reaches.
+      const fns = native.disconnect;
+      native.disconnect = [];
+      native.incoming = [];
+      for (const fn of fns) fn();
     },
   };
 
   function record(op, detail) {
-    journal.push({ op, ...detail });
+    journal.push({ op, at: Date.now(), ...detail });
   }
 
   function rejectMissing(kind, id) {
@@ -105,21 +144,54 @@ export function createChrome(options = {}) {
     for (const w of windows.values()) w.focused = w.id === id;
   }
 
-  function addTab({ windowId, url, active = true, openerTabId, incognito = false }) {
+  function addTab({ windowId, url, active = true, openerTabId, incognito = false, title = "" }) {
     const id = nextTabId++;
     const tab = {
       id,
       windowId,
       url,
+      title,
       active,
       openerTabId,
       audible: false,
       discarded: false,
       frozen: false,
       incognito,
+      // Tabs load deterministically: readiness arrives only when a test fires
+      // it through setTabState(tabId, {status: "complete"}).
+      status: "loading",
+      documentId: nextDocumentId++,
+      sessionHistory: [url],
     };
     tabs.set(id, tab);
+    const misses = options.settleMisses && options.settleMisses[url];
+    if (misses) tabGetMisses.set(id, misses);
+    applyNapDocument(tab);
     return tab;
+  }
+
+  // Simulate the nap page's document title. Real Chromium runs sleep.js;
+  // the worker encodes the original title as `t` on the nap URL.
+  function applyNapDocument(tab) {
+    try {
+      const parsed = new URL(tab.url);
+      if (!parsed.pathname.endsWith("/sleep.html")) return;
+      const originalTitle = parsed.searchParams.get("t");
+      if (originalTitle !== null) tab.title = "💤 " + originalTitle;
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  function navigateTab(tab, url, { replace = false } = {}) {
+    tab.url = url;
+    tab.documentId = nextDocumentId++;
+    if (replace) {
+      tab.sessionHistory[tab.sessionHistory.length - 1] = url;
+    } else {
+      tab.sessionHistory = tab.sessionHistory.concat(url);
+    }
+    applyNapDocument(tab);
   }
 
   function closeWindowIfEmpty(windowId) {
@@ -153,6 +225,8 @@ export function createChrome(options = {}) {
     };
     windows.set(id, win);
 
+    // A tab adopted via tabId moved, not created: no tabs.onCreated.
+    let createdTab = null;
     if (typeof opts.tabId === "number") {
       const tab = tabs.get(opts.tabId);
       const oldId = tab.windowId;
@@ -163,11 +237,18 @@ export function createChrome(options = {}) {
       win.tabIds.push(tab.id);
       await closeWindowIfEmpty(oldId);
     } else if (typeof opts.url === "string") {
-      const tab = addTab({ windowId: id, url: opts.url, active: true, incognito: win.incognito });
-      win.tabIds.push(tab.id);
+      createdTab = addTab({
+        windowId: id,
+        url: opts.url,
+        active: true,
+        incognito: win.incognito,
+        openerTabId: opts.openerTabId, // window.open gives the popup its opener
+      });
+      win.tabIds.push(createdTab.id);
     }
 
     record("windows.create", { windowId: id, create: { ...opts } });
+    if (createdTab) await events.tabs.onCreated.fire(snapshotTab(createdTab));
     if (win.focused) await events.windows.onFocusChanged.fire(id);
     return snapshotWindow(win, tabs);
   }
@@ -185,6 +266,28 @@ export function createChrome(options = {}) {
     events,
     listWindows() {
       return [...windows.values()].map((w) => snapshotWindow(w, tabs));
+    },
+    async blurBrowser() {
+      focusExclusive(WINDOW_ID_NONE);
+      await events.windows.onFocusChanged.fire(WINDOW_ID_NONE);
+    },
+    sessionHistory(tabId) {
+      const tab = tabs.get(tabId);
+      return tab ? [...tab.sessionHistory] : [];
+    },
+    async setTabState(id, patch = {}) {
+      const tab = tabs.get(id);
+      if (!tab) return rejectMissing("tab", id);
+      const changeInfo = {};
+      for (const key of ["title", "discarded", "frozen", "audible", "status"]) {
+        if (patch[key] !== undefined) {
+          tab[key] = patch[key];
+          changeInfo[key] = patch[key];
+        }
+      }
+      record("tabs.state", { tabId: id, patch: { ...patch } });
+      if (Object.keys(changeInfo).length) await events.tabs.onUpdated.fire(id, changeInfo, snapshotTab(tab));
+      return snapshotTab(tab);
     },
     async deliver(msg) {
       await native.deliver(msg);
@@ -263,11 +366,17 @@ export function createChrome(options = {}) {
     },
     tabs: {
       async get(id) {
+        const misses = tabGetMisses.get(id) || 0;
+        if (misses > 0) {
+          tabGetMisses.set(id, misses - 1);
+          return rejectMissing("tab", id);
+        }
         const tab = tabs.get(id);
         if (!tab) return rejectMissing("tab", id);
         return snapshotTab(tab);
       },
       async query(q = {}) {
+        if (rejectTabQuery(q)) return Promise.reject(new Error("tabs.query failed"));
         let list = [...tabs.values()];
         if (q.windowId !== undefined) list = list.filter((t) => t.windowId === q.windowId);
         if (q.active !== undefined) list = list.filter((t) => t.active === q.active);
@@ -280,10 +389,12 @@ export function createChrome(options = {}) {
       async update(id, opts = {}) {
         const tab = tabs.get(id);
         if (!tab) return rejectMissing("tab", id);
+        if (rejectTabUpdate(id, opts)) return Promise.reject(new Error("tabs.update failed"));
         const changeInfo = {};
         if (opts.url !== undefined) {
-          tab.url = opts.url;
+          navigateTab(tab, opts.url, { replace: false });
           changeInfo.url = opts.url;
+          if (tab.title) changeInfo.title = tab.title;
         }
         if (opts.active === true) {
           const win = windows.get(tab.windowId);
@@ -302,6 +413,7 @@ export function createChrome(options = {}) {
       async remove(id) {
         const tab = tabs.get(id);
         if (!tab) return rejectMissing("tab", id);
+        if (rejectTabRemove(id)) return Promise.reject(new Error("tabs.remove failed"));
         const windowId = tab.windowId;
         const win = windows.get(windowId);
         if (win) win.tabIds = win.tabIds.filter((tid) => tid !== id);
@@ -310,7 +422,12 @@ export function createChrome(options = {}) {
         await closeWindowIfEmpty(windowId);
       },
       async create(opts = {}) {
-        const windowId = opts.windowId ?? [...windows.keys()].at(-1);
+        if (rejectTabCreate(opts)) return Promise.reject(new Error("tabs.create failed"));
+        const relocated = relocateTabCreate(opts);
+        const windowId =
+          relocated !== undefined && relocated !== null
+            ? relocated
+            : (opts.windowId ?? [...windows.keys()].at(-1));
         if (windowId === undefined) {
           const win = await createWindow({ url: opts.url, type: "normal", focused: !!opts.active });
           const tab = tabs.get(win.tabs[0].id);
@@ -330,9 +447,11 @@ export function createChrome(options = {}) {
           url: opts.url || "about:blank",
           active: opts.active !== false,
           openerTabId: opts.openerTabId,
+          incognito: win.incognito,
         });
         win.tabIds.push(tab.id);
         record("tabs.create", { tabId: tab.id, create: { ...opts } });
+        await events.tabs.onCreated.fire(snapshotTab(tab));
         return snapshotTab(tab);
       },
       async move(id, opts = {}) {
@@ -372,6 +491,7 @@ export function createChrome(options = {}) {
         record("tabs.captureVisibleTab", { windowId, opts: { ...opts } });
         return TINY_JPEG;
       },
+      onCreated: events.tabs.onCreated,
       onUpdated: events.tabs.onUpdated,
       onActivated: events.tabs.onActivated,
     },
@@ -471,9 +591,20 @@ export function createChrome(options = {}) {
         record("contextMenus.removeAll", {});
         if (typeof cb === "function") queueMicrotask(cb);
       },
-      create(opts) {
+      create(opts, cb) {
+        const contexts = opts.contexts || [];
+        if (contexts.includes("tab") && options.tabContext === "unsupported") {
+          lastError = { message: "Unsupported context type: 'tab'" };
+          record("contextMenus.create", { id: opts.id, title: opts.title, contexts, error: lastError.message });
+          if (typeof cb === "function") queueMicrotask(cb);
+          return;
+        }
+        if (contexts.includes("tab") && options.tabContext === "throws") {
+          throw new Error("Invalid value for argument 1. Property 'contexts': Unsupported context type: 'tab'.");
+        }
         menus.set(opts.id, { visible: true, ...opts });
-        record("contextMenus.create", { id: opts.id, title: opts.title });
+        record("contextMenus.create", { id: opts.id, title: opts.title, contexts });
+        if (typeof cb === "function") queueMicrotask(cb);
         return opts.id;
       },
       update(id, props, cb) {
@@ -487,6 +618,49 @@ export function createChrome(options = {}) {
     commands: {
       onCommand: events.commands.onCommand,
     },
+    scripting: scriptingAvailable
+      ? {
+          async executeScript({ target = {}, func, args = [] } = {}) {
+            const tabId = target.tabId;
+            const tab = tabs.get(tabId);
+            if (!tab) return rejectMissing("tab", tabId);
+            if (rejectScripting(tabId)) {
+              return Promise.reject(new Error("scripting.executeScript blocked"));
+            }
+            record("scripting.executeScript", { tabId, args: [...args] });
+            if (typeof func !== "function") return [];
+
+            const changeInfo = {};
+            const location = {
+              get href() {
+                return tab.url;
+              },
+              replace(nextUrl) {
+                navigateTab(tab, nextUrl, { replace: true });
+                changeInfo.url = nextUrl;
+                if (tab.title) changeInfo.title = tab.title;
+              },
+            };
+            vm.runInNewContext(`(${func.toString()})(...__args)`, {
+              location,
+              document: {
+                get title() {
+                  return tab.title || "";
+                },
+                set title(value) {
+                  tab.title = value;
+                  changeInfo.title = value;
+                },
+              },
+              __args: args,
+            });
+            if (Object.keys(changeInfo).length) {
+              await events.tabs.onUpdated.fire(tabId, changeInfo, snapshotTab(tab));
+            }
+            return [{ result: undefined }];
+          },
+        }
+      : undefined,
     tabGroups: {
       async query() {
         return tabGroups.map((g) => ({ ...g }));

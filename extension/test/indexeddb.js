@@ -1,7 +1,8 @@
 /**
- * In-memory IndexedDB covering the sleep-capture operations the worker uses:
- * open/upgrade, put, delete, getAllKeys. Completions run as microtasks so
- * callers can assign `onsuccess` / `oncomplete` after the call, matching IDB.
+ * In-memory IndexedDB covering the sleep-capture operations the worker and
+ * the nap page use: open/upgrade, put, get, delete, getAllKeys. Completions
+ * run as microtasks so callers can assign `onsuccess` / `oncomplete` after
+ * the call, matching IDB.
  */
 export function createIndexedDB() {
   const dbs = new Map();
@@ -25,6 +26,11 @@ export function createIndexedDB() {
             return {
               put(value, key) {
                 store.set(key, value);
+              },
+              get(key) {
+                const request = { result: store.get(key), onsuccess: null, onerror: null };
+                queueMicrotask(() => request.onsuccess && request.onsuccess());
+                return request;
               },
               delete(key) {
                 store.delete(key);

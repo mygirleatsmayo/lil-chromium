@@ -49,7 +49,7 @@ enum BrowserCatalog {
     }
 
     /// Scan and merge results into `config.knownBrowsers`, preserving the
-    /// user's chosen default/fallback/anchor/linkBehavior. Returns the updated
+    /// user's chosen Primary/Fallback/anchor/linkBehavior. Returns the updated
     /// config (not yet saved — the caller decides when to persist).
     static func merged(
         into config: LilConfig,
@@ -64,6 +64,12 @@ enum BrowserCatalog {
     /// catalog minus anything Launch Services could not resolve.
     static func installedChoices(from known: [KnownBrowser]) -> [KnownBrowser] {
         known.filter(\.installed)
+    }
+
+    /// Installed choices valid for Fallback. Identity is the installation slug,
+    /// so a sibling channel remains available while Primary itself is excluded.
+    static func fallbackChoices(from known: [KnownBrowser], primaryBrowser: String) -> [KnownBrowser] {
+        installedChoices(from: known).filter { $0.slug != primaryBrowser }
     }
 
     /// True when `slug` resolves to an installed browser in `config`.

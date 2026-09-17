@@ -1,3 +1,4 @@
+import AppKit
 import Testing
 @testable import LilChromiumApp
 @testable import LilShared
@@ -97,6 +98,54 @@ struct PaletteRowsTests {
 
         #expect(model.autocompleteHost(for: "git") == "github.com")
         #expect(model.autocompleteHost(for: "quarterly budget review") == nil)
+    }
+}
+
+/// Gear-adjacent discoverability (issue #9): typing “settings” or
+/// “preferences” offers a selectable Settings result that is not a lil open.
+struct PaletteSettingsAccessTests {
+
+    private func model() -> PaletteModel {
+        PaletteModel()
+    }
+
+    @Test(arguments: ["settings", "Settings", "SETTINGS"])
+    func settingsQueryLeadsWithTheSettingsAction(_ query: String) {
+        let rows = model().rows(for: query)
+        let row = rows.first
+
+        #expect(row?.kind == .settings)
+        #expect(row?.title == "Settings")
+        #expect(row?.actionURL == SettingsAction.urlString)
+        #expect(rows.contains { $0.kind == .search }, "Search stays available below Settings")
+    }
+
+    @Test(arguments: ["preferences", "Preferences", "PREFERENCES"])
+    func preferencesQueryLeadsWithTheSettingsAction(_ query: String) {
+        let rows = model().rows(for: query)
+
+        #expect(rows.first?.kind == .settings)
+        #expect(rows.first?.actionURL == SettingsAction.urlString)
+        #expect(rows.contains { $0.kind == .search }, "Search stays available below Settings")
+    }
+
+    @Test(
+        "Partial stubs stay ordinary non-URL queries",
+        .bug(id: 9),
+        arguments: ["set", "sett", "pref", "prefer"]
+    )
+    func partialSettingsStubsStayOrdinaryNonURLQueries(_ query: String) {
+        let rows = model().rows(for: query)
+
+        #expect(rows.contains { $0.kind == .settings } == false)
+        #expect(rows.first?.kind == .search)
+    }
+
+    @Test(arguments: ["", "s", "p", "gi", "quarterly budget review", "settings extra"])
+    func unrelatedQueriesDoNotOfferSettings(_ query: String) {
+        let rows = model().rows(for: query)
+
+        #expect(rows.contains { $0.kind == .settings } == false)
     }
 }
 
@@ -355,5 +404,240 @@ struct PaletteOrderingTests {
 
         #expect(rows.prefix(2).map(\.kind) == [.openURL, .search])
         #expect(rows[0].actionURL == "https://example.com/pricing")
+    }
+}
+
+/// Return chooses a concrete palette action at the native model boundary.
+/// The controller strips lock/key-origin metadata before this seam, leaving
+/// only Command, Shift, Option, and Control in the finite chord domain.
+struct PaletteActionTests {
+
+    struct TranslationCase: Sendable {
+        let flags: NSEvent.ModifierFlags
+        let chord: PaletteReturnChord
+    }
+
+    @Test("Return chord opens the selected action", .bug(id: 14))
+    func returnChordOpensTheSelectedAction() throws {
+        let model = PaletteModel()
+        let input = "example.com/pricing"
+        let selectedRow = try #require(model.rows(for: input).first)
+
+        let action = try #require(model.action(
+            for: input,
+            selectedRow: selectedRow,
+            chord: .plain
+        ))
+
+        #expect(action.kind == .open)
+        #expect(action.url == "https://example.com/pricing")
+        #expect(action.incognito == false)
+        #expect(action.hint == "⏎ Open")
+    }
+
+    @Test("Shift-Return forces search", .bug(id: 14))
+    func shiftReturnForcesSearch() throws {
+        let model = PaletteModel()
+        model.searchEngine = SearchEngineConfig(
+            name: "Kagi",
+            template: "https://kagi.com/search?q=%s",
+            provider: "kagi"
+        )
+        let selectedRow = try #require(model.rows(for: "example.com/pricing").first)
+
+        let action = try #require(model.action(
+            for: "privacy news",
+            selectedRow: selectedRow,
+            chord: [.shift]
+        ))
+
+        #expect(action.kind == .search)
+        #expect(action.url == "https://kagi.com/search?q=privacy%20news")
+        #expect(action.incognito == false)
+        #expect(action.hint == "⇧⏎ Search")
+    }
+
+    @Test("Command-Return opens incognito", .bug(id: 14))
+    func commandReturnOpensIncognito() throws {
+        let model = PaletteModel()
+        let input = "example.com/private"
+        let selectedRow = try #require(model.rows(for: input).first)
+
+        let action = try #require(model.action(
+            for: input,
+            selectedRow: selectedRow,
+            chord: [.command]
+        ))
+
+        #expect(action.kind == .open)
+        #expect(action.url == "https://example.com/private")
+        #expect(action.incognito == true)
+        #expect(action.hint == "⌘⏎ Open Incognito")
+    }
+
+    @Test("Command-Shift-Return forces incognito search", .bug(id: 14))
+    func commandShiftReturnForcesIncognitoSearch() throws {
+        let model = PaletteModel()
+        model.searchEngine = SearchEngineConfig(
+            name: "Kagi",
+            template: "https://kagi.com/search?q=%s",
+            provider: "kagi"
+        )
+        let selectedRow = try #require(model.rows(for: "example.com/private").first)
+
+        let action = try #require(model.action(
+            for: "secret cats",
+            selectedRow: selectedRow,
+            chord: [.command, .shift]
+        ))
+
+        #expect(action.kind == .search)
+        #expect(action.url == "https://kagi.com/search?q=secret%20cats")
+        #expect(action.incognito == true)
+        #expect(action.hint == "⇧⌘⏎ Search Incognito")
+    }
+
+    @Test("Return uses the current selection", .bug(id: 14))
+    func returnUsesTheCurrentSelection() throws {
+        let model = PaletteModel()
+        let input = "example.com/pricing"
+        let rows = model.rows(for: input)
+        let selectedSearchRow = try #require(rows.dropFirst().first)
+
+        let action = try #require(model.action(
+            for: input,
+            selectedRow: selectedSearchRow,
+            chord: .plain
+        ))
+
+        #expect(action.kind == .search)
+        #expect(action.url == "https://www.startpage.com/sp/search?query=example.com/pricing")
+        #expect(action.incognito == false)
+        #expect(action.hint == "⏎ Search")
+    }
+
+    @Test(
+        "Extra modifiers never submit an action",
+        .bug(id: 14),
+        arguments: [
+            PaletteReturnChord.option,
+            PaletteReturnChord.control,
+            PaletteReturnChord([.shift, .option]),
+            PaletteReturnChord([.command, .option]),
+            PaletteReturnChord([.command, .shift, .control]),
+        ]
+    )
+    func extraModifiersNeverSubmitAnAction(_ chord: PaletteReturnChord) throws {
+        let model = PaletteModel()
+        let selectedRow = try #require(model.rows(for: "example.com/private").first)
+
+        let action = model.action(
+            for: "private search",
+            selectedRow: selectedRow,
+            chord: chord
+        )
+
+        #expect(action == nil)
+    }
+
+    @Test("Return on Settings requests native Settings", .bug(id: 9))
+    func returnOnSettingsRequestsNativeSettings() throws {
+        let model = PaletteModel()
+        let selectedRow = try #require(model.rows(for: "settings").first)
+
+        let action = try #require(model.action(
+            for: "settings",
+            selectedRow: selectedRow,
+            chord: .plain
+        ))
+
+        #expect(selectedRow.kind == .settings)
+        #expect(action.kind == .settings)
+        #expect(action.url == SettingsAction.urlString)
+        #expect(action.incognito == false)
+        #expect(action.hint == "⏎ Settings")
+    }
+
+    @Test("Command-Return on Settings is still Settings, not an incognito lil", .bug(id: 9))
+    func commandReturnOnSettingsDoesNotOpenALil() throws {
+        let model = PaletteModel()
+        let selectedRow = try #require(model.rows(for: "preferences").first)
+
+        let action = try #require(model.action(
+            for: "preferences",
+            selectedRow: selectedRow,
+            chord: [.command]
+        ))
+
+        #expect(action.kind == .settings)
+        #expect(action.incognito == false)
+    }
+
+    @Test("Shift-Return still searches when Settings is selected", .bug(id: 14))
+    func shiftReturnSearchesEvenWhenSettingsIsSelected() throws {
+        let model = PaletteModel()
+        let selectedRow = try #require(model.rows(for: "settings").first)
+
+        let action = try #require(model.action(
+            for: "settings",
+            selectedRow: selectedRow,
+            chord: [.shift]
+        ))
+
+        #expect(action.kind == .search)
+        #expect(action.url == SearchEngineConfig.defaults.searchURL(for: "settings"))
+    }
+
+    @MainActor
+    @Test(
+        "Event metadata does not change a Return chord",
+        .bug(id: 14),
+        arguments: [
+            TranslationCase(flags: [], chord: .plain),
+            TranslationCase(flags: [.shift], chord: .shift),
+            TranslationCase(flags: [.command], chord: .command),
+            TranslationCase(flags: [.command, .shift], chord: [.command, .shift]),
+        ],
+        [
+            NSEvent.ModifierFlags.capsLock,
+            .numericPad,
+            .function,
+            .help,
+            [.capsLock, .numericPad, .function, .help],
+        ]
+    )
+    func eventMetadataDoesNotChangeReturnChord(
+        _ translation: TranslationCase,
+        _ metadata: NSEvent.ModifierFlags
+    ) {
+        #expect(
+            PaletteController.returnChord(from: translation.flags.union(metadata))
+                == translation.chord
+        )
+    }
+
+    @MainActor
+    @Test(
+        "Option and Control stay semantic and unsupported with event metadata",
+        .bug(id: 14),
+        arguments: [
+            TranslationCase(flags: [.option], chord: .option),
+            TranslationCase(flags: [.control], chord: .control),
+            TranslationCase(flags: [.command, .option], chord: [.command, .option]),
+            TranslationCase(flags: [.shift, .control], chord: [.shift, .control]),
+            TranslationCase(flags: [.command, .shift, .option], chord: [.command, .shift, .option]),
+            TranslationCase(flags: [.command, .shift, .control], chord: [.command, .shift, .control]),
+        ]
+    )
+    func optionAndControlStayUnsupportedWithEventMetadata(
+        _ translation: TranslationCase
+    ) throws {
+        let metadata: NSEvent.ModifierFlags = [.capsLock, .numericPad, .function, .help]
+        let chord = PaletteController.returnChord(from: translation.flags.union(metadata))
+        let model = PaletteModel()
+        let selectedRow = try #require(model.rows(for: "example.com/private").first)
+
+        #expect(chord == translation.chord)
+        #expect(model.action(for: "private search", selectedRow: selectedRow, chord: chord) == nil)
     }
 }

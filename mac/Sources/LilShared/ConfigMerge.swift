@@ -26,7 +26,7 @@ public enum ConfigMerge {
     /// present in the file is preserved untouched.
     public static let ownedKeys: [String] = [
         "version",
-        "defaultBrowser",
+        "primaryBrowser",
         "fallbackBrowser",
         "paletteAnchor",
         "linkBehavior",
@@ -58,12 +58,18 @@ public enum ConfigMerge {
             return [:]
         }()
 
+        let existingVersion = base["version"] as? Int ?? 0
+
         // Overlay only the keys this model owns; leave every other key intact.
         for key in ownedKeys {
             if let value = ownedDict[key] {
                 base[key] = value
             }
         }
+
+        // A v0.4 write upgrades older schemas while never downgrading bytes
+        // written by a newer component whose unknown fields we are preserving.
+        base["version"] = max(existingVersion, config.version, LilConfig.defaults.version)
 
         return serialize(base)
     }
@@ -116,8 +122,9 @@ public enum ConfigMerge {
         sleepDict["whitelist"] = list
         base["sleep"] = sleepDict
 
-        // Ensure the file advertises at least schema v2 once we've touched it.
-        if base["version"] == nil { base["version"] = 2 }
+        // A fresh host-authored file uses the current schema version. Existing
+        // files keep their advertised version because this edit is surgical.
+        if base["version"] == nil { base["version"] = LilConfig.defaults.version }
 
         return serialize(base)
     }

@@ -20,6 +20,13 @@ final class PalettePanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .flagsChanged {
+            paletteDelegate?.modifierFlagsDidChange(event.modifierFlags)
+        }
+        super.sendEvent(event)
+    }
+
     /// Esc at the panel level (also reached from the search field's
     /// cancelOperation which returns false and lets this fire). Closes.
     override func cancelOperation(_ sender: Any?) {

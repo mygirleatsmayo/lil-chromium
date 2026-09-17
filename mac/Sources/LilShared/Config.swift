@@ -10,8 +10,8 @@ import Foundation
 // at the top level) yields `.defaults` rather than throwing. Config is never
 // load-bearing enough to justify crashing a menu-bar agent or a relay host.
 //
-// Schema version 2 (v0.3): adds ephemeralDefault, sleep, searchEngine, and
-// hoverBar. The linkBehavior default flips to "new-lil".
+// Schema version 3 (v0.4): uses Primary-browser vocabulary while retaining
+// read compatibility with v0.3's `defaultBrowser` key.
 //
 // CRITICAL — unknown-field preservation: plain Codable round-trips DROP any
 // JSON key not declared on the struct. The v3 contract requires all writers
@@ -152,14 +152,35 @@ public struct HoverBarConfig: Codable, Sendable {
     public var style: String     // "glass" | "solid"
     public var tint: String?     // optional "#rrggbb"
 
-    // Explicit CodingKeys: both init(from:) and encode(to:) are custom.
-    private enum CodingKeys: String, CodingKey {
-        case style, tint
+    /// Hover-reveal zone height in pixels (v0.4, issue #12). Zero disables
+    /// mouse reveal while ⌘L still reveals the bar. Always clamped into
+    /// `revealHeightRange` — this model is the single clamp site ("before
+    /// use"), so hosts reading the file and app broadcasts both carry an
+    /// in-range value and consumers never re-clamp.
+    public var revealHeight: Int {
+        didSet { revealHeight = Self.clampRevealHeight(revealHeight) }
     }
 
-    public init(style: String = "glass", tint: String? = nil) {
+    public static let defaultRevealHeight = 15
+    public static let revealHeightRange = 0...48
+
+    public static func clampRevealHeight(_ value: Int) -> Int {
+        min(max(value, revealHeightRange.lowerBound), revealHeightRange.upperBound)
+    }
+
+    // Explicit CodingKeys: both init(from:) and encode(to:) are custom.
+    private enum CodingKeys: String, CodingKey {
+        case style, tint, revealHeight
+    }
+
+    public init(
+        style: String = "glass",
+        tint: String? = nil,
+        revealHeight: Int = HoverBarConfig.defaultRevealHeight
+    ) {
         self.style = style
         self.tint = tint
+        self.revealHeight = HoverBarConfig.clampRevealHeight(revealHeight)
     }
 
     public static let defaults = HoverBarConfig()
@@ -170,6 +191,8 @@ public struct HoverBarConfig: Codable, Sendable {
         self.style = (try? c.decode(String.self, forKey: .style)) ?? d.style
         // tint is nullable: absent OR explicit null both decode to nil.
         self.tint = (try? c.decodeIfPresent(String.self, forKey: .tint)) ?? d.tint
+        let rawReveal = (try? c.decode(Int.self, forKey: .revealHeight)) ?? d.revealHeight
+        self.revealHeight = HoverBarConfig.clampRevealHeight(rawReveal)
     }
 
     // Encode tint only when present so we never emit an explicit `null`.
@@ -177,13 +200,14 @@ public struct HoverBarConfig: Codable, Sendable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(style, forKey: .style)
         try c.encodeIfPresent(tint, forKey: .tint)
+        try c.encode(revealHeight, forKey: .revealHeight)
     }
 }
 
 /// The full user config.
 public struct LilConfig: Codable, Sendable {
     public var version: Int
-    public var defaultBrowser: String   // slug
+    public var primaryBrowser: String   // browser-installation slug
     public var fallbackBrowser: String  // slug
     public var paletteAnchor: String    // "top-center" | "top-right"
     public var linkBehavior: String     // "same-lil" | "new-lil"
@@ -195,7 +219,7 @@ public struct LilConfig: Codable, Sendable {
 
     public init(
         version: Int,
-        defaultBrowser: String,
+        primaryBrowser: String,
         fallbackBrowser: String,
         paletteAnchor: String,
         linkBehavior: String,
@@ -206,7 +230,7 @@ public struct LilConfig: Codable, Sendable {
         knownBrowsers: [KnownBrowser]
     ) {
         self.version = version
-        self.defaultBrowser = defaultBrowser
+        self.primaryBrowser = primaryBrowser
         self.fallbackBrowser = fallbackBrowser
         self.paletteAnchor = paletteAnchor
         self.linkBehavior = linkBehavior
@@ -217,11 +241,11 @@ public struct LilConfig: Codable, Sendable {
         self.knownBrowsers = knownBrowsers
     }
 
-    /// Built-in defaults (schema v2): helium / chrome / top-center / new-lil /
+    /// Built-in defaults (schema v3): helium / chrome / top-center / new-lil /
     /// never / sleep-off / Startpage / glass / [].
     public static let defaults = LilConfig(
-        version: 2,
-        defaultBrowser: "helium",
+        version: 3,
+        primaryBrowser: "helium",
         fallbackBrowser: "chrome",
         paletteAnchor: "top-center",
         linkBehavior: "new-lil",
@@ -239,7 +263,9 @@ public struct LilConfig: Codable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = LilConfig.defaults
         self.version = (try? c.decode(Int.self, forKey: .version)) ?? d.version
-        self.defaultBrowser = (try? c.decode(String.self, forKey: .defaultBrowser)) ?? d.defaultBrowser
+        self.primaryBrowser = (try? c.decode(String.self, forKey: .primaryBrowser))
+            ?? (try? c.decode(String.self, forKey: .defaultBrowser))
+            ?? d.primaryBrowser
         self.fallbackBrowser = (try? c.decode(String.self, forKey: .fallbackBrowser)) ?? d.fallbackBrowser
         self.paletteAnchor = (try? c.decode(String.self, forKey: .paletteAnchor)) ?? d.paletteAnchor
         self.linkBehavior = (try? c.decode(String.self, forKey: .linkBehavior)) ?? d.linkBehavior
@@ -248,6 +274,34 @@ public struct LilConfig: Codable, Sendable {
         self.searchEngine = (try? c.decode(SearchEngineConfig.self, forKey: .searchEngine)) ?? d.searchEngine
         self.hoverBar = (try? c.decode(HoverBarConfig.self, forKey: .hoverBar)) ?? d.hoverBar
         self.knownBrowsers = (try? c.decode([KnownBrowser].self, forKey: .knownBrowsers)) ?? d.knownBrowsers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case primaryBrowser
+        case defaultBrowser // v0.3 read compatibility; never encoded by v0.4
+        case fallbackBrowser
+        case paletteAnchor
+        case linkBehavior
+        case ephemeralDefault
+        case sleep
+        case searchEngine
+        case hoverBar
+        case knownBrowsers
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(version, forKey: .version)
+        try c.encode(primaryBrowser, forKey: .primaryBrowser)
+        try c.encode(fallbackBrowser, forKey: .fallbackBrowser)
+        try c.encode(paletteAnchor, forKey: .paletteAnchor)
+        try c.encode(linkBehavior, forKey: .linkBehavior)
+        try c.encode(ephemeralDefault, forKey: .ephemeralDefault)
+        try c.encode(sleep, forKey: .sleep)
+        try c.encode(searchEngine, forKey: .searchEngine)
+        try c.encode(hoverBar, forKey: .hoverBar)
+        try c.encode(knownBrowsers, forKey: .knownBrowsers)
     }
 
     // MARK: - Location

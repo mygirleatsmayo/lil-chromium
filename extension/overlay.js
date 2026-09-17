@@ -2,12 +2,14 @@
 //
 // Runs on every http/https page. Asks the SW whether this tab lives in a lil
 // (ephemeral popup window); if not, it does almost nothing (normal browsing must
-// stay untouched, aside from silent form-dirty tracking which the sleep sweep
+// stay untouched, aside from silent form-dirty tracking which the Lil Nap sweep
 // needs — reported only for lils via the SW's per-tab flag). If it is a lil, it
-// mounts a HOVER-REVEAL top bar in a closed shadow DOM with: back, editable
-// address field with an omnibox suggestions dropdown, reload, copy-URL,
-// "Open in {defaultBrowser}" promote, and a caret menu (promote targets, host
-// groups, other browsers, Keep/expiry, Sleep, Reopen incognito, Close).
+// mounts a HOVER-REVEAL top bar in a closed shadow DOM with: back, an editable
+// address field carrying an omnibox suggestions dropdown and an inset copy-URL
+// control, reload, "Open in {Primary browser}" promote, and a caret menu
+// (promote targets, host groups, other browsers, Keep/expiry, Let This Lil Nap,
+// Reopen incognito, Settings, Close). Every functional glyph comes from the
+// bundled Material Symbols Rounded set — see the icon system below.
 
 (() => {
   // Guard against double injection (SPA re-inject, doc replacement, etc.).
@@ -26,10 +28,57 @@
     orange: "#fa903e",
   };
 
+  // --- Functional icon system --------------------------------------------
+  // Official Material Symbols Rounded (Apache-2.0), weight 400 / grade 0 /
+  // optical size 24, vendored verbatim in extension/assets/material-symbols/.
+  // One shared 24-unit grid and one `.ico` class give every control the same
+  // optical size, weight, alignment, and currentColor tint — the normalization
+  // lives in the family and the stylesheet, never in per-button exceptions.
+  // Inlined rather than loaded as a font: Chromium ignores @font-face inside a
+  // closed shadow root, and inline paths inherit the bar's colour for free.
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const ICON_VIEWBOX = "0 -960 960 960";
+  const ICON_PATHS = {
+    arrow_back:
+      "m313-440 196 196q12 12 11.5 28T508-188q-12 11-28 11.5T452-188L188-452q-6-6-8.5-13t-2.5-15q0-8 2.5-15t8.5-13l264-264q11-11 27.5-11t28.5 11q12 12 12 28.5T508-715L313-520h447q17 0 28.5 11.5T800-480q0 17-11.5 28.5T760-440H313Z",
+    refresh:
+      "M480-160q-134 0-227-93t-93-227q0-134 93-227t227-93q69 0 132 28.5T720-690v-70q0-17 11.5-28.5T760-800q17 0 28.5 11.5T800-760v200q0 17-11.5 28.5T760-520H560q-17 0-28.5-11.5T520-560q0-17 11.5-28.5T560-600h128q-32-56-87.5-88T480-720q-100 0-170 70t-70 170q0 100 70 170t170 70q68 0 124.5-34.5T692-367q8-14 22.5-19.5t29.5-.5q16 5 23 21t-1 30q-41 80-117 128t-169 48Z",
+    link:
+      "M280-280q-83 0-141.5-58.5T80-480q0-83 58.5-141.5T280-680h120q17 0 28.5 11.5T440-640q0 17-11.5 28.5T400-600H280q-50 0-85 35t-35 85q0 50 35 85t85 35h120q17 0 28.5 11.5T440-320q0 17-11.5 28.5T400-280H280Zm80-160q-17 0-28.5-11.5T320-480q0-17 11.5-28.5T360-520h240q17 0 28.5 11.5T640-480q0 17-11.5 28.5T600-440H360Zm200 160q-17 0-28.5-11.5T520-320q0-17 11.5-28.5T560-360h120q50 0 85-35t35-85q0-50-35-85t-85-35H560q-17 0-28.5-11.5T520-640q0-17 11.5-28.5T560-680h120q83 0 141.5 58.5T880-480q0 83-58.5 141.5T680-280H560Z",
+    check:
+      "m382-354 339-339q12-12 28-12t28 12q12 12 12 28.5T777-636L410-268q-12 12-28 12t-28-12L182-440q-12-12-11.5-28.5T183-497q12-12 28.5-12t28.5 12l142 143Z",
+    expand_more:
+      "M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z",
+    search:
+      "M380-320q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 184.5 75.5T640-580q0 44-14 83t-38 69l224 224q11 11 11 28t-11 28q-11 11-28 11t-28-11L532-372q-30 24-69 38t-83 14Zm0-80q75 0 127.5-52.5T560-580q0-75-52.5-127.5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z",
+  };
+
+  // Build one decorative glyph. The control keeps the accessible name; the
+  // icon is hidden from assistive technology and never a focus stop.
+  function icon(name, extraClass) {
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("class", extraClass ? "ico " + extraClass : "ico");
+    svg.setAttribute("viewBox", ICON_VIEWBOX);
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("focusable", "false");
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", ICON_PATHS[name]);
+    svg.appendChild(path);
+    return svg;
+  }
+
+  // Swap a control's glyph in place, leaving its accessible name untouched.
+  function setIcon(el, name) {
+    el.textContent = "";
+    el.appendChild(icon(name));
+  }
+
   const REVEAL_DELAY_MS = 80;
   const HIDE_DELAY_MS = 300;
   const SLIDE_MS = 160;
-  const HOVER_STRIP_PX = 24;
+  // Fallback only until the worker's context arrives; the live value is
+  // config hoverBar.revealHeight, clamped 0..48 by the writer (PROTOCOL.md).
+  const DEFAULT_REVEAL_PX = 15;
   const POLL_MS = 500;
   const OMNIBOX_DEBOUNCE_MS = 120;
   const COPY_TICK_MS = 1200;
@@ -226,14 +275,14 @@
     let context = {
       browser: "chrome",
       browserName: "Chrome",
-      defaultBrowser: "chrome",
-      defaultBrowserName: "Chrome",
+      primaryBrowser: "chrome",
+      primaryBrowserName: "Chrome",
       fallbackBrowser: "chrome",
       linkBehavior: "new-lil",
       ephemeralDefault: "never",
       sleep: { whitelist: [] },
       searchEngine: { name: "Startpage", template: "https://www.startpage.com/sp/search?query=%s" },
-      hoverBar: { style: "glass", tint: null },
+      hoverBar: { style: "glass", tint: null, revealHeight: DEFAULT_REVEAL_PX },
       knownBrowsers: [],
     };
     let lilExpiry = "never"; // per-lil override
@@ -264,6 +313,7 @@
           --menu-shadow: 0 8px 28px rgba(0, 0, 0, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.1);
           --sep: rgba(0, 0, 0, 0.12);
           --sel: rgba(0, 0, 0, 0.09);
+          --ico: 18px;
         }
 
         .bar {
@@ -311,13 +361,26 @@
           user-select: none;
         }
         .btn:hover { background: var(--hover); }
-        .btn.icon { width: 30px; padding: 0; font-size: 16px; flex: 0 0 auto; }
+        .btn.icon { width: 30px; padding: 0; flex: 0 0 auto; }
         .btn .label { font-weight: 550; letter-spacing: 0.1px; }
         .kbd { font-size: 11px; opacity: 0.55; font-variant-numeric: tabular-nums; }
-        .caret { font-size: 11px; }
 
-        /* Address field container (positions the omnibox dropdown). */
+        /* Every functional glyph, everywhere: one grid, one optical size, one
+           tint. Menus and the omnibox step --ico down to match their 16px rows;
+           nothing else may size an icon. */
+        .ico {
+          width: var(--ico);
+          height: var(--ico);
+          display: block;
+          flex: 0 0 auto;
+          fill: currentColor;
+        }
+        .omni, .menu { --ico: 16px; }
+
+        /* Address field container (positions the omnibox dropdown and the
+           Copy URL control that rides inside the field's trailing edge). */
         .addrwrap { position: relative; flex: 1 1 auto; min-width: 0; height: 30px; }
+        .addrwrap .copy { position: absolute; top: 0; right: 0; }
 
         .addr {
           width: 100%;
@@ -329,7 +392,8 @@
           color: inherit;
           font: inherit;
           text-align: center;
-          padding: 0 12px;
+          /* Trailing room for the inset Copy URL control. */
+          padding: 0 34px 0 12px;
           transition: background 120ms ease;
           /* Subtle glassy inset even in solid style. */
           box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.05);
@@ -346,7 +410,8 @@
           gap: 0;
           border-radius: 8px;
           background: var(--field-bg);
-          padding: 0 12px;
+          /* Symmetric so the collapsed URL stays centred beside Copy URL. */
+          padding: 0 34px;
           cursor: text;
           overflow: hidden;
           white-space: nowrap;
@@ -388,7 +453,6 @@
         .orow .fav { width: 16px; height: 16px; flex: 0 0 auto; border-radius: 3px; }
         .orow .otitle { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
         .orow .ohost { opacity: 0.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
-        .orow .search-ico { font-size: 14px; width: 16px; text-align: center; flex: 0 0 auto; }
 
         .menu {
           position: fixed;
@@ -419,9 +483,10 @@
           white-space: nowrap;
         }
         .item:hover { background: var(--sel); }
-        .item.checked .check { margin-left: auto; opacity: 0.9; }
+        .item .check { margin-left: auto; opacity: 0.9; }
         .item .k { margin-left: auto; font-size: 11px; opacity: 0.5; font-variant-numeric: tabular-nums; }
         .sub { padding: 5px 10px 2px; font-size: 11px; opacity: 0.5; text-transform: uppercase; letter-spacing: 0.4px; }
+        .foot { padding: 5px 10px 2px; font-size: 11px; opacity: 0.5; pointer-events: none; }
         .sep { height: 0.5px; background: var(--sep); margin: 5px 6px; }
         .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
         .gname { overflow: hidden; text-overflow: ellipsis; max-width: 190px; }
@@ -467,20 +532,20 @@
       </style>
       <div class="wrap">
         <div class="bar" part="bar">
-          <button class="btn icon back" title="Back" aria-label="Back">‹</button>
+          <button class="btn icon back" title="Back" aria-label="Back"></button>
           <div class="addrwrap">
             <div class="url" role="button" tabindex="0" title="Click to edit"></div>
             <input class="addr hidden" type="text" spellcheck="false" autocomplete="off"
                    aria-label="Address" placeholder="Search or enter address" />
+            <button class="btn icon copy" title="Copy URL" aria-label="Copy URL"></button>
             <div class="omni" role="listbox"></div>
           </div>
-          <button class="btn icon reload" title="Reload" aria-label="Reload">⟳</button>
-          <button class="btn icon copy" title="Copy URL" aria-label="Copy URL">⧉</button>
+          <button class="btn icon reload" title="Reload" aria-label="Reload"></button>
           <button class="btn promote">
             <span class="label">Open in Chrome</span>
             <span class="kbd">⌘O</span>
           </button>
-          <button class="btn icon caretbtn" aria-label="More options"><span class="caret">▾</span></button>
+          <button class="btn icon caretbtn" aria-label="More options"></button>
         </div>
         <div class="menu" role="menu"></div>
       </div>
@@ -498,6 +563,11 @@
     const promoteLabel = promoteBtn.querySelector(".label");
     const caretBtn = root.querySelector(".caretbtn");
     const menu = root.querySelector(".menu");
+
+    setIcon(back, "arrow_back");
+    setIcon(reloadBtn, "refresh");
+    setIcon(copyBtn, "link");
+    setIcon(caretBtn, "expand_more");
 
     // ---- Toast (used by the incognito hint listener). ----
     let toastEl = null;
@@ -620,11 +690,22 @@
       }
     }
 
+    // Live reveal zone (issue #12): read the current config value on every
+    // mousemove so a Settings write applies to this overlay immediately. Zero
+    // disables mouse reveal (treated as never-near-top, so an already-shown
+    // bar still hides on the way out); ⌘L reveals regardless — focusAddress
+    // never consults the zone.
+    function revealZonePx() {
+      const hb = context.hoverBar || {};
+      return typeof hb.revealHeight === "number" ? hb.revealHeight : DEFAULT_REVEAL_PX;
+    }
+
     let inStrip = false;
     document.addEventListener(
       "mousemove",
       (e) => {
-        const nearTop = e.clientY <= HOVER_STRIP_PX;
+        const zone = revealZonePx();
+        const nearTop = zone > 0 && e.clientY <= zone;
         if (nearTop && !inStrip) {
           inStrip = true;
           scheduleReveal();
@@ -746,13 +827,10 @@
         row.className = "orow" + (i === selIndex ? " sel" : "");
         row.setAttribute("role", "option");
         if (s.type === "search") {
-          const ico = document.createElement("span");
-          ico.className = "search-ico";
-          ico.textContent = "⌕";
           const t = document.createElement("span");
           t.className = "otitle";
           t.textContent = s.title;
-          row.appendChild(ico);
+          row.appendChild(icon("search"));
           row.appendChild(t);
         } else {
           const fav = document.createElement("img");
@@ -830,6 +908,17 @@
       omniDebounce = setTimeout(queryOmni, OMNIBOX_DEBOUNCE_MS);
     });
 
+    // Issue #19: while the address field or suggestions own the event, consume
+    // it at this boundary so the page never observes it. Do not cancel default
+    // — native editing, paste, arrows, and IME stay with the field.
+    function containEditingKey(e) {
+      e.stopPropagation();
+    }
+    for (const type of ["keydown", "keyup", "keypress"]) {
+      addr.addEventListener(type, containEditingKey);
+      omni.addEventListener(type, containEditingKey);
+    }
+
     addr.addEventListener("keydown", (e) => {
       if (e.key === "ArrowDown") {
         if (suggestions.length) {
@@ -866,6 +955,9 @@
         addr.value = location.href;
         addr.blur();
         blurAddress();
+        clearTimeout(hideTimer);
+        hideTimer = null;
+        hide();
       }
     });
     addr.addEventListener("blur", () => {
@@ -879,6 +971,11 @@
       send({ action: "reload" });
     });
 
+    let copyResetTimer = null;
+    // Copy URL sits inside the address field, so a press must not read as a
+    // click-away: suppressing the pointer default keeps the field's focus and
+    // the user's half-typed text exactly where issue #19 put them.
+    copyBtn.addEventListener("mousedown", (e) => e.preventDefault());
     copyBtn.addEventListener("click", async () => {
       let ok = false;
       try {
@@ -900,21 +997,22 @@
         }
       }
       if (ok) {
-        copyBtn.textContent = "✓";
-        setTimeout(() => {
-          copyBtn.textContent = "⧉";
-        }, COPY_TICK_MS);
+        // Feedback is the glyph alone: aria-label and title stay "Copy URL" so
+        // the control never renames itself under an assistive-technology user.
+        setIcon(copyBtn, "check");
+        clearTimeout(copyResetTimer);
+        copyResetTimer = setTimeout(() => setIcon(copyBtn, "link"), COPY_TICK_MS);
       }
     });
 
     // -----------------------------------------------------------------------
     // Promote + caret menu.
     // -----------------------------------------------------------------------
-    function labelForDefault() {
-      return "Open in " + (context.defaultBrowserName || "Chrome");
+    function labelForPrimary() {
+      return "Open in " + (context.primaryBrowserName || "Chrome");
     }
     function applyContextLabels() {
-      promoteLabel.textContent = labelForDefault();
+      promoteLabel.textContent = labelForPrimary();
     }
 
     function promote(dest, extra) {
@@ -938,12 +1036,12 @@
       if (infoResp && typeof infoResp.expiry !== "undefined") lilExpiry = infoResp.expiry;
 
       menu.innerHTML = "";
-      const defName = context.defaultBrowserName || "Chrome";
+      const primaryName = context.primaryBrowserName || "Chrome";
       const hostName = context.browserName || "this browser";
 
-      addItem(menu, "Open in " + defName, "⌘O", () => promote("default"));
+      addItem(menu, "Open in " + primaryName, "⌘O", () => promote("primary"));
 
-      if (context.browser && context.defaultBrowser && context.browser !== context.defaultBrowser) {
+      if (context.browser && context.primaryBrowser && context.browser !== context.primaryBrowser) {
         addItem(menu, "Open in " + hostName + " tab", "", () => promote("host-tab"));
       }
 
@@ -956,7 +1054,7 @@
 
       const known = Array.isArray(context.knownBrowsers) ? context.knownBrowsers : [];
       const others = known.filter(
-        (b) => b && b.installed && b.slug && b.slug !== context.defaultBrowser && b.slug !== context.browser
+        (b) => b && b.installed && b.slug && b.slug !== context.primaryBrowser && b.slug !== context.browser
       );
       if (others.length) {
         addSep(menu);
@@ -983,10 +1081,9 @@
         });
       }
 
-      // ---- Sleep + incognito. ----
       addSep(menu);
       if (!isIncognito) {
-        addItem(menu, "Sleep this lil", "", () => {
+        addItem(menu, "Let This Lil Nap", "", () => {
           closeMenu();
           send({ action: "sleepThisLil" });
         });
@@ -997,10 +1094,21 @@
       }
 
       addSep(menu);
+      addItem(menu, "Settings…", "", () => {
+        closeMenu();
+        send({ action: "openSettings" });
+      });
+      addSep(menu);
       addItem(menu, "Close lil", "⌘W", () => {
         closeMenu();
         send({ action: "closeWindow" });
       });
+      const manifest = chrome.runtime.getManifest();
+      const versionText = (manifest && (manifest.version_name || manifest.version)) || "";
+      if (versionText) {
+        addSep(menu);
+        addFooter(menu, versionText);
+      }
 
       menu.classList.add("open");
     }
@@ -1035,10 +1143,7 @@
       const label = document.createElement("span");
       label.textContent = text;
       el.appendChild(label);
-      const check = document.createElement("span");
-      check.className = "check k";
-      check.textContent = checked ? "✓" : "";
-      el.appendChild(check);
+      if (checked) el.appendChild(icon("check", "check"));
       el.addEventListener("click", onClick);
       container.appendChild(el);
     }
@@ -1072,8 +1177,15 @@
       container.appendChild(s);
     }
 
+    function addFooter(container, text) {
+      const el = document.createElement("div");
+      el.className = "foot";
+      el.textContent = text;
+      container.appendChild(el);
+    }
+
     back.addEventListener("click", () => history.back());
-    promoteBtn.addEventListener("click", () => promote("default"));
+    promoteBtn.addEventListener("click", () => promote("primary"));
     caretBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       if (menuOpen()) closeMenu();
@@ -1093,6 +1205,7 @@
       (e) => {
         if (e.key !== "Escape") return;
         // The address field's own handler deals with Esc while focused.
+        if (addrFocused()) return;
         if (omniOpen()) {
           closeOmni();
           return;
@@ -1143,7 +1256,7 @@
         } else if (e.key === "o" || e.key === "O") {
           e.preventDefault();
           e.stopPropagation();
-          promote("default");
+          promote("primary");
         }
       },
       true
@@ -1156,6 +1269,21 @@
       } catch (_) {
         /* older browsers */
       }
+    }
+
+    // Hot-apply (issue #12): the worker pushes its freshly replaced context to
+    // every live lil. Swap it in and re-derive everything the overlay shows:
+    // style/tint, the promote label, and the reveal zone (read live by the
+    // mousemove handler above).
+    try {
+      chrome.runtime.onMessage.addListener((msg) => {
+        if (!msg || msg.action !== "contextUpdate" || !msg.context) return;
+        context = msg.context;
+        applyContextLabels();
+        applyStyle();
+      });
+    } catch (_) {
+      /* context invalidated */
     }
 
     // Initial context fetch.
