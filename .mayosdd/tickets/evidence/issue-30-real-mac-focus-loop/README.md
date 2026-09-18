@@ -42,8 +42,15 @@ The rule, in `scripts/focus-loop/verdict.mjs`:
      cross-display symptom, and it shows even when nothing overtook anything);
   2. the lil was left as the focused front window of the browser;
   3. no *other* browser window came forward with it.
-- **close** is red when the frontmost application afterwards is not the one that
-  was frontmost before the lil took focus (ADR-0004).
+- **close** is red when *either* of two requirements fails, and the reason names
+  which:
+  1. the frontmost application afterwards is the one that was frontmost before
+     the lil took focus (ADR-0004);
+  2. no browser window rose above another application's window during the
+     close. The 2026-09-17 live run (#31) restored the right app and still left
+     the Primary window one step above the user's other apps — the flash Lucas
+     sees; the frontmost app alone read that green. The reason names each risen
+     window with its front-to-back position before and after.
 - A repetition that cannot be observed is **inconclusive** — never green. An
   unreadable source display is inconclusive, not green.
 
@@ -55,6 +62,21 @@ silently exempted.
 `CGWindowListCopyWindowInfo` and never reads window titles (titles are the only
 part that is permission-gated). Activating an app and opening a lil go through
 `/usr/bin/open`, i.e. the real default-browser path.
+
+**Launch.** Every scenario says how its lil is opened (`launch` in
+`scenarios.mjs`), because the two ways `/usr/bin/open` can hand a URL to the
+default browser are not the same path through the product:
+
+| launch | command | what it exercises |
+|---|---|---|
+| `activating` | `open <url>` | a link clicked in Mail: LaunchServices activates the URL handler (Lil Chromium) before the app sees the URL |
+| `background` | `open -g <url>` | the URL arrives with the source app still frontmost |
+
+Until 2026-09-17 every scenario used `-g`, and the host log showed the
+difference: a scripted open arrived with Mail frontmost, a real Mail click with
+the app itself frontmost (#31, L1). The close scenarios now run `activating`,
+the product path; one `background` counterpart of `close/immediate` is kept so
+the two can be compared in one run.
 
 ---
 
@@ -165,16 +187,25 @@ Defined once in `scripts/focus-loop/scenarios.mjs`, so the run, the replay, and
 this document cannot drift apart.
 
 **Close** (2 repetitions each; each ends in a gesture macOS gives no
-permission-free way to perform, so each needs a person at the Mac):
+permission-free way to perform, so each needs a person at the Mac). The three
+#30 cases run on the `activating` launch, the path a clicked link takes; the
+fourth is the `background` comparison. The run prints the launch under each
+scenario's header so the operator knows which one they are watching.
 
-| id | what it covers |
-|---|---|
-| `close/immediate` | close a focused lil right after opening it from an external app |
-| `close/switch-then-refocus` | switch to another app, click the lil to refocus it, then close it |
-| `close/unfocused-red-button` | close a background lil with **only** its red control, never focusing it |
+| id | launch | what it covers |
+|---|---|---|
+| `close/immediate` | activating | close a focused lil right after opening it from an external app |
+| `close/switch-then-refocus` | activating | switch to another app, click the lil to refocus it, then close it |
+| `close/unfocused-red-button` | activating | close a background lil with **only** its red control, never focusing it |
+| `close/background/immediate` | background | `close/immediate` with the lil opened by `open -g`, for comparison |
+
+The product-path ids are unchanged from the recorded traces, so those still
+replay; a `close/immediate` filter selects only the product path, `close/`
+selects all four.
 
 **Open** (3 repetitions each, fully automatic — two arrangements × three
-neighbour states):
+neighbour states, all on the `background` launch their recorded evidence was
+measured under):
 
     open/{same-display,cross-display}/{no-other-lil,lil-on-source-display,lil-on-primary-display}
 
@@ -276,7 +307,7 @@ conversation.
 
 | you see | it means |
 |---|---|
-| `red` on a `close/…` scenario | symptom 1 reproduced; `actual` names where focus landed, `risenSiblings` names the sibling that came forward |
+| `red` on a `close/…` scenario | symptom 1 reproduced, or a browser window rose during the close; the reason says which. `actual` names where focus landed, `risenSiblings` names each window that came forward with its order before and after |
 | `red` on an `open/…` scenario | symptom 2 reproduced; the reason names which of the three requirements failed, `rate` is the reproduction rate over the repetitions, `risenSiblings[].overtook` names what each sibling passed |
 | `green` everywhere | neither symptom reproduced under the arrangements that were verified |
 | `inconclusive` | the loop could not observe the scenario — arrangement never matched, no operator, a gesture that never arrived, a teardown that did not close, or a missing reading. **Not** a pass |

@@ -8,11 +8,26 @@ import assert from "node:assert/strict";
 
 import { SCENARIOS, gestures, needsOperator, selectScenarios } from "./scenarios.mjs";
 
-test("the close matrix covers all three cases #30 names", () => {
+test("the close matrix runs all three #30 cases on the activating open a link click takes, plus one background comparison", () => {
+  const close = SCENARIOS.filter((s) => s.kind === "close");
   assert.deepEqual(
-    SCENARIOS.filter((s) => s.kind === "close").map((s) => s.id),
-    ["close/immediate", "close/switch-then-refocus", "close/unfocused-red-button"]
+    close.map((s) => [s.id, s.launch]),
+    [
+      ["close/immediate", "activating"],
+      ["close/switch-then-refocus", "activating"],
+      ["close/unfocused-red-button", "activating"],
+      ["close/background/immediate", "background"],
+    ]
   );
+  const product = close[0];
+  const comparison = close[3];
+  assert.deepEqual(comparison.steps, product.steps, "the comparison differs from close/immediate only in its launch");
+  assert.match(product.summary, /activating/);
+  assert.match(comparison.summary, /background/);
+});
+
+test("the open matrix keeps the background launch its recorded evidence was measured under", () => {
+  assert.ok(SCENARIOS.filter((s) => s.kind === "open").every((s) => s.launch === "background"));
 });
 
 test("the open matrix covers both arrangements against all three neighbour states", () => {
@@ -41,7 +56,7 @@ test("only the close cases need a person; opening is fully automatic", () => {
 test("scenarios can be selected by exact id or by prefix", () => {
   assert.deepEqual(selectScenarios("close/immediate").map((s) => s.id), ["close/immediate"]);
   assert.equal(selectScenarios("open").length, 6);
-  assert.equal(selectScenarios("close,open/same-display").length, 6);
+  assert.equal(selectScenarios("close,open/same-display").length, 7);
   assert.equal(selectScenarios().length, SCENARIOS.length);
 });
 

@@ -191,6 +191,25 @@ test("closing: landing on the browser instead of the prior app is red", () => {
   );
 });
 
+test("closing: the prior app back in front while a sibling rose above another app is red, and names the rise", () => {
+  // Live run 2026-09-17: Mail was frontmost again after the close, but the
+  // Primary window had moved from behind the terminal to just behind Mail.
+  const result = closeVerdict({
+    before: snap("before", [MAIL, TERMINAL, PRIMARY], front("com.apple.mail")),
+    after: snap("afterClose", [MAIL, PRIMARY, TERMINAL], front("com.apple.mail")),
+    bundleId: HELIUM,
+    expectedBundleId: "com.apple.mail",
+  });
+
+  assert.equal(result.verdict, "red");
+  assert.equal(result.landedOnBrowser, false);
+  assert.deepEqual(
+    result.risenSiblings.map((s) => s.number),
+    [PRIMARY.number]
+  );
+  assert.match(result.reason, /window 20 .*2 .*1/, "the reason names the risen window and its order before and after");
+});
+
 test("closing: no captured expectation is inconclusive, never green", () => {
   const result = closeVerdict({
     before: snap("before", [TERMINAL], front("com.cmuxterm.app")),
