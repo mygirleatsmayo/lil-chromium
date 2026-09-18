@@ -158,3 +158,7 @@ Standards: no hard violations; 199 node, 178 swift. Spec: two items for adjudica
 - G7 · AC6's "performs no focus restoration" is scored only at the unit seam; the loop cannot see a restoration that targets the already-active app · **won't-fix here** · the host log the loop drains carries `restore-focus`; a loop assertion on it is a #30 follow-up, not a #31 change.
 - G8 · `close/switch-then-refocus` rep 1 restored Mail (E1) instead of Obsidian (E2); rep 2 and both earlier reps went to Obsidian · **watch** · 32 s untraced gap before the refocus click; the host history is the only path to Mail, so either the observer missed Obsidian or Mail was touched. The HEAD rerun decides.
 - G9 · a palette lil opened while the user is in the browser records the browser itself as the app-supplied external app; the host excludes the browser from its history and history wins (F10), so the close restores the last non-browser app instead of the browser · **needs adjudication (Lucas)** · AC7 says the browser window is restored when it truly preceded the run. Proposed root fix: the app never reports the target browser as an external app, so the extension falls back to its own last focused window. Not in `9a26be7`.
+
+## Remediation round 9 (pre-fix point `d5c1b45` → `977b311`)
+
+G1, G2, G4 resolved; no new defects (200 node). Review complete for integration at `977b311`. Open after merge: G6 (AC9, blocked on L11/#32), G8 (watch, HEAD rerun), G9 (Lucas's adjudication).
