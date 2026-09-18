@@ -4,7 +4,6 @@ description: |
   Design and iterate on logos using SVG. Use this skill when the user asks to
   "create a logo", "design a logo", "make me a logo", "iterate on this logo",
   "logo for my project", or discusses logo design, branding icons, or wordmarks.
-version: 1.0.0
 license: MIT
 ---
 
@@ -241,15 +240,19 @@ During Phase 3 (Refine), add a "Favicon Size Check" section below the iteration 
   <div style="display:flex;flex-direction:column;align-items:center;gap:0.5rem;">
     <div style="font-size:0.8rem;font-weight:500;">{{LABEL}}</div>
     <div style="display:flex;gap:1rem;align-items:end;">
-      <div><img src="{{PATH}}" width="64" height="64"><div style="font-size:0.75rem;opacity:0.6;">64px</div></div>
-      <div><img src="{{PATH}}" width="32" height="32"><div style="font-size:0.75rem;opacity:0.6;">32px</div></div>
-      <div><img src="{{PATH}}" width="16" height="16"><div style="font-size:0.75rem;opacity:0.6;">16px</div></div>
+      <div><img src="{{FAVICON_PATH}}" width="64" height="64"><div style="font-size:0.75rem;opacity:0.6;">64px</div></div>
+      <div><img src="{{FAVICON_PATH}}" width="32" height="32"><div style="font-size:0.75rem;opacity:0.6;">32px</div></div>
+      <div><img src="{{FAVICON_PATH}}" width="16" height="16"><div style="font-size:0.75rem;opacity:0.6;">16px</div></div>
     </div>
   </div>
 </div>
 ```
 
-This is especially important for icon-only logos. If details disappear at 32px, suggest simplifying (remove fine details, thicken strokes, drop decorative elements).
+For icon-only logos, `{{FAVICON_PATH}}` is the iteration path. For combination
+marks, create a standalone square SVG from the meaningful `#icon` group and use
+its path for `{{FAVICON_PATH}}`. Never squeeze the full horizontal wordmark into
+the square favicon cells. If details disappear at 32px, suggest simplifying
+(remove fine details, thicken strokes, drop decorative elements).
 
 Each `{{CARDS}}` entry is:
 
@@ -318,17 +321,75 @@ logos/
 - **Check small-size legibility** — After generating iterations, include the favicon size check strip in the preview. If thin strokes vanish at 32px, proactively suggest thickening them. If fine details (clocks, sparkles, thin icons) become unreadable, suggest removing or simplifying them. This saves iteration cycles.
 - When the user is satisfied, move to Phase 4
 
+### Optional Lineage review (explicit opt-in only)
+
+Standalone SVG files and `logos/preview.html` are always the default. Do not look for,
+start, or connect to Lineage merely because it may be installed or a runtime descriptor
+exists. Use Lineage only after the user explicitly asks for canvas review and provides
+the Lineage checkout or adapter command.
+
+For an explicit review, keep the handoff one-way and public-boundary-only. Run the
+Lineage adapter with an explicit artifact, selector, and target, then pipe its single
+versioned JSON receipt to the bundled stdin-only handoff:
+
+```bash
+npm --prefix /absolute/path/to/lineage-logo --silent run agent:submit -- \
+  --mode replace \
+  --artifact /absolute/path/to/logos/iterations/iteration-2.svg \
+  --selector '#logo' \
+  --target-name logo | \
+node <path-to-skill>/scripts/lineage-handoff.mjs \
+  --logos /absolute/path/to/logos
+```
+
+The handoff never starts or locates Lineage and accepts no token, API origin, artifact
+argument, or connection context. It consumes only the adapter receipt on stdin. On an
+accepted receipt, it atomically creates the next collision-safe
+`logos/iterations/iteration-N.svg`, rereads the published bytes, verifies them, and
+prints a metadata-only receipt containing `iterationPath`, `bytes`, and `sha256`.
+File data and supported directory metadata are synchronized before that continuation
+receipt is emitted. Pre-transaction invalid or unavailable adapter receipts contain no
+fabricated transaction, source-path, or revision identity and remain terminally
+consumable by the same handoff.
+Continue refinement only from that exact `iterationPath`, then regenerate
+`logos/preview.html` so the verified iteration remains visible in the normal workflow.
+
+For reverted, rejected, stale, unavailable, conflict, timeout, or invalid receipts,
+follow the printed terminal guidance and do not create or reserve an iteration. The
+producer waits through temporary editor disconnections so a reconnected canvas cannot
+accept the same proposal after this handoff has stopped listening. If an authoritative
+accepted receipt cannot be persisted, exit 27 preserves its transaction identity, byte
+count, and hash. Fix the local storage problem and rerun the same adapter command with
+that transaction ID and the same artifact; do not create a new transaction. Never
+automatically resubmit after timeout or conflict. A new submission
+must be an explicit user-directed action after checking the current canvas state.
+If Lineage reports that its local server was replaced during a provisional acceptance,
+do not infer a terminal result and do not continue from browser memory. Inspect the
+locked canvas and use its explicit **Restore previous document** recovery action; only
+after that exact transaction is resolved may the user explicitly start another handoff.
+
 ## Phase 4: Export
 
 When the user says "export", "I'm happy with this", "this is the one", or similar:
 
 1. Identify the final iteration SVG (ask the user to confirm which one if ambiguous)
 2. Create the `logos/export/` directory
-3. Copy the final SVG to `logos/export/logo.svg`
-4. Run the bundled export script to generate PNGs:
+3. Copy the final SVG to `logos/export/logo.svg`. For a combination mark, also
+   create a standalone square `logos/export/icon.svg` from its meaningful
+   `#icon` group. Preserve the icon's appearance and give it a tight square
+   `viewBox`; do not include the wordmark.
+4. Run the bundled export script to generate PNGs. Passing an SVG that is
+   already at its destination is supported:
 
 ```bash
 bash <path-to-skill>/scripts/export.sh logos/export/logo.svg logos/export/
+```
+
+For a combination mark, pass the standalone icon as the optional third
+argument:
+
+```bash
+bash <path-to-skill>/scripts/export.sh logos/export/logo.svg logos/export/ logos/export/icon.svg
 ```
 
 The script produces:
@@ -339,6 +400,11 @@ The script produces:
 - `logo-512.png`
 - `logo-1024.png`
 - `logo-2048.png`
+
+When an icon SVG is provided, the script also preserves `icon.svg` and produces
+the matching `icon-16.png` through `icon-2048.png` family. Use the `icon-*`
+assets for favicons and app icons; use the `logo-*` assets where the complete
+combination mark belongs.
 
 5. Report the results: list all exported files with their sizes
 6. If the export script fails (no conversion tool found), tell the user:

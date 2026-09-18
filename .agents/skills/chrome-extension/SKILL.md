@@ -1,9 +1,11 @@
 ---
 name: chrome-extension
-description: "Build, modify, and debug Manifest V3 Chrome extensions — both new projects and existing ones. Use for any chrome.* API, service worker, content script, manifest.json, or extension UI surface (popup, side panel, options, omnibox); for messaging between page and background or an RPC layer over it; for injecting scripts or bypassing CSP from a content script; and for publishing to the Chrome Web Store. Skip framework-specific questions."
+description: "Build Chrome extensions with Manifest V3. Use this skill whenever the user mentions Chrome extension, browser extension, manifest.json, content script, service worker (in extension context), popup, side panel, chrome.runtime, chrome.tabs, chrome.storage, chrome.scripting, or any Chrome extension API."
+user-invocable: true
+license: MIT
 metadata:
   author: samber
-  version: "1.1.0"
+  version: "1.1.1"
 ---
 
 # Chrome Extension Development (Manifest V3)

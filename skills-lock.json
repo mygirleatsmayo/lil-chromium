@@ -12,13 +12,13 @@
       "source": "samber/cc-skills",
       "sourceType": "github",
       "skillPath": "skills/chrome-extension/SKILL.md",
-      "computedHash": "055a41d804114f6696cf71a074cf8f60f0340f4855a81b57b9bc68bd9754b5be"
+      "computedHash": "5dd6426a67ee46af74723726bb3fb512791c078836e6d38667240a40f3612840"
     },
     "logo-designer": {
       "source": "neonwatty/logo-designer-skill",
       "sourceType": "github",
       "skillPath": "skills/logo-designer/SKILL.md",
-      "computedHash": "37f00324349c15112c606110548566ee76390c234cecb5801a175c4e0823f729"
+      "computedHash": "69456cae88ba57420a639ec3183d38fffc690b1a996ccea9b626a45633d3360e"
     },
     "swift-testing-pro": {
       "source": "twostraws/swift-testing-agent-skill",
@@ -30,7 +30,7 @@
       "source": "avdlee/swiftui-agent-skill",
       "sourceType": "github",
       "skillPath": "skills/swiftui-expert-skill/SKILL.md",
-      "computedHash": "352119e45436aa70d5a0d29e275dc55769ab509c2098505b391c2e1347c1118a"
+      "computedHash": "cb78ed6bbe4dabf53ef93431f8a0ae43e09cf39b8ce6e04dac1cc144f0cf02f4"
     },
     "swiftui-pro": {
       "source": "twostraws/swiftui-agent-skill",
