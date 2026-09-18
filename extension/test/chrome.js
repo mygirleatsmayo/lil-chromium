@@ -95,6 +95,10 @@ export function createChrome(options = {}) {
   // Stall injection: when it returns a promise, storage.local.get waits for it
   // before answering — a storage round trip that has not come back yet.
   const storageGate = options.storageGate || (() => null);
+  // Stall injection: when it returns a promise, windows.getAll takes its
+  // snapshot first and waits for it before answering — an answer in flight
+  // that the browser can outrun with tab events.
+  const windowsGate = options.windowsGate || (() => null);
   let lastError = undefined;
   let nextWindowId = 1;
   let nextTabId = 1;
@@ -418,7 +422,10 @@ export function createChrome(options = {}) {
       async getAll(query = {}) {
         let list = [...windows.values()];
         if (query.windowTypes) list = list.filter((w) => query.windowTypes.includes(w.type));
-        return list.map((w) => snapshotWindow(w, tabs));
+        const snapshot = list.map((w) => snapshotWindow(w, tabs));
+        const gate = windowsGate();
+        if (gate) await gate;
+        return snapshot;
       },
       async getLastFocused(query = {}) {
         let list = [...windows.values()];

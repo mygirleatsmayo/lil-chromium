@@ -304,7 +304,10 @@ const closingWindows = new Set();
 // tab. Seeded from Chromium for windows that predate this worker; a tab both
 // seeded and already seen counts once, and a window this ledger never learned
 // reads as never emptied, which only defers its restoration to onRemoved.
+// The seed is a snapshot in flight: once a tab has been forgotten it is
+// dropped, as it could resurrect that tab as a phantom id.
 const windowTabs = new Map(); // windowId -> Set<tabId>
+let tabForgotten = false;
 
 function trackTab(windowId, tabId) {
   if (!windowTabs.has(windowId)) windowTabs.set(windowId, new Set());
@@ -313,6 +316,7 @@ function trackTab(windowId, tabId) {
 
 // Forget a tab; true when it was the last one the window held.
 function untrackTab(windowId, tabId) {
+  tabForgotten = true;
   const ids = windowTabs.get(windowId);
   if (!ids) return false;
   ids.delete(tabId);
@@ -322,6 +326,7 @@ function untrackTab(windowId, tabId) {
 }
 
 safe(chrome.windows.getAll({ populate: true }), "getAll tab ledger seed").then((wins) => {
+  if (tabForgotten) return;
   for (const win of wins || []) for (const tab of win.tabs || []) trackTab(win.id, tab.id);
 });
 chrome.tabs.onCreated.addListener((tab) => trackTab(tab.windowId, tab.id));
@@ -1154,6 +1159,7 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
   const teardownRestore = teardownRestores.get(windowId);
   teardownRestores.delete(windowId);
   closingWindows.delete(windowId);
+  windowTabs.delete(windowId);
   everFocused.delete(windowId);
   explicitFocus.delete(windowId);
   if (focusedWindowId === windowId) focusedWindowId = chrome.windows.WINDOW_ID_NONE;

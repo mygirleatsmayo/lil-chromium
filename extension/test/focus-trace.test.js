@@ -225,6 +225,46 @@ test("a worker that woke mid-session still restores at tab removal, from the sto
   assert.deepEqual(env.outgoing().at(-1), fixture("message-restore-focus"));
 });
 
+// The tab ledger's wake seed is a snapshot in flight: a tab the worker sees
+// removed before that answer lands must not come back as a phantom id, or the
+// window's real last-tab removal reads as one tab short for the whole session.
+test("a wake seed that lands after a tab removal still recognises the window's last-tab removal", async () => {
+  const parked = {
+    url: "https://parked.example/",
+    bounds: { left: 100, top: 100, width: 900, height: 700 },
+    expiry: "never",
+    lastInteraction: 1,
+    priorContext: { kind: "external-app", pid: 4242, bundleId: "com.apple.mail" },
+  };
+  let release;
+  let gate = new Promise((resolve) => (release = resolve));
+  const env = await boot({
+    windows: [{ type: "popup", url: parked.url, focused: true }],
+    storage: { ephemeralWindows: { 1: parked } },
+    windowsGate: () => gate,
+  });
+  await env.deliver(fixture("message-context"));
+  await env.deliver(arm());
+  const lil = env.windows()[0];
+  const [first] = lil.tabs;
+
+  // A wake swap while the seed's answer is still out: a second tab arrives,
+  // the snapshotted first tab goes.
+  const second = await env.chrome.tabs.create({ windowId: lil.id, url: "https://example.com/second" });
+  await env.closeTab(first.id);
+  release();
+  gate = null;
+  await env.flush();
+  assert.equal(env.windows().length, 1, "the lil is still open on its second tab");
+
+  await env.closeTab(second.id);
+
+  const restores = events(env, "restore-attempt");
+  assert.equal(restores.length, 1, "restored exactly once across the teardown");
+  assert.equal(restores[0].detail.at, "tab-removed");
+  assert.deepEqual(env.outgoing().at(-1), fixture("message-restore-focus"));
+});
+
 test("closing an unfocused lil records that no restoration was attempted", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));
