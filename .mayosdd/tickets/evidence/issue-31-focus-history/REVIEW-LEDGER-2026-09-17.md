@@ -86,3 +86,12 @@ L1–L3 resolved. New in the delta:
 N1–N4, N6 resolved. New in the delta:
 
 - N7 · `endTransferUnlessHandoff` read "mid-teardown" from `teardownFocus`, which records every tab removal until the window goes, so a transfer out of a normal window where the user had ever closed a tab survived non-recording events and its eventual close reverted a lil's prior context · **fix** · a window is mid-teardown only while Chromium flags its tabs' removal `isWindowClosing` (`closingWindows`, cleared at `windows.onRemoved`); `teardownFocus` keeps its one job (P4). Test "closing a normal window the user once came from does not rewrite a lil's prior context", from the reviewer's reproduction (red at `6e59a8e`).
+
+## Remediation round 5 (pre-fix point `6e59a8e` → `c4002b7`)
+
+N7 resolved; no new defects. Two judgement calls, both settled:
+
+- N8 · `closingWindows` is the fourth window-keyed lifecycle mark S5 named as its revisit trigger · **settled, no action** · folding it into `teardownFocus`'s value would undo N7's one-job rule; the marks stay separate. Revisit only if a fifth appears.
+- N9 · a `closingWindows` entry is cleared only by `windows.onRemoved` · **settled, no action** · the same lifecycle every teardown mark relies on; no new leak class.
+
+Ledger fully resolved at `c4002b7`. The final full review before integration runs after Lucas's live verification, so any live finding is in it.
