@@ -179,6 +179,11 @@ export async function boot(options = {}) {
       await state.blurBrowser();
       await flush();
     },
+    // ⌘W on one tab: the tab goes, and a window it left empty closes after it.
+    async closeTab(tabId) {
+      await state.closeTab(tabId);
+      await flush();
+    },
     menus() {
       return [...state.menus.values()];
     },

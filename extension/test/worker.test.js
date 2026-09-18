@@ -328,6 +328,31 @@ test("a focused lil's external-app restoration is posted at tab removal without 
   assert.deepEqual(Object.keys(env.registry()), []);
 });
 
+// A lil briefly holds two tabs during a wake swap; only the removal that
+// empties it is a close.
+test("removing one tab of a two-tab lil restores nothing, and closing its last tab restores once", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.blurBrowser();
+  await env.deliver(fixture("message-open-prior-context"));
+  const lil = env.windows()[0];
+  const second = await env.chrome.tabs.create({ windowId: lil.id, url: "https://example.com/second" });
+  const restoreRequests = () => env.outgoing().filter((m) => m.type === "restore-focus").length;
+
+  await env.closeTab(second.id);
+
+  assert.equal(env.windows().length, 1, "the lil stays open");
+  assert.equal(restoreRequests(), 0, "a tab close inside a live lil restores nothing");
+  assert.ok(env.registry()[String(lil.id)], "and the lil stays registered");
+
+  await env.closeTab(lil.tabs[0].id);
+
+  assert.equal(env.windows().length, 0);
+  assert.equal(restoreRequests(), 1, "the close that empties the lil restores once");
+  assert.deepEqual(env.outgoing().at(-1), fixture("message-restore-focus"));
+  assert.deepEqual(Object.keys(env.registry()), []);
+});
+
 test("the Close lil action restores prior context exactly once before cleanup", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));

@@ -299,20 +299,55 @@ const teardownRestores = new Map();
 // Windows Chromium is closing: flagged on their tabs' removal, gone at windows.onRemoved.
 const closingWindows = new Set();
 
+// Live tab ids per window, kept from Chromium's tab events so a removal can
+// tell synchronously — no query, no storage — that it took the window's last
+// tab. Seeded from Chromium for windows that predate this worker; a tab both
+// seeded and already seen counts once, and a window this ledger never learned
+// reads as never emptied, which only defers its restoration to onRemoved.
+const windowTabs = new Map(); // windowId -> Set<tabId>
+
+function trackTab(windowId, tabId) {
+  if (!windowTabs.has(windowId)) windowTabs.set(windowId, new Set());
+  windowTabs.get(windowId).add(tabId);
+}
+
+// Forget a tab; true when it was the last one the window held.
+function untrackTab(windowId, tabId) {
+  const ids = windowTabs.get(windowId);
+  if (!ids) return false;
+  ids.delete(tabId);
+  if (ids.size) return false;
+  windowTabs.delete(windowId);
+  return true;
+}
+
+safe(chrome.windows.getAll({ populate: true }), "getAll tab ledger seed").then((wins) => {
+  for (const win of wins || []) for (const tab of win.tabs || []) trackTab(win.id, tab.id);
+});
+chrome.tabs.onCreated.addListener((tab) => trackTab(tab.windowId, tab.id));
+chrome.tabs.onAttached.addListener((tabId, info) => trackTab(info.newWindowId, tabId));
+chrome.tabs.onDetached.addListener((tabId, info) => untrackTab(info.oldWindowId, tabId));
+
 // Restoring here, while the closing lil is still the key window, keeps the
 // key handoff from raising a sibling: once the prior context is in front
-// the lil no longer holds key and its removal moves nothing else. Chromium
-// flags the removal as a window close only on the closing paths it knows.
-// verified: Helium, issue #30 live trace 2026-09-17 — isWindowClosing was
-// true in 6/6 closes (red button and windows.remove); the handoff to the
-// primary window fired 27–32 ms after tab-removed and left that window one
-// step below the restored app.
+// the lil no longer holds key and its removal moves nothing else. A window
+// enters teardown on two gestures: Chromium flags the removal
+// `isWindowClosing` on the closing paths it knows (red button,
+// windows.remove), and ⌘W removes the only tab unflagged, after which the
+// emptied window closes on its own — so the last-tab removal is the same
+// reading.
+// verified: Helium, issue #30 live traces 2026-09-17 and 2026-09-18 —
+// isWindowClosing was true in every red-button and windows.remove close and
+// false in every ⌘W close; on both gestures the handoff to the primary
+// window fired 19–32 ms after tab-removed and, when the restoration waited
+// for window-removed, left that window one step below the restored app.
 chrome.tabs.onRemoved.addListener((tabId, info) => {
   const heldFocus = focusedWindowId === info.windowId;
-  // LILFOCUS: the reading itself, plus Chromium's own closing flag.
-  focusTrace("tab-removed", { tabId, windowId: info.windowId, isWindowClosing: !!info.isWindowClosing, heldFocus });
+  const lastTab = untrackTab(info.windowId, tabId);
+  // LILFOCUS: the reading itself, plus both signs of a closing window.
+  focusTrace("tab-removed", { tabId, windowId: info.windowId, isWindowClosing: !!info.isWindowClosing, lastTab, heldFocus });
   teardownFocus.set(info.windowId, heldFocus);
-  if (!info.isWindowClosing) return;
+  if (!info.isWindowClosing && !lastTab) return;
   closingWindows.add(info.windowId);
   if (unwindsFocus(info.windowId, heldFocus) && !teardownRestores.has(info.windowId)) {
     teardownRestores.set(info.windowId, restoreAtTeardown(info.windowId));

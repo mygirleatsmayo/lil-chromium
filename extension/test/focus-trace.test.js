@@ -169,6 +169,33 @@ test("a focused lil restores its prior context once, before Chromium hands key t
   assert.equal(env.windows().find((w) => w.focused).id, normal.id);
 });
 
+// Live trace 2026-09-18: ⌘W removes the lil's only tab without the
+// window-closing flag; Chromium hands key to the primary window ~25 ms later
+// and only then reports the emptied window gone. The last-tab removal is the
+// teardown reading for that gesture.
+test("a ⌘W close restores the prior context at the last-tab removal, before Chromium hands key to a sibling", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver(arm());
+  const normal = await openPrimaryWindow(env);
+  await env.blurBrowser(); // the user came to the link from Mail
+  const lil = await openLil(env, { priorContext: { kind: "external-app", pid: 4242, bundleId: "com.apple.mail" } });
+
+  await env.closeTab(lil.tabs[0].id);
+
+  const [tabRemoved] = events(env, "tab-removed");
+  const handoff = events(env, "focus-changed").find((e) => e.seq > tabRemoved.seq && e.detail.windowId === normal.id);
+  const [removed] = events(env, "window-removed");
+  const restores = events(env, "restore-attempt");
+  assert.equal(tabRemoved.detail.isWindowClosing, false, "Chromium did not flag a ⌘W close");
+  assert.equal(restores.length, 1, "restored exactly once across the teardown");
+  assert.equal(restores[0].detail.at, "tab-removed");
+  assert.equal(restores[0].detail.outcome, "sent-to-host");
+  assert.ok(handoff && restores[0].seq < handoff.seq, "restored before the key handoff to the primary window");
+  assert.ok(restores[0].seq < removed.seq, "restored before the window was reported gone");
+  assert.deepEqual(env.outgoing().at(-1), fixture("message-restore-focus"));
+});
+
 test("a worker that woke mid-session still restores at tab removal, from the stored registry", async () => {
   // The lil and its registry entry predate this worker: nothing in memory
   // knows its prior context, and the teardown must still not wait for the
