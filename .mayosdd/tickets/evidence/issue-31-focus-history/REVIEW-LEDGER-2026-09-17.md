@@ -110,3 +110,13 @@ Verified this round (research, 2026-09-18):
 - L7 · the external-app restoration read the registry from storage before posting, inside a ~27 ms race · **fix** · in-memory prior-context mirror, write-through; the post happens before any await. Pinned with a stalled-storage fake (`storageGate`) and a cold-mirror wake test.
 - L8 · host log stamps were whole seconds, so `restore-focus` could not be aligned with the extension trace · **fix** · milliseconds.
 - L9 · the Mail-path close landing on Helium · **open, needs the activating-open trace** · hypothesis from the August traces (old build, `focus-changed(lil)` then `focus-changed(primary)` 4–15 ms later on every Mail-source open) and fact 3 above: app activation re-keys the primary during the create, and the history reads the lil's next focus as a move from the primary. No code change until the loop shows it on `2ca9c3e`+.
+
+## Remediation round 6 (pre-fix point `2ca9c3e` → `dc272ae`)
+
+L5–L8 resolved; no new defects (196 node, 178 swift, `swift build` warning-free). Reviewer notes, settled:
+
+- L7 residual · a worker that woke mid-session still pays the storage round trip, and its test asserts only "before `window-removed`", not before the ~27 ms handoff · **settled, no action** · inherent to the accepted mirror-plus-registry-fallback design; a cold mirror has nothing to post synchronously.
+- L8 contract · the millisecond stamp is not parsed anywhere and no doc pins the old format · **settled, no action** · no PROTOCOL change owed.
+- L9 · **still open** · no code in the delta, by design. Resolves after the activating-open trace from `node scripts/focus-loop.mjs run --scenarios close/` on this build.
+
+Ledger at `dc272ae`: L1–L8 resolved, L9 pending live evidence. Final full review runs once L9 is closed.
