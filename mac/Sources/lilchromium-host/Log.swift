@@ -14,6 +14,19 @@ final class HostLog {
 
     private let maxBytes: Int = 1_000_000
 
+    // Millisecond stamps: `[LILFOCUS] restore-focus` lines are read against
+    // the extension trace's `t`, a millisecond epoch (issue #31 evidence).
+    private static let stampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    /// The timestamp a log line opens with: `2026-09-17T23:30:13.417Z`.
+    static func stamp(_ date: Date) -> String {
+        stampFormatter.string(from: date)
+    }
+
     private init() {
         // Fallback until the slug is known (pre-detection startup lines).
         self.path = LilPaths.hostLogPath(forBrowser: "unknown")
@@ -30,8 +43,7 @@ final class HostLog {
     func log(_ message: String) {
         queue.async { [maxBytes] in
             let path = self.path
-            let stamp = ISO8601DateFormatter().string(from: Date())
-            let line = "[\(stamp)] \(message)\n"
+            let line = "[\(HostLog.stamp(Date()))] \(message)\n"
             guard let data = line.data(using: .utf8) else { return }
 
             let fm = FileManager.default
