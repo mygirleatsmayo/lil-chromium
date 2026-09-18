@@ -135,3 +135,12 @@ L10 resolved (198 node). New in the delta:
 
 - D1 · the tab ledger's wake seed had no "already seen" guard, so a tab removed while `windows.getAll` was in flight came back as a phantom id and that window's real last-tab removal read `lastTab:false` for the session (silent fallback to the late restore) · **fix** · `tabForgotten`, set by `untrackTab`, skips the seed — the same shape as the `focusEventSeen` guard. Test "a wake seed that lands after a tab removal still recognises the window's last-tab removal" (red at `3cc1396`). Commit `73fa90d`.
 - D2 · `windows.onRemoved` cleared three teardown marks but not `windowTabs` · **fix** · cleared beside them. Same commit.
+
+## Remediation round 8 (pre-fix point `3cc1396` → `a15ea96`)
+
+D1, D2 resolved (199 node). Two judgement notes, both settled:
+
+- D3 · `onDetached` also sets `tabForgotten`, so a tab dragged out during boot discards the seed for every window · **settled, no action** · the documented safe fallback (late restore), boot round trip only; a per-id set would be finer, not simpler.
+- D4 · the test gate stalls every `windows.getAll` and the new test nulls it after release · **settled, no action** · test hygiene.
+
+Ledger fully resolved at `a15ea96`. Final full review before integration follows.
