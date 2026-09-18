@@ -95,3 +95,18 @@ N7 resolved; no new defects. Two judgement calls, both settled:
 - N9 · a `closingWindows` entry is cleared only by `windows.onRemoved` · **settled, no action** · the same lifecycle every teardown mark relies on; no new leak class.
 
 Ledger fully resolved at `c4002b7`. The final full review before integration runs after Lucas's live verification, so any live finding is in it.
+
+## Live round 2 (build `2ca9c3e`, Lucas's manual checks 2026-09-18 00:09–00:11Z)
+
+Reported: a lil from a Mail link still ends on Helium; a palette lil's close raises the Helium primary window for a moment before the app comes back. Host log: the three Mail clicks now carry `appPriorContext=external-app … com.apple.mail` (L1 holds), but no `restore-focus` follows them, so at close those lils held a Helium window as prior context; the palette closes did restore (`activated-exact-pid`) — the flash is the close-time race.
+
+Verified this round (research, 2026-09-18):
+- `man open`: `-g  Do not bring the application to the foreground.` The loop opens with `-g` (`scripts/focus-loop/native.mjs`), Mail's click activates the URL handler. The loop never exercised the user's path.
+- Chromium main `ui/views/widget/native_widget_mac.mm:817`: `NativeWidgetMac::Deactivate()` is `NOTIMPLEMENTED()` — `windows.update({focused:false})` cannot deactivate the browser on macOS. No extension API deactivates it, so the only thing that stops AppKit's key-window succession from raising the primary is another app being active before Chromium's `orderOut`.
+- Chromium main `components/remote_cocoa/app_shim/native_widget_ns_window_bridge.mm`: `CloseWindow()` orders the window out then posts `close`; `kShowAndActivateWindow` activates the app (`activateIgnoringOtherApps:YES`) before `makeKeyAndOrderFront:` — app activation is what brings the primary forward on a focused create (#32's mechanism, to confirm on the activating path).
+
+- L5 · the loop's open never activated the handler app · **fix** · `launch` dimension; close scenarios run `activating` (the product path), `close/background/immediate` kept for comparison. Open scenarios stay `background` (their evidence was measured there); switch when #32 starts.
+- L6 · `closeVerdict` ignored `risenSiblings`, so a close that restored the app while raising the primary read green · **fix** · red with the risen windows named.
+- L7 · the external-app restoration read the registry from storage before posting, inside a ~27 ms race · **fix** · in-memory prior-context mirror, write-through; the post happens before any await. Pinned with a stalled-storage fake (`storageGate`) and a cold-mirror wake test.
+- L8 · host log stamps were whole seconds, so `restore-focus` could not be aligned with the extension trace · **fix** · milliseconds.
+- L9 · the Mail-path close landing on Helium · **open, needs the activating-open trace** · hypothesis from the August traces (old build, `focus-changed(lil)` then `focus-changed(primary)` 4–15 ms later on every Mail-source open) and fact 3 above: app activation re-keys the primary during the create, and the history reads the lil's next focus as a move from the primary. No code change until the loop shows it on `2ca9c3e`+.
