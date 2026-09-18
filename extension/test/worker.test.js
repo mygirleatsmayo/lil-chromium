@@ -246,6 +246,30 @@ test("closing a focused lil removes it and focuses the prior window", async () =
   assert.ok(journalHas(env, "windows.update", (e) => e.windowId === first && e.update.focused === true));
 });
 
+test("closing a normal window the user once came from does not rewrite a lil's prior context", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://primary.example/", type: "normal", focused: true });
+  // An ordinary tab close leaves the window open.
+  const tab = await env.chrome.tabs.create({ windowId: normal.id, url: "https://primary.example/2" });
+  await env.chrome.tabs.remove(tab.id);
+  await env.blurBrowser();
+  await env.deliver({ type: "open", url: "https://example.com/docs", left: 10, top: 10 });
+  const lil = env.windows().find((w) => w.type === "popup");
+  // The user visits the primary window, comes back to the lil, then leaves for another app.
+  await env.chrome.windows.update(normal.id, { focused: true });
+  await env.chrome.windows.update(lil.id, { focused: true });
+  await env.blurBrowser();
+
+  await env.chrome.windows.remove(normal.id);
+  await env.flush();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(env.registry()[String(lil.id)].priorContext)), {
+    kind: "normal-window",
+    windowId: normal.id,
+  });
+});
+
 test("each lil restores its recorded prior context from a nested external-app chain", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));

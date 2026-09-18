@@ -80,3 +80,9 @@ L1–L3 resolved. New in the delta:
 - N4 · with restoration earlier, a focus event that records nothing (`onFocusChanged(NONE)` as the restored app comes forward, or the refocus of the prior lil) can land between the handoff and `window-removed`, and both discarded the handoff transfer before `revertHandoffFrom` ran · **fix** · a non-recording focus event keeps a transfer whose source is mid-teardown (`endTransferUnlessHandoff`). Pinned by the existing test "each lil restores its recorded prior context from a nested external-app chain", which went red on the promise-based teardown for exactly this ordering.
 - N5 · `AGENTS.md` toolchain edit contradicts F3's "won't-fix here" · **settled, no action** · Lucas directed it ("AGENTS.md is stale then update it"); F3's disposition is superseded by that instruction.
 - N6 · `_ = OpenRouter.activationHistory` names nothing · **fix** · `OpenRouter.startActivationHistory()`.
+
+## Remediation round 4 (pre-fix point `68af155` → `6e59a8e`)
+
+N1–N4, N6 resolved. New in the delta:
+
+- N7 · `endTransferUnlessHandoff` read "mid-teardown" from `teardownFocus`, which records every tab removal until the window goes, so a transfer out of a normal window where the user had ever closed a tab survived non-recording events and its eventual close reverted a lil's prior context · **fix** · a window is mid-teardown only while Chromium flags its tabs' removal `isWindowClosing` (`closingWindows`, cleared at `windows.onRemoved`); `teardownFocus` keeps its one job (P4). Test "closing a normal window the user once came from does not rewrite a lil's prior context", from the reviewer's reproduction (red at `6e59a8e`).

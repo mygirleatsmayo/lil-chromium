@@ -296,6 +296,8 @@ const teardownFocus = new Map(); // windowId -> held focus when teardown began
 // context itself. Taken once per window, so a multi-tab close restores once
 // and windows.onRemoved waits for it rather than racing it.
 const teardownRestores = new Map();
+// Windows Chromium is closing: flagged on their tabs' removal, gone at windows.onRemoved.
+const closingWindows = new Set();
 
 // Restoring here, while the closing lil is still the key window, keeps the
 // key handoff from raising a sibling: once the prior context is in front
@@ -310,7 +312,9 @@ chrome.tabs.onRemoved.addListener((tabId, info) => {
   // LILFOCUS: the reading itself, plus Chromium's own closing flag.
   focusTrace("tab-removed", { tabId, windowId: info.windowId, isWindowClosing: !!info.isWindowClosing, heldFocus });
   teardownFocus.set(info.windowId, heldFocus);
-  if (info.isWindowClosing && unwindsFocus(info.windowId, heldFocus) && !teardownRestores.has(info.windowId)) {
+  if (!info.isWindowClosing) return;
+  closingWindows.add(info.windowId);
+  if (unwindsFocus(info.windowId, heldFocus) && !teardownRestores.has(info.windowId)) {
     teardownRestores.set(info.windowId, restoreAtTeardown(info.windowId));
   }
 });
@@ -398,7 +402,7 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 // the prior context restored at tab-removed can bring another window or app
 // forward before Chromium reports the closing window gone.
 function endTransferUnlessHandoff() {
-  if (lastTransfer && !teardownFocus.has(lastTransfer.from)) lastTransfer = null;
+  if (lastTransfer && !closingWindows.has(lastTransfer.from)) lastTransfer = null;
 }
 
 // The context a lil came from when the user brought it forward. Non-lil popups
@@ -1089,6 +1093,7 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
   teardownFocus.delete(windowId);
   const teardownRestore = teardownRestores.get(windowId);
   teardownRestores.delete(windowId);
+  closingWindows.delete(windowId);
   everFocused.delete(windowId);
   explicitFocus.delete(windowId);
   if (focusedWindowId === windowId) focusedWindowId = chrome.windows.WINDOW_ID_NONE;
