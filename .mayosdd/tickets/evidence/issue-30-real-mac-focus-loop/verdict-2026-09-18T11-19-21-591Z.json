@@ -1,0 +1,186 @@
+{
+  "tag": "LILFOCUS",
+  "issue": 30,
+  "runId": "2026-09-18T11-19-21-591Z",
+  "startedAt": "2026-09-18T11:20:27.664Z",
+  "environment": {
+    "platform": "darwin 27.0.0",
+    "browserVersion": "0.17.1.1",
+    "appVersion": "v0.2-235-gc6371c3",
+    "extensionVersion": "0.4.0-trial",
+    "worktreeCommit": "d78b5af"
+  },
+  "settings": {
+    "browser": "helium",
+    "bundleId": "net.imput.helium",
+    "sourceApp": "com.apple.mail",
+    "switchApp": "md.obsidian",
+    "url": "https://example.com/",
+    "settleMs": 900
+  },
+  "seamLive": true,
+  "counts": {
+    "red": 0,
+    "green": 3,
+    "inconclusive": 0
+  },
+  "overall": "green",
+  "scenarios": [
+    {
+      "scenario": "close/immediate",
+      "kind": "close",
+      "verdict": "green",
+      "reproductions": 0,
+      "repetitions": [
+        {
+          "repetition": 1,
+          "verdict": "green",
+          "reason": "focus returned to com.apple.mail",
+          "expected": "com.apple.mail",
+          "actual": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 86346
+          },
+          "landedOnBrowser": false,
+          "risenSiblings": [
+            {
+              "number": 6893,
+              "display": 0,
+              "orderBefore": 2,
+              "orderAfter": 1,
+              "overtook": [
+                {
+                  "number": 5725,
+                  "bundleId": "com.cmuxterm.app",
+                  "owner": "cmux"
+                }
+              ]
+            }
+          ],
+          "createdWindowId": 110447165
+        },
+        {
+          "repetition": 2,
+          "verdict": "green",
+          "reason": "focus returned to com.apple.mail",
+          "expected": "com.apple.mail",
+          "actual": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 86346
+          },
+          "landedOnBrowser": false,
+          "risenSiblings": [],
+          "createdWindowId": 110447168
+        }
+      ],
+      "inconclusive": 0,
+      "rate": 0
+    },
+    {
+      "scenario": "close/switch-then-refocus",
+      "kind": "close",
+      "verdict": "green",
+      "reproductions": 0,
+      "repetitions": [
+        {
+          "repetition": 1,
+          "verdict": "green",
+          "reason": "focus returned to md.obsidian",
+          "expected": "md.obsidian",
+          "actual": {
+            "bundleId": "md.obsidian",
+            "name": "Obsidian",
+            "pid": 29537
+          },
+          "landedOnBrowser": false,
+          "risenSiblings": [
+            {
+              "number": 6893,
+              "display": 0,
+              "orderBefore": 1,
+              "orderAfter": 1,
+              "overtook": [
+                {
+                  "number": 433,
+                  "bundleId": "com.apple.mail",
+                  "owner": "Mail"
+                }
+              ]
+            }
+          ],
+          "createdWindowId": 110447171
+        },
+        {
+          "repetition": 2,
+          "verdict": "green",
+          "reason": "focus returned to md.obsidian",
+          "expected": "md.obsidian",
+          "actual": {
+            "bundleId": "md.obsidian",
+            "name": "Obsidian",
+            "pid": 29537
+          },
+          "landedOnBrowser": false,
+          "risenSiblings": [
+            {
+              "number": 6893,
+              "display": 0,
+              "orderBefore": 2,
+              "orderAfter": 1,
+              "overtook": [
+                {
+                  "number": 433,
+                  "bundleId": "com.apple.mail",
+                  "owner": "Mail"
+                }
+              ]
+            }
+          ],
+          "createdWindowId": 110447174
+        }
+      ],
+      "inconclusive": 0,
+      "rate": 0
+    },
+    {
+      "scenario": "close/unfocused-red-button",
+      "kind": "close",
+      "verdict": "green",
+      "reproductions": 0,
+      "repetitions": [
+        {
+          "repetition": 1,
+          "verdict": "green",
+          "reason": "focus returned to md.obsidian",
+          "expected": "md.obsidian",
+          "actual": {
+            "bundleId": "md.obsidian",
+            "name": "Obsidian",
+            "pid": 29537
+          },
+          "landedOnBrowser": false,
+          "risenSiblings": [],
+          "createdWindowId": 110447177
+        },
+        {
+          "repetition": 2,
+          "verdict": "green",
+          "reason": "focus returned to md.obsidian",
+          "expected": "md.obsidian",
+          "actual": {
+            "bundleId": "md.obsidian",
+            "name": "Obsidian",
+            "pid": 29537
+          },
+          "landedOnBrowser": false,
+          "risenSiblings": [],
+          "createdWindowId": 110447182
+        }
+      ],
+      "inconclusive": 0,
+      "rate": 0
+    }
+  ]
+}
