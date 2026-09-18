@@ -191,7 +191,9 @@ export function openVerdict({ before, after, bundleId, createdBounds }) {
 /**
  * Closing scenario: the lil behaves like an independent app (ADR-0004), so the
  * application that was in front before the lil took focus must be in front
- * again. Landing on the browser is the reported regression.
+ * again, and the rest of the z-order must be as the user left it. Landing on
+ * the browser is the reported regression; a sibling that rose behind the
+ * restored app is the flash the 2026-09-17 live run read green (issue #31).
  */
 export function closeVerdict({ before, after, bundleId, expectedBundleId }) {
   const actual = after.frontmost || null;
@@ -201,11 +203,17 @@ export function closeVerdict({ before, after, bundleId, expectedBundleId }) {
     return { verdict: "inconclusive", reason: "no expected application was captured", risenSiblings: risen };
   }
   const restored = !!actual && actual.bundleId === expectedBundleId;
+  const faults = [];
+  if (!restored) {
+    faults.push(`focus landed on ${(actual && actual.bundleId) || "nothing"} instead of ${expectedBundleId}`);
+  }
+  if (risen.length) {
+    const named = risen.map((s) => `window ${s.number} from ${s.orderBefore} to ${s.orderAfter}`).join(", ");
+    faults.push(`${risen.length} ${bundleId} window(s) rose above another application's: ${named}`);
+  }
   return {
-    verdict: restored ? "green" : "red",
-    reason: restored
-      ? `focus returned to ${expectedBundleId}`
-      : `focus landed on ${(actual && actual.bundleId) || "nothing"} instead of ${expectedBundleId}`,
+    verdict: faults.length ? "red" : "green",
+    reason: faults.length ? faults.join("; ") : `focus returned to ${expectedBundleId} and no browser window rose`,
     expected: expectedBundleId,
     actual,
     landedOnBrowser: !!actual && actual.bundleId === bundleId,

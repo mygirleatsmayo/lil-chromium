@@ -269,23 +269,179 @@ function consumeClickHint(url) {
 
 let focusedWindowId = chrome.windows.WINDOW_ID_NONE;
 let lastNormalWindowId = chrome.windows.WINDOW_ID_NONE;
+// A worker that wakes while the browser already holds focus must not read
+// that focus as "outside the browser": seed both from Chromium unless a focus
+// event has already said otherwise.
+let focusEventSeen = false;
+safe(chrome.windows.getLastFocused({}), "getLastFocused seed").then((win) => {
+  if (focusEventSeen || !win || !win.focused) return;
+  focusedWindowId = win.id;
+  if (win.type === "normal") lastNormalWindowId = win.id;
+});
+
+// Teardown reading (issue #31). Chromium removes a closing window's tabs
+// first, hands key status to a sibling window, and only then fires
+// windows.onRemoved — so `focusedWindowId` at removal already names that
+// sibling. tabs.onRemoved is the last event that still sees the closing
+// window's own focus; the reading taken there is consumed exactly once by
+// windows.onRemoved.
+// verified: Helium, issue #30 live trace 2026-08-26 — the handoff
+// `focus-changed` preceded `window-removed` in 26/26 focused closes, so a gate
+// read at removal said "unfocused" every time.
+// A removal that keeps the window open (a Lil Nap wake swap) also writes a
+// reading, but the window's last tab is removed before the window is, so the
+// reading in force at windows.onRemoved is always the teardown's own.
+const teardownFocus = new Map(); // windowId -> held focus when teardown began
+// windowId -> Promise<boolean>: whether the teardown restored the lil's prior
+// context itself. Taken once per window, so a multi-tab close restores once
+// and windows.onRemoved waits for it rather than racing it.
+const teardownRestores = new Map();
+// Windows Chromium is closing: flagged on their tabs' removal, gone at windows.onRemoved.
+const closingWindows = new Set();
+
+// Live tab ids per window, kept from Chromium's tab events so a removal can
+// tell synchronously — no query, no storage — that it took the window's last
+// tab. Seeded from Chromium for windows that predate this worker; a tab both
+// seeded and already seen counts once, and a window this ledger never learned
+// reads as never emptied, which only defers its restoration to onRemoved.
+// The seed is a snapshot in flight: once a tab has been forgotten it is
+// dropped, as it could resurrect that tab as a phantom id.
+const windowTabs = new Map(); // windowId -> Set<tabId>
+let tabForgotten = false;
+
+function trackTab(windowId, tabId) {
+  if (!windowTabs.has(windowId)) windowTabs.set(windowId, new Set());
+  windowTabs.get(windowId).add(tabId);
+}
+
+// Forget a tab; true when it was the last one the window held.
+function untrackTab(windowId, tabId) {
+  tabForgotten = true;
+  const ids = windowTabs.get(windowId);
+  if (!ids) return false;
+  ids.delete(tabId);
+  if (ids.size) return false;
+  windowTabs.delete(windowId);
+  return true;
+}
+
+safe(chrome.windows.getAll({ populate: true }), "getAll tab ledger seed").then((wins) => {
+  if (tabForgotten) return;
+  for (const win of wins || []) for (const tab of win.tabs || []) trackTab(win.id, tab.id);
+});
+chrome.tabs.onCreated.addListener((tab) => trackTab(tab.windowId, tab.id));
+chrome.tabs.onAttached.addListener((tabId, info) => trackTab(info.newWindowId, tabId));
+chrome.tabs.onDetached.addListener((tabId, info) => untrackTab(info.oldWindowId, tabId));
+
+// Restoring here, while the closing lil is still the key window, keeps the
+// key handoff from raising a sibling: once the prior context is in front
+// the lil no longer holds key and its removal moves nothing else. A window
+// enters teardown on two gestures: Chromium flags the removal
+// `isWindowClosing` on the closing paths it knows (red button,
+// windows.remove), and ⌘W removes the only tab unflagged, after which the
+// emptied window closes on its own — so the last-tab removal is the same
+// reading.
+// verified: Helium, issue #30 live traces 2026-09-17 and 2026-09-18 —
+// isWindowClosing was true in every red-button and windows.remove close and
+// false in every ⌘W close; on both gestures the handoff to the primary
+// window fired 19–32 ms after tab-removed and, when the restoration waited
+// for window-removed, left that window one step below the restored app.
+chrome.tabs.onRemoved.addListener((tabId, info) => {
+  const heldFocus = focusedWindowId === info.windowId;
+  const lastTab = untrackTab(info.windowId, tabId);
+  // LILFOCUS: the reading itself, plus both signs of a closing window.
+  focusTrace("tab-removed", { tabId, windowId: info.windowId, isWindowClosing: !!info.isWindowClosing, lastTab, heldFocus });
+  teardownFocus.set(info.windowId, heldFocus);
+  if (!info.isWindowClosing && !lastTab) return;
+  closingWindows.add(info.windowId);
+  if (unwindsFocus(info.windowId, heldFocus) && !teardownRestores.has(info.windowId)) {
+    teardownRestores.set(info.windowId, restoreAtTeardown(info.windowId));
+  }
+});
+
+// Whether a closing window that held focus gives it back. A successful
+// host/group promotion is a transfer, not an unwind.
+function unwindsFocus(windowId, heldFocus) {
+  return heldFocus && !promotingWindowIds.has(windowId);
+}
+
+// Resolves to whether `windowId` was a lil whose prior context was consulted.
+// The context is read from memory first so an external-app restoration is
+// posted before this function first yields: Chromium orders the closing
+// window out and hands key to a sibling while a storage round trip is still
+// in flight, and the sibling then shows above the restored app.
+// verified: Chromium main components/remote_cocoa/app_shim/
+// native_widget_ns_window_bridge.mm CloseWindow() `[window orderOut:nil]`;
+// issue-31 trace-2026-09-17T23-20-49-256Z.jsonl, restore-attempt to
+// Chromium reporting no focused window in 18–26 ms; 2026-09-18.
+async function restoreAtTeardown(windowId) {
+  let prior = knownPriorContext(windowId);
+  if (prior === undefined) prior = await storedPriorContext(windowId);
+  if (prior === undefined) return false;
+  await restorePriorContext(prior, "tab-removed");
+  return true;
+}
+
+// A lil's prior context as this worker holds it in memory: an incognito
+// lil's, or the mirror of a registered lil's; undefined for anything else.
+function knownPriorContext(windowId) {
+  if (incognitoLils.has(windowId)) return incognitoPriorContexts.get(windowId);
+  return priorContexts.get(windowId);
+}
+
+// A registered lil's prior context from the registry; undefined for anything
+// else. The fallback for a lil this worker has not written since it woke.
+async function storedPriorContext(windowId) {
+  const reg = await getRegistry();
+  const entry = reg[String(windowId)];
+  return entry ? entry.priorContext : undefined;
+}
 
 // LILFOCUS: let the diagnostic seam tell lils from ordinary windows without
 // exporting the registry to it.
 focusTraceInit({ isLil: (windowId) => isEphemeralWindow(windowId) });
 
+// Focus history (ADR-0004, issue #31). A lil follows ordinary macOS focus
+// history as if it were its own app: each time the user brings a registered
+// lil forward, its prior context becomes the context they came from — the
+// previously focused lil, the previously focused normal window, or the
+// external app when Chromium had no focused window. Two kinds of focus change
+// are not the user coming from somewhere and leave the history alone:
+//   - explicit focus the worker asked for (creation focus, restoration, the
+//     same-lil refocus), tracked per window in `explicitFocus`;
+//   - Chromium's key handoff to a sibling when a focused window closes, which
+//     on macOS arrives before that window's onRemoved. The handoff is only
+//     recognisable once onRemoved follows, so the latest transfer remembers
+//     what it overwrote and onRemoved puts it back (revertHandoffFrom).
+const explicitFocus = new Set(); // window ids whose next focus event is the worker's doing
+const everFocused = new Set(); // window ids that have had a focus event (creation focus included)
+let lastTransfer = null; // { to, from, displaced: Promise<prior context the record replaced> } for the latest focus event
+
 // Explicit focus. Used after windows.create when a lil is asked to take focus.
+// A window Chromium already reports focused raises no event for the update,
+// so it is not marked: the mark would outlive the update and swallow the
+// user's next genuine focus of that window.
 async function focusWindow(windowId) {
   if (typeof windowId !== "number") return;
-  await safe(chrome.windows.update(windowId, { focused: true }), "windows.update focus");
+  if (focusedWindowId !== windowId) explicitFocus.add(windowId);
+  const win = await safe(chrome.windows.update(windowId, { focused: true }), "windows.update focus");
+  if (!win) explicitFocus.delete(windowId);
 }
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
+  focusEventSeen = true;
+  const previous = focusedWindowId;
   focusedWindowId = windowId;
   if (windowId === chrome.windows.WINDOW_ID_NONE) {
+    endTransferUnlessHandoff();
     focusTrace("focus-changed", { windowId, kind: "none" });
     return;
   }
+  // Decided synchronously: a handoff's onRemoved may run before any await here resumes.
+  everFocused.add(windowId);
+  const skipHistory = explicitFocus.delete(windowId) || previous === windowId;
+  if (skipHistory) endTransferUnlessHandoff();
+  else lastTransfer = { to: windowId, from: previous, displaced: recordFocusHistory(windowId, previous) };
   const win = await safe(chrome.windows.get(windowId), "windows.get last-normal");
   focusTrace("focus-changed", async () => ({
     windowId,
@@ -296,6 +452,56 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     lastNormalWindowId = windowId;
   }
 });
+
+// A focus event that records no history ends the latest transfer, except a
+// key handoff from a window mid-teardown, which onRemoved has yet to revert:
+// the prior context restored at tab-removed can bring another window or app
+// forward before Chromium reports the closing window gone.
+function endTransferUnlessHandoff() {
+  if (lastTransfer && !closingWindows.has(lastTransfer.from)) lastTransfer = null;
+}
+
+// The context a lil came from when the user brought it forward. Non-lil popups
+// (OAuth windows, DevTools) are transient and leave the history untouched.
+async function priorContextOf(previousWindowId) {
+  if (previousWindowId === chrome.windows.WINDOW_ID_NONE) return { kind: "external-app" };
+  if (await isEphemeralWindow(previousWindowId)) return { kind: "lil", windowId: previousWindowId };
+  const win = await safe(chrome.windows.get(previousWindowId), "windows.get prior context");
+  return win && win.type === "normal" ? { kind: "normal-window", windowId: previousWindowId } : undefined;
+}
+
+// Resolves to the prior context this write replaced (see setPriorContext).
+async function recordFocusHistory(windowId, previousWindowId) {
+  const prior = await priorContextOf(previousWindowId);
+  return prior === undefined ? undefined : setPriorContext(windowId, prior);
+}
+
+// Put back the prior context a key handoff from `closingWindowId` overwrote.
+async function revertHandoffFrom(closingWindowId) {
+  const transfer = lastTransfer;
+  if (!transfer || transfer.from !== closingWindowId) return;
+  lastTransfer = null;
+  const displaced = await transfer.displaced;
+  if (displaced !== undefined) await setPriorContext(transfer.to, displaced);
+}
+
+// Write a lil's prior context; returns the value it replaced, or undefined
+// when `windowId` is not a lil.
+async function setPriorContext(windowId, prior) {
+  if (incognitoLils.has(windowId)) {
+    const overwrote = incognitoPriorContexts.get(windowId) || null;
+    incognitoPriorContexts.set(windowId, prior);
+    return overwrote;
+  }
+  const reg = await getRegistry();
+  const entry = reg[String(windowId)];
+  if (!entry) return undefined;
+  const overwrote = normalizePriorContext(entry.priorContext);
+  entry.priorContext = prior;
+  priorContexts.set(windowId, prior);
+  await setRegistry(reg);
+  return overwrote;
+}
 
 // ===========================================================================
 // NATIVE PORT — load-bearing keep-alive (unchanged from v2 except handshake).
@@ -481,10 +687,12 @@ async function registerWindow(windowId, url, bounds, extra) {
     { url, bounds },
     extra || {}
   );
+  priorContexts.set(windowId, reg[String(windowId)].priorContext);
   await setRegistry(reg);
 }
 
 async function deregisterWindow(windowId) {
+  priorContexts.delete(windowId);
   const reg = await getRegistry();
   if (reg[String(windowId)] !== undefined) {
     delete reg[String(windowId)];
@@ -580,6 +788,10 @@ async function clampBounds(left, top, width, height) {
 
 const incognitoLils = new Set(); // window ids of live incognito lils
 const incognitoPriorContexts = new Map(); // window id -> prior context
+// window id -> prior context, mirroring the registry entry of every lil this
+// worker registered, remapped, or rewrote, so a teardown reads it without a
+// storage round trip. A woken worker's registry is the fallback (knownPriorContext).
+const priorContexts = new Map();
 // Host/group promotion empties the source lil and Chrome removes that window.
 // That onRemoved is a lifecycle transfer, not a close/unwind.
 const promotingWindowIds = new Set();
@@ -589,9 +801,14 @@ function normalizePriorContext(value) {
   if ((value.kind === "lil" || value.kind === "normal-window") && Number.isInteger(value.windowId)) {
     return { kind: value.kind, windowId: value.windowId };
   }
-  if (value.kind === "external-app" && Number.isInteger(value.pid) && value.pid > 0) {
-    const context = { kind: "external-app", pid: value.pid };
-    if (typeof value.bundleId === "string" && value.bundleId) context.bundleId = value.bundleId;
+  if (value.kind === "external-app") {
+    // Without a pid the external app is whichever one the user came from;
+    // only the host's activation history knows it (PROTOCOL restore-focus).
+    const context = { kind: "external-app" };
+    if (Number.isInteger(value.pid) && value.pid > 0) {
+      context.pid = value.pid;
+      if (typeof value.bundleId === "string" && value.bundleId) context.bundleId = value.bundleId;
+    }
     return context;
   }
   return null;
@@ -624,33 +841,34 @@ async function capturePriorContext(appSuppliedPriorContext) {
   return normalized && normalized.kind === "external-app" ? normalized : null;
 }
 
-async function restorePriorContext(priorContext) {
+// `at` names the teardown event the restoration runs from (LILFOCUS only).
+async function restorePriorContext(priorContext, at) {
   const prior = normalizePriorContext(priorContext);
   if (!prior) {
-    focusTrace("restore-attempt", { priorContext: null, outcome: "no-predecessor" });
+    focusTrace("restore-attempt", { at, priorContext: null, outcome: "no-predecessor" });
     return;
   }
 
   if (prior.kind === "external-app") {
     const delivered = postToHost({ type: "restore-focus", priorContext: prior });
-    focusTrace("restore-attempt", { priorContext: prior, outcome: delivered ? "sent-to-host" : "host-unavailable" });
+    focusTrace("restore-attempt", { at, priorContext: prior, outcome: delivered ? "sent-to-host" : "host-unavailable" });
     return;
   }
 
   const win = await safe(chrome.windows.get(prior.windowId), "windows.get prior context");
   if (!win) {
-    focusTrace("restore-attempt", { priorContext: prior, outcome: "stale-window" });
+    focusTrace("restore-attempt", { at, priorContext: prior, outcome: "stale-window" });
     return;
   }
   if (prior.kind === "lil" && !(await isEphemeralWindow(prior.windowId))) {
-    focusTrace("restore-attempt", { priorContext: prior, outcome: "no-longer-a-lil" });
+    focusTrace("restore-attempt", { at, priorContext: prior, outcome: "no-longer-a-lil" });
     return;
   }
   if (prior.kind === "normal-window" && win.type !== "normal") {
-    focusTrace("restore-attempt", { priorContext: prior, outcome: "no-longer-normal" });
+    focusTrace("restore-attempt", { at, priorContext: prior, outcome: "no-longer-normal" });
     return;
   }
-  focusTrace("restore-attempt", { priorContext: prior, outcome: "focus-window" });
+  focusTrace("restore-attempt", { at, priorContext: prior, outcome: "focus-window" });
   await focusWindow(prior.windowId);
 }
 
@@ -665,7 +883,7 @@ async function restorePriorContext(priorContext) {
  *   size         {width, height}; defaults to the remembered last user size.
  *   focus        Ask for focus after create (default true).
  *   incognito    In-memory-only lil: never registered, never restored.
- *   priorContext Explicit related lil/normal-window predecessor.
+ *   priorContext Explicit related lil/normal-window the focus history starts from.
  *   appSuppliedPriorContext App-supplied prior-context candidate, eligible
  *                only when Chromium has no focused window.
  *   recordUrl    URL to store in the registry. Defaults to `url`, then the
@@ -710,6 +928,11 @@ async function openLil(spec) {
     focusTrace("lil-create-failed", { url: spec.url });
     return null;
   }
+
+  // The creation focus event is the worker's doing whichever side of this
+  // line it lands on; if it is still to come, mark it so it keeps the
+  // creation-time prior context chosen above.
+  if (focus && !everFocused.has(win.id)) explicitFocus.add(win.id);
 
   focusTraceLilCreated(win.id, {
     windowId: win.id,
@@ -814,6 +1037,7 @@ async function restoreWindows() {
   const entries = Object.entries(oldReg);
   if (!entries.length) return;
 
+  priorContexts.clear();
   await setRegistry({});
 
   // Nap pages are rebuilt with the current configured tint; the normalized
@@ -866,11 +1090,12 @@ async function restoreWindows() {
   // after every window exists so chain order in storage cannot matter.
   const reg = await getRegistry();
   let remapped = false;
-  for (const entry of Object.values(reg)) {
+  for (const [key, entry] of Object.entries(reg)) {
     const prior = normalizePriorContext(entry && entry.priorContext);
     if (!prior || prior.kind !== "lil") continue;
     const newWindowId = restoredWindowIds.get(String(prior.windowId));
     entry.priorContext = newWindowId === undefined ? null : { kind: "lil", windowId: newWindowId };
+    priorContexts.set(Number(key), entry.priorContext);
     remapped = true;
   }
   if (remapped) await setRegistry(reg);
@@ -929,8 +1154,15 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
   const entry = reg[String(windowId)];
   const wasLil = !!entry || wasIncognito;
 
-  const wasFocused = focusedWindowId === windowId;
-  if (wasFocused) focusedWindowId = chrome.windows.WINDOW_ID_NONE;
+  const wasFocused = teardownFocus.has(windowId) ? teardownFocus.get(windowId) : focusedWindowId === windowId;
+  teardownFocus.delete(windowId);
+  const teardownRestore = teardownRestores.get(windowId);
+  teardownRestores.delete(windowId);
+  closingWindows.delete(windowId);
+  windowTabs.delete(windowId);
+  everFocused.delete(windowId);
+  explicitFocus.delete(windowId);
+  if (focusedWindowId === windowId) focusedWindowId = chrome.windows.WINDOW_ID_NONE;
 
   const promoting = promotingWindowIds.has(windowId);
   focusTrace("window-removed", {
@@ -941,10 +1173,13 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
     priorContext: normalizePriorContext(entry ? entry.priorContext : incognitoPriorContext),
   });
 
-  // Consult the predecessor exactly once, before deleting the lil's state.
-  // Successful host/group promotion is a transfer: skip unwind there only.
-  if (wasLil && wasFocused && !promoting) {
-    await restorePriorContext(entry ? entry.priorContext : incognitoPriorContext);
+  await revertHandoffFrom(windowId);
+
+  // Consult the prior context exactly once, before deleting the lil's state,
+  // unless the teardown already did.
+  const restoredEarly = (await teardownRestore) === true;
+  if (wasLil && unwindsFocus(windowId, wasFocused) && !restoredEarly) {
+    await restorePriorContext(entry ? entry.priorContext : incognitoPriorContext, "window-removed");
   }
 
   // Clean up any stored capture for this lil.
@@ -1688,7 +1923,7 @@ async function moveTabIntoHostBrowser(tabId, groupId) {
         const g = await safe(chrome.tabGroups.get(groupId), "tabGroups.get");
         if (g && g.windowId !== undefined) {
           await safe(chrome.tabs.update(tabId, { active: true }), "tabs.update active group");
-          await safe(chrome.windows.update(g.windowId, { focused: true }), "windows.update focus group");
+          await focusWindow(g.windowId);
         }
         ok = true;
       }
@@ -1698,7 +1933,7 @@ async function moveTabIntoHostBrowser(tabId, groupId) {
         const moved = await safe(chrome.tabs.move(tabId, { windowId: target.id, index: -1 }), "tabs.move promote");
         if (moved !== null) {
           await safe(chrome.tabs.update(tabId, { active: true }), "tabs.update active");
-          await safe(chrome.windows.update(target.id, { focused: true }), "windows.update focus");
+          await focusWindow(target.id);
           ok = true;
         }
       }
@@ -1759,7 +1994,7 @@ async function openLinkInThisLil(windowId, url) {
   }
 }
 
-// Fresh lil for a link. Names the invoking window as predecessor so a normal
+// Fresh lil for a link. Names the invoking window as prior context so a normal
 // tab's "new lil" action does not pretend the source was already a lil.
 async function openLinkInNewLil(tab, url) {
   if (typeof url !== "string" || !url || !tab || tab.windowId === undefined) return null;

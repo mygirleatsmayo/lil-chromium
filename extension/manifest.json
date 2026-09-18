@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "lil-chromium",
-  "version": "0.4.0",
-  "version_name": "0.4.0-trial",
+  "version": "0.4.1",
+  "version_name": "0.4.1-issue-31",
   "description": "Ephemeral lils (little popup windows) for lil-chromium, a Little Arc-style browser.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvRie/WjcfwsitIKqeuieS2UFJRluyPSkwtvRGDu5OXsA9y8uzSKBzLy5BvtmxNr7GYS5+28dTK8FcKViuj3aD1h8p9PGKMxB/gmw3zEDs2NCnMxineVNwtTxDTX/fnkNJZz3XwTaPuu4RmrdeFN82TR4gaid8LYJi3GQarJMi5k/NkpQcB9CRLQ0s+GdgAL8O93mNo66nUVbhaCaRt1uNhHYoQ11M9/y9gZtRNMYUAgEMX1wqvNva59qSigwSv3jFQZGYe568ngXlViNEabixwT2NWH40rllrOW6v0zDoAXCWzNVYEW5Xl0Sk+rIDOdjlQA/ANtK+4UIgZLqg3COWwIDAQAB",
   "permissions": [

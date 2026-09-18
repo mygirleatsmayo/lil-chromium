@@ -92,6 +92,13 @@ export function createChrome(options = {}) {
   const rejectTabRemove = options.rejectTabRemove || (() => false);
   // Fault injection: predicate over the tabs.query filter; true ⇒ the call rejects.
   const rejectTabQuery = options.rejectTabQuery || (() => false);
+  // Stall injection: when it returns a promise, storage.local.get waits for it
+  // before answering — a storage round trip that has not come back yet.
+  const storageGate = options.storageGate || (() => null);
+  // Stall injection: when it returns a promise, windows.getAll takes its
+  // snapshot first and waits for it before answering — an answer in flight
+  // that the browser can outrun with tab events.
+  const windowsGate = options.windowsGate || (() => null);
   let lastError = undefined;
   let nextWindowId = 1;
   let nextTabId = 1;
@@ -106,7 +113,14 @@ export function createChrome(options = {}) {
   const events = {
     runtime: { onMessage: makeEvent(), onStartup: makeEvent(), onInstalled: makeEvent() },
     windows: { onFocusChanged: makeEvent(), onBoundsChanged: makeEvent(), onRemoved: makeEvent() },
-    tabs: { onCreated: makeEvent(), onUpdated: makeEvent(), onActivated: makeEvent() },
+    tabs: {
+      onCreated: makeEvent(),
+      onUpdated: makeEvent(),
+      onActivated: makeEvent(),
+      onAttached: makeEvent(),
+      onDetached: makeEvent(),
+      onRemoved: makeEvent(),
+    },
     webNavigation: { onCreatedNavigationTarget: makeEvent() },
     alarms: { onAlarm: makeEvent() },
     contextMenus: { onClicked: makeEvent() },
@@ -140,8 +154,18 @@ export function createChrome(options = {}) {
     return Promise.reject(new Error(`No ${kind} with id ${id}`));
   }
 
+  // The fake's key handoff: when a focused window closes, focus moves to the
+  // remaining window that most recently held it in this order.
+  const focusOrder = [];
+  function forgetFocus(id) {
+    const at = focusOrder.indexOf(id);
+    if (at !== -1) focusOrder.splice(at, 1);
+  }
+
   function focusExclusive(id) {
     for (const w of windows.values()) w.focused = w.id === id;
+    forgetFocus(id);
+    if (id !== WINDOW_ID_NONE) focusOrder.push(id);
   }
 
   function addTab({ windowId, url, active = true, openerTabId, incognito = false, title = "" }) {
@@ -197,9 +221,58 @@ export function createChrome(options = {}) {
   function closeWindowIfEmpty(windowId) {
     const win = windows.get(windowId);
     if (!win || win.tabIds.length) return Promise.resolve();
-    windows.delete(windowId);
-    record("windows.remove", { windowId });
-    return events.windows.onRemoved.fire(windowId);
+    return closeWindow(win);
+  }
+
+  // Window teardown in the order Chromium produces it (issue #31): the closing
+  // window's tabs are already gone; if it held focus, the key handoff to a
+  // sibling fires `onFocusChanged` *before* `onRemoved`, and only then does the
+  // window disappear.
+  // verified: Helium, issue #30 live trace 2026-08-26 — `focus-changed` to the
+  // sibling preceded `window-removed` in 26/26 focused closes.
+  async function closeWindow(win) {
+    if (win.focused) {
+      const next = [...focusOrder].reverse().find((id) => id !== win.id && windows.has(id));
+      focusExclusive(next === undefined ? WINDOW_ID_NONE : next);
+      await events.windows.onFocusChanged.fire(next === undefined ? WINDOW_ID_NONE : next);
+    }
+    windows.delete(win.id);
+    forgetFocus(win.id);
+    record("windows.remove", { windowId: win.id });
+    await events.windows.onRemoved.fire(win.id);
+  }
+
+  async function removeTab(tab, isWindowClosing) {
+    const win = windows.get(tab.windowId);
+    if (win) win.tabIds = win.tabIds.filter((tid) => tid !== tab.id);
+    tabs.delete(tab.id);
+    record("tabs.remove", { tabId: tab.id });
+    await events.tabs.onRemoved.fire(tab.id, { windowId: tab.windowId, isWindowClosing });
+  }
+
+  // A tab closed on its own (⌘W, or tabs.remove): Chromium reports the removal
+  // without the window-closing flag, and only when the window is left empty
+  // does it close — key handoff first, then onRemoved, as closeWindow orders it.
+  // verified: Helium, issue #30 live trace 2026-09-18 — every ⌘W close reported
+  // `isWindowClosing:false`, then the handoff `focus-changed` 19–28 ms later,
+  // then `window-removed`.
+  async function closeTab(tab) {
+    const windowId = tab.windowId;
+    await removeTab(tab, false);
+    await closeWindowIfEmpty(windowId);
+  }
+
+  // Chromium's event pair for a tab that changes windows.
+  async function moveTabToWindow(tab, dst) {
+    const src = windows.get(tab.windowId);
+    const oldWindowId = tab.windowId;
+    if (src) src.tabIds = src.tabIds.filter((tid) => tid !== tab.id);
+    tab.windowId = dst.id;
+    tab.incognito = dst.incognito;
+    dst.tabIds.push(tab.id);
+    await events.tabs.onDetached.fire(tab.id, { oldWindowId, oldPosition: 0 });
+    await events.tabs.onAttached.fire(tab.id, { newWindowId: dst.id, newPosition: dst.tabIds.length - 1 });
+    await closeWindowIfEmpty(oldWindowId);
   }
 
   async function createWindow(opts = {}) {
@@ -209,9 +282,6 @@ export function createChrome(options = {}) {
     }
     const id = nextWindowId++;
     const focused = opts.focused !== false;
-    if (focused) {
-      for (const w of windows.values()) w.focused = false;
-    }
     const win = {
       id,
       type: opts.type || "normal",
@@ -224,18 +294,12 @@ export function createChrome(options = {}) {
       tabIds: [],
     };
     windows.set(id, win);
+    if (focused) focusExclusive(id);
 
     // A tab adopted via tabId moved, not created: no tabs.onCreated.
     let createdTab = null;
     if (typeof opts.tabId === "number") {
-      const tab = tabs.get(opts.tabId);
-      const oldId = tab.windowId;
-      const old = windows.get(oldId);
-      if (old) old.tabIds = old.tabIds.filter((tid) => tid !== tab.id);
-      tab.windowId = id;
-      tab.incognito = win.incognito;
-      win.tabIds.push(tab.id);
-      await closeWindowIfEmpty(oldId);
+      await moveTabToWindow(tabs.get(opts.tabId), win);
     } else if (typeof opts.url === "string") {
       createdTab = addTab({
         windowId: id,
@@ -251,6 +315,16 @@ export function createChrome(options = {}) {
     if (createdTab) await events.tabs.onCreated.fire(snapshotTab(createdTab));
     if (win.focused) await events.windows.onFocusChanged.fire(id);
     return snapshotWindow(win, tabs);
+  }
+
+  // Windows that exist before the worker boots (a worker respawn), created
+  // silently: Chromium raised their events before this worker lived.
+  for (const spec of options.windows || []) {
+    const id = nextWindowId++;
+    const win = { id, type: spec.type || "normal", left: 0, top: 0, width: 1100, height: 800, focused: false, incognito: false, tabIds: [] };
+    windows.set(id, win);
+    win.tabIds.push(addTab({ windowId: id, url: spec.url, active: true }).id);
+    if (spec.focused) focusExclusive(id);
   }
 
   const state = {
@@ -270,6 +344,12 @@ export function createChrome(options = {}) {
     async blurBrowser() {
       focusExclusive(WINDOW_ID_NONE);
       await events.windows.onFocusChanged.fire(WINDOW_ID_NONE);
+    },
+    // The user closes one tab (⌘W); an emptied window closes after it.
+    async closeTab(tabId) {
+      const tab = tabs.get(tabId);
+      if (!tab) return rejectMissing("tab", tabId);
+      await closeTab(tab);
     },
     sessionHistory(tabId) {
       const tab = tabs.get(tabId);
@@ -342,7 +422,10 @@ export function createChrome(options = {}) {
       async getAll(query = {}) {
         let list = [...windows.values()];
         if (query.windowTypes) list = list.filter((w) => query.windowTypes.includes(w.type));
-        return list.map((w) => snapshotWindow(w, tabs));
+        const snapshot = list.map((w) => snapshotWindow(w, tabs));
+        const gate = windowsGate();
+        if (gate) await gate;
+        return snapshot;
       },
       async getLastFocused(query = {}) {
         let list = [...windows.values()];
@@ -355,10 +438,8 @@ export function createChrome(options = {}) {
       async remove(id) {
         if (!windows.has(id)) return rejectMissing("window", id);
         const win = windows.get(id);
-        for (const tabId of [...win.tabIds]) tabs.delete(tabId);
-        windows.delete(id);
-        record("windows.remove", { windowId: id });
-        await events.windows.onRemoved.fire(id);
+        for (const tabId of [...win.tabIds]) await removeTab(tabs.get(tabId), true);
+        await closeWindow(win);
       },
       onFocusChanged: events.windows.onFocusChanged,
       onBoundsChanged: events.windows.onBoundsChanged,
@@ -414,12 +495,7 @@ export function createChrome(options = {}) {
         const tab = tabs.get(id);
         if (!tab) return rejectMissing("tab", id);
         if (rejectTabRemove(id)) return Promise.reject(new Error("tabs.remove failed"));
-        const windowId = tab.windowId;
-        const win = windows.get(windowId);
-        if (win) win.tabIds = win.tabIds.filter((tid) => tid !== id);
-        tabs.delete(id);
-        record("tabs.remove", { tabId: id });
-        await closeWindowIfEmpty(windowId);
+        await closeTab(tab);
       },
       async create(opts = {}) {
         if (rejectTabCreate(opts)) return Promise.reject(new Error("tabs.create failed"));
@@ -460,13 +536,9 @@ export function createChrome(options = {}) {
         const from = tab.windowId;
         const to = opts.windowId;
         if (to !== undefined && to !== from) {
-          const src = windows.get(from);
           const dst = windows.get(to);
           if (!dst) return rejectMissing("window", to);
-          if (src) src.tabIds = src.tabIds.filter((tid) => tid !== id);
-          dst.tabIds.push(id);
-          tab.windowId = to;
-          await closeWindowIfEmpty(from);
+          await moveTabToWindow(tab, dst);
         }
         record("tabs.move", { tabId: id, move: { ...opts } });
         return snapshotTab(tab);
@@ -494,6 +566,9 @@ export function createChrome(options = {}) {
       onCreated: events.tabs.onCreated,
       onUpdated: events.tabs.onUpdated,
       onActivated: events.tabs.onActivated,
+      onAttached: events.tabs.onAttached,
+      onDetached: events.tabs.onDetached,
+      onRemoved: events.tabs.onRemoved,
     },
     runtime: {
       get lastError() {
@@ -531,6 +606,8 @@ export function createChrome(options = {}) {
     storage: {
       local: {
         async get(keys) {
+          const gate = storageGate();
+          if (gate) await gate;
           if (keys == null) return { ...storage };
           if (typeof keys === "string") {
             return keys in storage ? { [keys]: storage[keys] } : {};

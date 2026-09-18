@@ -240,11 +240,11 @@ class Run {
   }
 
   /** Run one step and read the screen after it. Returns a reason on failure. */
-  async runStep(step, probes, state) {
+  async runStep(scenario, step, probes, state) {
     if (step.do === "activate") {
       await activateApp(step.app === "switch" ? this.opts.switchApp : this.opts.sourceApp);
     } else if (step.do === "open") {
-      await openLilThroughProduct(this.opts.url);
+      await openLilThroughProduct(this.opts.url, scenario.launch);
     } else if (step.do === "await") {
       const problem = await this.awaitGesture(step, state.lilWindowId);
       if (problem) return problem;
@@ -290,7 +290,7 @@ class Run {
 
     let problem = null;
     for (const step of scenario.steps) {
-      problem = await this.runStep(step, probes, state);
+      problem = await this.runStep(scenario, step, probes, state);
       if (problem) break;
     }
 
@@ -345,7 +345,9 @@ class Run {
 
     const results = [];
     for (const scenario of scenarios) {
-      process.stdout.write(`\n=== ${scenario.id}\n`);
+      // The operator watches the screen, so the header says which launch they
+      // are watching before the first gesture is asked for.
+      process.stdout.write(`\n=== ${scenario.id}\n    ${scenario.summary}\n`);
       const skip = (reason) => results.push({ scenario: scenario.id, kind: scenario.kind, repetitions: [], reason });
 
       if (needsOperator(scenario) && !this.rl) {

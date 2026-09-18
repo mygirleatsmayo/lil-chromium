@@ -62,7 +62,7 @@ enum OpenRouter {
     ///
     /// Runs its network work off the main thread. Safe to call from the main
     /// queue (URL intake, palette Enter).
-    static func openAnchoredToMouse(_ urlString: String) {
+    @MainActor static func openAnchoredToMouse(_ urlString: String) {
         let mouse = NSEvent.mouseLocation
         let coords = chromeTopLeft(fromMouse: mouse)
         open(urlString, left: coords.left, top: coords.top)
@@ -73,11 +73,11 @@ enum OpenRouter {
     /// (palette ⌘-Enter) is carried on the relay `open` message; the direct-
     /// launch fallback cannot honor it (no extension in the loop), so an
     /// incognito open that finds no relay degrades to a normal browser launch.
-    static func open(_ urlString: String, left: Int, top: Int, incognito: Bool = false) {
+    @MainActor static func open(_ urlString: String, left: Int, top: Int, incognito: Bool = false) {
         // Capture before the relay can ask Chromium to create/focus the lil.
-        // A browser-focused predecessor is identified more precisely by the
-        // extension; this native value is used only when Chromium reports no
-        // focused window.
+        // A browser-focused prior context is identified more precisely by the
+        // extension; this native value starts the lil's focus history only
+        // when Chromium reports no focused window.
         let priorContext = externalPriorContext()
         DispatchQueue.global(qos: .userInitiated).async {
             do {
@@ -101,14 +101,23 @@ enum OpenRouter {
         }
     }
 
-    /// The frontmost non-Lil-Chromium process, recorded as an exact pid with a
-    /// bundle-id fallback. Nil means there is no eligible external predecessor.
-    private static func externalPriorContext() -> PriorContext? {
-        guard let app = NSWorkspace.shared.frontmostApplication,
-              app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
-            return nil
-        }
-        return .externalApp(pid: app.processIdentifier, bundleId: app.bundleIdentifier)
+    /// Where the user was: the regular app they last activated, kept live from
+    /// launch (AppDelegate starts it) so an open never has to read the
+    /// frontmost app at the moment a URL arrives.
+    // verified: macOS 27, 2026-09-17 — a link clicked in Mail reached the app
+    // with Lil Chromium itself frontmost (host log `appPriorContext=none`),
+    // while the same URL sent by `open` from a script arrived with Mail
+    // frontmost. LaunchServices activates the URL handler on the way in.
+    @MainActor private static let activationHistory = ActivationHistory.observing()
+
+    /// Start watching now, while the app the user launched us from is still
+    /// frontmost; the first `open` is too late.
+    @MainActor static func startActivationHistory() { _ = activationHistory }
+
+    /// The app the user was in, as an exact pid with a bundle-id fallback.
+    /// Nil means no regular app has been active since launch.
+    @MainActor private static func externalPriorContext() -> PriorContext? {
+        activationHistory.lastExternal.map { .externalApp(pid: $0.pid, bundleId: $0.bundleId) }
     }
 
     /// Fallback when no relay answered: launch the URL in a real browser by

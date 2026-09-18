@@ -4,7 +4,9 @@
 // A step is either:
 //   { do: "activate", app: "source"|"switch" }   harness activates that app
 //   { do: "open" }                                harness opens a lil through
-//                                                 the real default-browser path
+//                                                 the real default-browser path,
+//                                                 the way the scenario's `launch`
+//                                                 says (see LAUNCHES)
 //   { do: "await", prompt, until }                the operator's gesture, which
 //                                                 the run watches the seam for
 // and every step ends with a probe reading under `probe`.
@@ -19,6 +21,17 @@
 // the reading that scores it — turning a correct restore into a false red.
 // `until` names the seam event that says the gesture happened:
 // "lil-closed" (the lil's window went away) or "lil-focused" (it came forward).
+
+/**
+ * How the URL reaches the default browser. A link clicked in Mail activates
+ * the URL handler (`/usr/bin/open <url>`); `open -g` leaves the source app in
+ * front, which the loop used for every scenario until the 2026-09-17 live run
+ * showed a Mail click arriving with the app itself frontmost (issue #31).
+ */
+export const LAUNCHES = {
+  activating: "the lil is opened activating (`open <url>`), the path a clicked link takes",
+  background: "the lil is opened in the background (`open -g <url>`), the source app kept in front",
+};
 
 /** Arrangements the operator sets up once per scenario, then the harness verifies. */
 const ARRANGEMENTS = {
@@ -56,6 +69,10 @@ function openScenario(arrangement, neighbours) {
     kind: "open",
     // Opening was reported as intermittent, so it carries the repetitions.
     defaultReps: 3,
+    // The recorded #30 evidence was measured under a background open; the
+    // opening symptom is scored on z-order alone, so that measurement stands.
+    launch: "background",
+    summary: `open a lil from the source app; ${LAUNCHES.background}`,
     arrangement: { ...ARRANGEMENTS[arrangement], id: arrangement },
     neighbours: { ...NEIGHBOURS[neighbours], id: neighbours },
     steps: [
@@ -71,11 +88,8 @@ const OPEN_SCENARIOS = Object.keys(ARRANGEMENTS).flatMap((arrangement) =>
 );
 
 /** The three close cases #30 names, each ending in a gesture only a human can make. */
-const CLOSE_SCENARIOS = [
-  {
-    id: "close/immediate",
-    kind: "close",
-    defaultReps: 2,
+const CLOSE_CASES = {
+  immediate: {
     summary: "close a focused lil immediately after opening it from an external app",
     // The app in front when the lil was requested is the context to return to.
     expectedFrom: "before",
@@ -90,10 +104,7 @@ const CLOSE_SCENARIOS = [
       },
     ],
   },
-  {
-    id: "close/switch-then-refocus",
-    kind: "close",
-    defaultReps: 2,
+  "switch-then-refocus": {
     summary: "switch to another app, refocus the lil, then close it",
     // ADR-0004: the context preceding the lil's *current* focused run.
     expectedFrom: "afterSwitch",
@@ -115,10 +126,7 @@ const CLOSE_SCENARIOS = [
       },
     ],
   },
-  {
-    id: "close/unfocused-red-button",
-    kind: "close",
-    defaultReps: 2,
+  "unfocused-red-button": {
     summary: "close a background lil with only its red control, never focusing it",
     // Nothing should move: the active app was never left.
     expectedFrom: "afterSwitch",
@@ -137,6 +145,27 @@ const CLOSE_SCENARIOS = [
       },
     ],
   },
+};
+
+// The product path keeps the ids the recorded traces carry; a comparison
+// launch is named in its id so a `close/<case>` filter never selects it.
+function closeScenario(name, launch) {
+  const closeCase = CLOSE_CASES[name];
+  return {
+    id: launch === "activating" ? `close/${name}` : `close/${launch}/${name}`,
+    kind: "close",
+    defaultReps: 2,
+    launch,
+    summary: `${closeCase.summary}; ${LAUNCHES[launch]}`,
+    expectedFrom: closeCase.expectedFrom,
+    steps: closeCase.steps,
+  };
+}
+
+/** Every close case on the activating open, plus one background comparison. */
+const CLOSE_SCENARIOS = [
+  ...Object.keys(CLOSE_CASES).map((name) => closeScenario(name, "activating")),
+  closeScenario("immediate", "background"),
 ];
 
 export const SCENARIOS = [...CLOSE_SCENARIOS, ...OPEN_SCENARIOS];

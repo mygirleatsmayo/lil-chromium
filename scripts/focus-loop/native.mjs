@@ -38,9 +38,20 @@ export async function activateApp(bundleId) {
   await execFileAsync("/usr/bin/open", ["-b", bundleId]);
 }
 
-/** Open a lil exactly the way a link click does: hand the URL to the default browser. */
-export async function openLilThroughProduct(url) {
-  await execFileAsync("/usr/bin/open", ["-g", url]);
+// verified: `man open` (macOS 27.0), 2026-09-18 — `-g  Do not bring the
+// application to the foreground.` Without it the URL handler is activated,
+// which is what a link clicked in Mail does to Lil Chromium.
+const LAUNCH_FLAGS = { activating: [], background: ["-g"] };
+
+/**
+ * Hand the URL to the default browser the way a link click does. `launch`
+ * (see scenarios.mjs LAUNCHES) decides whether the open activates the URL
+ * handler, as a clicked link does, or leaves the source app in front.
+ */
+export async function openLilThroughProduct(url, launch) {
+  const flags = LAUNCH_FLAGS[launch];
+  if (!flags) throw new Error(`unknown launch mode ${launch}`);
+  await execFileAsync("/usr/bin/open", [...flags, url]);
 }
 
 /**

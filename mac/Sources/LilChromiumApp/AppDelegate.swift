@@ -43,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupStatusItem()
         registerHotKey()
+        OpenRouter.startActivationHistory()
 
         // First launch with no config: open Settings for onboarding.
         if isFirstRun {

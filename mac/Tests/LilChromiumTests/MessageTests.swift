@@ -51,10 +51,20 @@ struct MessageTests {
         #expect(msg.priorContext == .externalApp(pid: 4242, bundleId: "com.apple.mail"))
     }
 
+    /// ADR-0004 (issue #31): a lil the user focused from outside the browser
+    /// records no process — the host resolves the app from its own activation
+    /// history — so the message carries only the kind.
+    @Test(.bug(id: 31)) func restoreFocusWithoutAPidLeavesTheExternalAppToTheHost() throws {
+        let msg = try Fixture.decode(RestoreFocusMessage.self, from: "message-restore-focus-live")
+
+        #expect(msg.priorContext == .externalApp(pid: nil, bundleId: nil))
+    }
+
     @Test(arguments: [
         PriorContext.lil(windowId: 17),
         PriorContext.normalWindow(windowId: 23),
         PriorContext.externalApp(pid: 4242, bundleId: "com.apple.mail"),
+        PriorContext.externalApp(pid: nil, bundleId: nil),
     ])
     func everyPriorContextKindRoundTrips(_ original: PriorContext) throws {
         let decoded = try LilCodec.decode(PriorContext.self, from: LilCodec.encode(original))

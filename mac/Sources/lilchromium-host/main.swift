@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import LilShared
 
@@ -34,14 +35,15 @@ final class Relay {
     private let browserSlug: String
     private let socketPath: String
     private let server: SocketServer
+    // Where the user was before the browser, for restore-focus without a pid
+    // (ADR-0004). Main-actor state the entry point creates and hands in.
+    private let activationHistory: ActivationHistory
 
-    init() {
-        let slug = BrowserDetect.detectParentBrowser()
+    init(browserSlug slug: String, activationHistory: ActivationHistory) {
         self.browserSlug = slug
         self.socketPath = LilPaths.socketPath(forBrowser: slug)
         self.server = SocketServer(path: self.socketPath)
-        // Route logging to host-<slug>.log as early as possible.
-        HostLog.shared.configure(slug: slug)
+        self.activationHistory = activationHistory
     }
 
     // Map: history-query id -> the socket connection awaiting its result.
@@ -334,15 +336,16 @@ final class Relay {
         }
     }
 
-    /// Ask macOS to reactivate the exact recorded external process, falling
-    /// back only to another live process of the same bundle.
+    /// Ask macOS to reactivate the recorded external process — or, when none
+    /// was recorded, the app the activation history saw the user leave —
+    /// falling back only to another live process of the same bundle.
     private func handleRestoreFocus(_ data: Data) {
         guard let msg = try? LilCodec.decode(RestoreFocusMessage.self, from: data) else {
             hlog("host: undecodable restore-focus dropped")
             return
         }
         Task { @MainActor in
-            let outcome = ExternalAppRestorer.restore(msg.priorContext)
+            let outcome = ExternalAppRestorer.restore(msg.priorContext, history: activationHistory.lastExternal)
             // LILFOCUS (issue #30): host receipt, activation result, and the
             // frontmost application the request actually produced. Public
             // NSWorkspace reads only — no Accessibility, no private API.
@@ -363,6 +366,21 @@ final class Relay {
     }
 }
 
-// Entry point.
-let relay = Relay()
+// Entry point. Route logging to host-<slug>.log before anything else runs.
+let browserSlug = BrowserDetect.detectParentBrowser()
+HostLog.shared.configure(slug: browserSlug)
+// The activation history is AppKit-backed and main-actor isolated, so it is
+// born here on the main thread and handed to the relay. The process is
+// single-threaded until the relay starts its workers, so the assumption holds.
+// The browser is excluded by its slug's bundle and, in case the slug is
+// unknown, by the process that launched this host.
+// verified: Apple Swift 6.4 toolchain in Swift 5 mode, 2026-09-17 — top-level
+// code is not main-actor isolated; without assumeIsolated the compiler rejects
+// this call as main actor-isolated from a nonisolated context.
+let browserBundleIds = Set(
+    [BrowserTable.bundleId(forSlug: browserSlug), NSRunningApplication(processIdentifier: getppid())?.bundleIdentifier]
+        .compactMap { $0 }
+)
+let activationHistory = MainActor.assumeIsolated { ActivationHistory.observing(excluding: browserBundleIds) }
+let relay = Relay(browserSlug: browserSlug, activationHistory: activationHistory)
 relay.run()

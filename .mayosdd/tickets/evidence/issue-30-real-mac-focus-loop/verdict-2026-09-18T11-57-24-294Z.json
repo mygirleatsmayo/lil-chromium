@@ -1,0 +1,224 @@
+{
+  "tag": "LILFOCUS",
+  "issue": 30,
+  "runId": "2026-09-18T11-57-24-294Z",
+  "startedAt": "2026-09-18T11:59:47.456Z",
+  "environment": {
+    "platform": "darwin 27.0.0",
+    "browserVersion": "0.17.1.1",
+    "appVersion": "v0.2-235-gc6371c3",
+    "extensionVersion": "0.4.1-issue-31",
+    "worktreeCommit": "c6371c3"
+  },
+  "settings": {
+    "browser": "helium",
+    "bundleId": "net.imput.helium",
+    "sourceApp": "com.apple.mail",
+    "switchApp": "md.obsidian",
+    "url": "https://example.com/",
+    "settleMs": 900
+  },
+  "seamLive": true,
+  "counts": {
+    "red": 3,
+    "green": 1,
+    "inconclusive": 0
+  },
+  "overall": "red",
+  "scenarios": [
+    {
+      "scenario": "close/immediate",
+      "kind": "close",
+      "verdict": "red",
+      "reproductions": 1,
+      "repetitions": [
+        {
+          "repetition": 1,
+          "verdict": "red",
+          "reason": "1 net.imput.helium window(s) rose above another application's: window 6893 from 2 to 1",
+          "expected": "com.apple.mail",
+          "actual": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 86346
+          },
+          "landedOnBrowser": false,
+          "risenSiblings": [
+            {
+              "number": 6893,
+              "display": 0,
+              "orderBefore": 2,
+              "orderAfter": 1,
+              "overtook": [
+                {
+                  "number": 5725,
+                  "bundleId": "com.cmuxterm.app",
+                  "owner": "cmux"
+                }
+              ]
+            }
+          ],
+          "createdWindowId": 110447243
+        },
+        {
+          "repetition": 2,
+          "verdict": "green",
+          "reason": "focus returned to com.apple.mail and no browser window rose",
+          "expected": "com.apple.mail",
+          "actual": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 86346
+          },
+          "landedOnBrowser": false,
+          "risenSiblings": [],
+          "createdWindowId": 110447246
+        }
+      ],
+      "inconclusive": 0,
+      "rate": 0.5
+    },
+    {
+      "scenario": "close/switch-then-refocus",
+      "kind": "close",
+      "verdict": "red",
+      "reproductions": 2,
+      "repetitions": [
+        {
+          "repetition": 1,
+          "verdict": "red",
+          "reason": "focus landed on com.apple.mail instead of md.obsidian",
+          "expected": "md.obsidian",
+          "actual": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 86346
+          },
+          "landedOnBrowser": false,
+          "risenSiblings": [],
+          "createdWindowId": 110447251
+        },
+        {
+          "repetition": 2,
+          "verdict": "red",
+          "reason": "1 net.imput.helium window(s) rose above another application's: window 6893 from 1 to 1",
+          "expected": "md.obsidian",
+          "actual": {
+            "bundleId": "md.obsidian",
+            "name": "Obsidian",
+            "pid": 29537
+          },
+          "landedOnBrowser": false,
+          "risenSiblings": [
+            {
+              "number": 6893,
+              "display": 0,
+              "orderBefore": 1,
+              "orderAfter": 1,
+              "overtook": [
+                {
+                  "number": 433,
+                  "bundleId": "com.apple.mail",
+                  "owner": "Mail"
+                }
+              ]
+            }
+          ],
+          "createdWindowId": 110447254
+        }
+      ],
+      "inconclusive": 0,
+      "rate": 1
+    },
+    {
+      "scenario": "close/unfocused-red-button",
+      "kind": "close",
+      "verdict": "green",
+      "reproductions": 0,
+      "repetitions": [
+        {
+          "repetition": 1,
+          "verdict": "green",
+          "reason": "focus returned to md.obsidian and no browser window rose",
+          "expected": "md.obsidian",
+          "actual": {
+            "bundleId": "md.obsidian",
+            "name": "Obsidian",
+            "pid": 29537
+          },
+          "landedOnBrowser": false,
+          "risenSiblings": [],
+          "createdWindowId": 110447259
+        },
+        {
+          "repetition": 2,
+          "verdict": "green",
+          "reason": "focus returned to md.obsidian and no browser window rose",
+          "expected": "md.obsidian",
+          "actual": {
+            "bundleId": "md.obsidian",
+            "name": "Obsidian",
+            "pid": 29537
+          },
+          "landedOnBrowser": false,
+          "risenSiblings": [],
+          "createdWindowId": 110447264
+        }
+      ],
+      "inconclusive": 0,
+      "rate": 0
+    },
+    {
+      "scenario": "close/background/immediate",
+      "kind": "close",
+      "verdict": "red",
+      "reproductions": 1,
+      "repetitions": [
+        {
+          "repetition": 1,
+          "verdict": "red",
+          "reason": "1 net.imput.helium window(s) rose above another application's: window 6893 from 2 to 1",
+          "expected": "com.apple.mail",
+          "actual": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 86346
+          },
+          "landedOnBrowser": false,
+          "risenSiblings": [
+            {
+              "number": 6893,
+              "display": 0,
+              "orderBefore": 2,
+              "orderAfter": 1,
+              "overtook": [
+                {
+                  "number": 3634,
+                  "bundleId": "md.obsidian",
+                  "owner": "Obsidian"
+                }
+              ]
+            }
+          ],
+          "createdWindowId": 110447269
+        },
+        {
+          "repetition": 2,
+          "verdict": "green",
+          "reason": "focus returned to com.apple.mail and no browser window rose",
+          "expected": "com.apple.mail",
+          "actual": {
+            "bundleId": "com.apple.mail",
+            "name": "Mail",
+            "pid": 86346
+          },
+          "landedOnBrowser": false,
+          "risenSiblings": [],
+          "createdWindowId": 110447274
+        }
+      ],
+      "inconclusive": 0,
+      "rate": 0.5
+    }
+  ]
+}

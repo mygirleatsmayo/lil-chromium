@@ -30,14 +30,16 @@ public enum MessageType: String, Codable, Sendable {
     case lilFocusTrace = "lil-focus-trace"
 }
 
-/// The exact context that was active before one lil took focus. Browser window
-/// identities are meaningful only to the extension instance that recorded
-/// them; external applications carry an exact process id plus an optional
-/// bundle-id fallback for native restoration.
+/// The context that was active before one lil took focus (ADR-0004). Browser
+/// window identities are meaningful only to the extension instance that
+/// recorded them. An external application recorded by the app at open time
+/// carries its exact process id plus an optional bundle-id fallback; one the
+/// user came back to the browser from carries neither, and the host resolves
+/// it from its own activation history.
 public enum PriorContext: Codable, Equatable, Sendable {
     case lil(windowId: Int)
     case normalWindow(windowId: Int)
-    case externalApp(pid: Int32, bundleId: String?)
+    case externalApp(pid: Int32?, bundleId: String?)
 
     private enum Kind: String, Codable {
         case lil
@@ -58,7 +60,7 @@ public enum PriorContext: Codable, Equatable, Sendable {
             self = .normalWindow(windowId: try container.decode(Int.self, forKey: .windowId))
         case .externalApp:
             self = .externalApp(
-                pid: try container.decode(Int32.self, forKey: .pid),
+                pid: try container.decodeIfPresent(Int32.self, forKey: .pid),
                 bundleId: try container.decodeIfPresent(String.self, forKey: .bundleId)
             )
         }
@@ -75,7 +77,7 @@ public enum PriorContext: Codable, Equatable, Sendable {
             try container.encode(windowId, forKey: .windowId)
         case let .externalApp(pid, bundleId):
             try container.encode(Kind.externalApp, forKey: .kind)
-            try container.encode(pid, forKey: .pid)
+            try container.encodeIfPresent(pid, forKey: .pid)
             try container.encodeIfPresent(bundleId, forKey: .bundleId)
         }
     }

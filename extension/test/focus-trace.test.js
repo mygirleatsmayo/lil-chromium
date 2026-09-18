@@ -146,6 +146,144 @@ test("closing a focused lil records what it restored and why", async () => {
   assert.deepEqual(restore.detail.priorContext, { kind: "normal-window", windowId: normal.id });
 });
 
+// Live trace 2026-09-17: Chromium hands key to a sibling window ~30 ms after
+// the closing lil's tab goes and before the window itself is reported gone.
+// A restoration that waits for window-removed lands after that handoff.
+test("a focused lil restores its prior context once, before Chromium hands key to a sibling", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver(arm());
+  const normal = await openPrimaryWindow(env);
+  const lil = await openLil(env);
+  // Chromium reports each tab's removal as a window close; a wake swap can
+  // leave a lil with two.
+  await env.chrome.tabs.create({ windowId: lil.id, url: "https://example.com/second" });
+
+  await env.chrome.windows.remove(lil.id);
+
+  const restores = events(env, "restore-attempt");
+  const [removed] = events(env, "window-removed");
+  assert.equal(restores.length, 1, "restored exactly once across the teardown");
+  assert.equal(restores[0].detail.at, "tab-removed");
+  assert.ok(restores[0].seq < removed.seq, "restored before the window was reported gone");
+  assert.equal(env.windows().find((w) => w.focused).id, normal.id);
+});
+
+// Live trace 2026-09-18: ⌘W removes the lil's only tab without the
+// window-closing flag; Chromium hands key to the primary window ~25 ms later
+// and only then reports the emptied window gone. The last-tab removal is the
+// teardown reading for that gesture.
+test("a ⌘W close restores the prior context at the last-tab removal, before Chromium hands key to a sibling", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver(arm());
+  const normal = await openPrimaryWindow(env);
+  await env.blurBrowser(); // the user came to the link from Mail
+  const lil = await openLil(env, { priorContext: { kind: "external-app", pid: 4242, bundleId: "com.apple.mail" } });
+
+  await env.closeTab(lil.tabs[0].id);
+
+  const [tabRemoved] = events(env, "tab-removed");
+  const handoff = events(env, "focus-changed").find((e) => e.seq > tabRemoved.seq && e.detail.windowId === normal.id);
+  const [removed] = events(env, "window-removed");
+  const restores = events(env, "restore-attempt");
+  assert.equal(tabRemoved.detail.isWindowClosing, false, "Chromium did not flag a ⌘W close");
+  assert.equal(restores.length, 1, "restored exactly once across the teardown");
+  assert.equal(restores[0].detail.at, "tab-removed");
+  assert.equal(restores[0].detail.outcome, "sent-to-host");
+  assert.ok(handoff && restores[0].seq < handoff.seq, "restored before the key handoff to the primary window");
+  assert.ok(restores[0].seq < removed.seq, "restored before the window was reported gone");
+  assert.deepEqual(env.outgoing().at(-1), fixture("message-restore-focus"));
+});
+
+// Only a lil unwinds focus at its teardown. A normal window closing with focus
+// is Chromium's own business: no prior context, no restoration.
+test("closing a focused normal window flagged closing restores nothing at its teardown", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver(arm());
+  await openPrimaryWindow(env);
+  const second = await env.chrome.windows.create({ url: "https://second.example/", type: "normal", focused: true });
+  const requestsBefore = env.outgoing().filter((m) => m.type === "restore-focus").length;
+
+  await env.chrome.windows.remove(second.id);
+
+  const [tabRemoved] = events(env, "tab-removed");
+  assert.equal(tabRemoved.detail.isWindowClosing, true);
+  assert.equal(tabRemoved.detail.heldFocus, true);
+  assert.deepEqual(events(env, "restore-attempt"), [], "no prior context was consulted");
+  assert.equal(env.outgoing().filter((m) => m.type === "restore-focus").length, requestsBefore);
+});
+
+test("a worker that woke mid-session still restores at tab removal, from the stored registry", async () => {
+  // The lil and its registry entry predate this worker: nothing in memory
+  // knows its prior context, and the teardown must still not wait for the
+  // window to be reported gone.
+  const parked = {
+    url: "https://parked.example/",
+    bounds: { left: 100, top: 100, width: 900, height: 700 },
+    expiry: "never",
+    lastInteraction: 1,
+    priorContext: { kind: "external-app", pid: 4242, bundleId: "com.apple.mail" },
+  };
+  const env = await boot({
+    windows: [{ type: "popup", url: parked.url, focused: true }],
+    storage: { ephemeralWindows: { 1: parked } },
+  });
+  await env.deliver(fixture("message-context"));
+  await env.deliver(arm());
+  const lil = env.windows()[0];
+
+  await env.chrome.windows.remove(lil.id);
+
+  const [restore] = events(env, "restore-attempt");
+  const [removed] = events(env, "window-removed");
+  assert.equal(restore.detail.at, "tab-removed");
+  assert.equal(restore.detail.outcome, "sent-to-host");
+  assert.ok(restore.seq < removed.seq, "restored before the window was reported gone");
+  assert.deepEqual(env.outgoing().at(-1), fixture("message-restore-focus"));
+});
+
+// The tab ledger's wake seed is a snapshot in flight: a tab the worker sees
+// removed before that answer lands must not come back as a phantom id, or the
+// window's real last-tab removal reads as one tab short for the whole session.
+test("a wake seed that lands after a tab removal still recognises the window's last-tab removal", async () => {
+  const parked = {
+    url: "https://parked.example/",
+    bounds: { left: 100, top: 100, width: 900, height: 700 },
+    expiry: "never",
+    lastInteraction: 1,
+    priorContext: { kind: "external-app", pid: 4242, bundleId: "com.apple.mail" },
+  };
+  let release;
+  let gate = new Promise((resolve) => (release = resolve));
+  const env = await boot({
+    windows: [{ type: "popup", url: parked.url, focused: true }],
+    storage: { ephemeralWindows: { 1: parked } },
+    windowsGate: () => gate,
+  });
+  await env.deliver(fixture("message-context"));
+  await env.deliver(arm());
+  const lil = env.windows()[0];
+  const [first] = lil.tabs;
+
+  // A wake swap while the seed's answer is still out: a second tab arrives,
+  // the snapshotted first tab goes.
+  const second = await env.chrome.tabs.create({ windowId: lil.id, url: "https://example.com/second" });
+  await env.closeTab(first.id);
+  release();
+  gate = null;
+  await env.flush();
+  assert.equal(env.windows().length, 1, "the lil is still open on its second tab");
+
+  await env.closeTab(second.id);
+
+  const restores = events(env, "restore-attempt");
+  assert.equal(restores.length, 1, "restored exactly once across the teardown");
+  assert.equal(restores[0].detail.at, "tab-removed");
+  assert.deepEqual(env.outgoing().at(-1), fixture("message-restore-focus"));
+});
+
 test("closing an unfocused lil records that no restoration was attempted", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));

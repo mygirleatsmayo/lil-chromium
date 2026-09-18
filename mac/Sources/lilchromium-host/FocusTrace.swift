@@ -23,7 +23,8 @@ enum FocusTrace {
         switch priorContext {
         case let .lil(windowId): return "lil:\(windowId)"
         case let .normalWindow(windowId): return "normal-window:\(windowId)"
-        case let .externalApp(pid, bundleId): return "external-app:pid=\(pid),bundleId=\(bundleId ?? "-")"
+        case let .externalApp(pid, bundleId):
+            return "external-app:pid=\(pid.map(String.init) ?? "-"),bundleId=\(bundleId ?? "-")"
         }
     }
 
