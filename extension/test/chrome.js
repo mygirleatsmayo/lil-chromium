@@ -92,6 +92,9 @@ export function createChrome(options = {}) {
   const rejectTabRemove = options.rejectTabRemove || (() => false);
   // Fault injection: predicate over the tabs.query filter; true ⇒ the call rejects.
   const rejectTabQuery = options.rejectTabQuery || (() => false);
+  // Stall injection: when it returns a promise, storage.local.get waits for it
+  // before answering — a storage round trip that has not come back yet.
+  const storageGate = options.storageGate || (() => null);
   let lastError = undefined;
   let nextWindowId = 1;
   let nextTabId = 1;
@@ -571,6 +574,8 @@ export function createChrome(options = {}) {
     storage: {
       local: {
         async get(keys) {
+          const gate = storageGate();
+          if (gate) await gate;
           if (keys == null) return { ...storage };
           if (typeof keys === "string") {
             return keys in storage ? { [keys]: storage[keys] } : {};

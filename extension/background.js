@@ -326,16 +326,32 @@ function unwindsFocus(windowId, heldFocus) {
 }
 
 // Resolves to whether `windowId` was a lil whose prior context was consulted.
+// The context is read from memory first so an external-app restoration is
+// posted before this function first yields: Chromium orders the closing
+// window out and hands key to a sibling while a storage round trip is still
+// in flight, and the sibling then shows above the restored app.
+// verified: Chromium main components/remote_cocoa/app_shim/
+// native_widget_ns_window_bridge.mm CloseWindow() `[window orderOut:nil]`;
+// issue-31 trace-2026-09-17T23-20-49-256Z.jsonl, restore-attempt to
+// Chromium reporting no focused window in 18–26 ms; 2026-09-18.
 async function restoreAtTeardown(windowId) {
-  const prior = await lilPriorContext(windowId);
+  let prior = knownPriorContext(windowId);
+  if (prior === undefined) prior = await storedPriorContext(windowId);
   if (prior === undefined) return false;
   await restorePriorContext(prior, "tab-removed");
   return true;
 }
 
-// A registered lil's stored prior context; undefined for anything else.
-async function lilPriorContext(windowId) {
+// A lil's prior context as this worker holds it in memory: an incognito
+// lil's, or the mirror of a registered lil's; undefined for anything else.
+function knownPriorContext(windowId) {
   if (incognitoLils.has(windowId)) return incognitoPriorContexts.get(windowId);
+  return priorContexts.get(windowId);
+}
+
+// A registered lil's prior context from the registry; undefined for anything
+// else. The fallback for a lil this worker has not written since it woke.
+async function storedPriorContext(windowId) {
   const reg = await getRegistry();
   const entry = reg[String(windowId)];
   return entry ? entry.priorContext : undefined;
@@ -442,6 +458,7 @@ async function setPriorContext(windowId, prior) {
   if (!entry) return undefined;
   const overwrote = normalizePriorContext(entry.priorContext);
   entry.priorContext = prior;
+  priorContexts.set(windowId, prior);
   await setRegistry(reg);
   return overwrote;
 }
@@ -630,10 +647,12 @@ async function registerWindow(windowId, url, bounds, extra) {
     { url, bounds },
     extra || {}
   );
+  priorContexts.set(windowId, reg[String(windowId)].priorContext);
   await setRegistry(reg);
 }
 
 async function deregisterWindow(windowId) {
+  priorContexts.delete(windowId);
   const reg = await getRegistry();
   if (reg[String(windowId)] !== undefined) {
     delete reg[String(windowId)];
@@ -729,6 +748,10 @@ async function clampBounds(left, top, width, height) {
 
 const incognitoLils = new Set(); // window ids of live incognito lils
 const incognitoPriorContexts = new Map(); // window id -> prior context
+// window id -> prior context, mirroring the registry entry of every lil this
+// worker registered, remapped, or rewrote, so a teardown reads it without a
+// storage round trip. A woken worker's registry is the fallback (knownPriorContext).
+const priorContexts = new Map();
 // Host/group promotion empties the source lil and Chrome removes that window.
 // That onRemoved is a lifecycle transfer, not a close/unwind.
 const promotingWindowIds = new Set();
@@ -974,6 +997,7 @@ async function restoreWindows() {
   const entries = Object.entries(oldReg);
   if (!entries.length) return;
 
+  priorContexts.clear();
   await setRegistry({});
 
   // Nap pages are rebuilt with the current configured tint; the normalized
@@ -1026,11 +1050,12 @@ async function restoreWindows() {
   // after every window exists so chain order in storage cannot matter.
   const reg = await getRegistry();
   let remapped = false;
-  for (const entry of Object.values(reg)) {
+  for (const [key, entry] of Object.entries(reg)) {
     const prior = normalizePriorContext(entry && entry.priorContext);
     if (!prior || prior.kind !== "lil") continue;
     const newWindowId = restoredWindowIds.get(String(prior.windowId));
     entry.priorContext = newWindowId === undefined ? null : { kind: "lil", windowId: newWindowId };
+    priorContexts.set(Number(key), entry.priorContext);
     remapped = true;
   }
   if (remapped) await setRegistry(reg);

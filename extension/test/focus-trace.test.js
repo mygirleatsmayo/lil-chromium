@@ -169,6 +169,35 @@ test("a focused lil restores its prior context once, before Chromium hands key t
   assert.equal(env.windows().find((w) => w.focused).id, normal.id);
 });
 
+test("a worker that woke mid-session still restores at tab removal, from the stored registry", async () => {
+  // The lil and its registry entry predate this worker: nothing in memory
+  // knows its prior context, and the teardown must still not wait for the
+  // window to be reported gone.
+  const parked = {
+    url: "https://parked.example/",
+    bounds: { left: 100, top: 100, width: 900, height: 700 },
+    expiry: "never",
+    lastInteraction: 1,
+    priorContext: { kind: "external-app", pid: 4242, bundleId: "com.apple.mail" },
+  };
+  const env = await boot({
+    windows: [{ type: "popup", url: parked.url, focused: true }],
+    storage: { ephemeralWindows: { 1: parked } },
+  });
+  await env.deliver(fixture("message-context"));
+  await env.deliver(arm());
+  const lil = env.windows()[0];
+
+  await env.chrome.windows.remove(lil.id);
+
+  const [restore] = events(env, "restore-attempt");
+  const [removed] = events(env, "window-removed");
+  assert.equal(restore.detail.at, "tab-removed");
+  assert.equal(restore.detail.outcome, "sent-to-host");
+  assert.ok(restore.seq < removed.seq, "restored before the window was reported gone");
+  assert.deepEqual(env.outgoing().at(-1), fixture("message-restore-focus"));
+});
+
 test("closing an unfocused lil records that no restoration was attempted", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));

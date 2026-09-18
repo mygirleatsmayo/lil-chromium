@@ -300,6 +300,34 @@ test("each lil restores its recorded prior context from a nested external-app ch
   assert.deepEqual(Object.keys(env.registry()), []);
 });
 
+// Live trace 2026-09-17: the host had 18–26 ms between the extension's restore
+// request and Chromium ordering the closing window out. A registry read on the
+// way costs a storage round trip the flash of the sibling window fits inside.
+test("a focused lil's external-app restoration is posted at tab removal without a storage round trip", async () => {
+  let gate = null;
+  const env = await boot({ storageGate: () => gate });
+  await env.deliver(fixture("message-context"));
+  await env.blurBrowser();
+  await env.deliver(fixture("message-open-prior-context"));
+  const lil = env.windows()[0];
+  const requestsBefore = env.outgoing().filter((m) => m.type === "restore-focus").length;
+
+  // From here every storage read hangs until released.
+  let release;
+  gate = new Promise((resolve) => (release = resolve));
+  const closing = env.chrome.windows.remove(lil.id);
+  await env.flush();
+
+  assert.deepEqual(env.outgoing().at(-1), fixture("message-restore-focus"), "restored while storage was still out");
+
+  release();
+  gate = null;
+  await closing;
+  await env.flush();
+  assert.equal(env.outgoing().filter((m) => m.type === "restore-focus").length, requestsBefore + 1, "and only once");
+  assert.deepEqual(Object.keys(env.registry()), []);
+});
+
 test("the Close lil action restores prior context exactly once before cleanup", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));
