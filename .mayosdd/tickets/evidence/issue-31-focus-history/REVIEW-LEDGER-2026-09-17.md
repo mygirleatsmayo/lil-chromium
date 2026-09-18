@@ -144,3 +144,17 @@ D1, D2 resolved (199 node). Two judgement notes, both settled:
 - D4 · the test gate stalls every `windows.getAll` and the new test nulls it after release · **settled, no action** · test hygiene.
 
 Ledger fully resolved at `a15ea96`. Final full review before integration follows.
+
+## Final full review (fixed point `ffddb3c` → `d5c1b45`, Standards + Spec in parallel)
+
+Standards: no hard violations; 199 node, 178 swift. Spec: two items for adjudication, two evidence gaps.
+
+- G1 · PROTOCOL `open` schema still said `"pid":int` while both decoders accept a pid-less external app · **fix** · `int?`, same notation as `restore-focus`, plus the sentence that the app always sends a pid when it has one. Commit `9a26be7`.
+- G2 · test-fake comment made an unverified OS claim ("most recently focused remaining window") · **fix** · reworded as the fake's own `focusOrder` rule. Same commit.
+- G3 · teardown restoration starts for a focused normal window too, paying one registry read per close (harmless; returns undefined) · **won't-fix** · the lil predicate is async (`isEphemeralWindow` reads the registry), and a synchronous mirror check would break the settled wake fallback (F7/L7). Removing the read needs a boot-time seed of the mirror with a race guard — a design change for no user-visible gain. A test now pins that a normal window's close restores nothing.
+- G4 · `LAUNCHES` wrapped constant strings in closures · **fix** · plain string map. Same commit.
+- G5 · a registry literal repeated in two adjacent tests · **won't-fix** · two adjacent tests reading their own fixture is clearer than a shared one.
+- G6 · AC9 "the unchanged #30 command goes green for every close scenario" not met at HEAD; the last loop run predates L10 · **deferred, #31 stays open** · the z-order half is L11 (no extension fix). Rerun at HEAD after install is the next live step.
+- G7 · AC6's "performs no focus restoration" is scored only at the unit seam; the loop cannot see a restoration that targets the already-active app · **won't-fix here** · the host log the loop drains carries `restore-focus`; a loop assertion on it is a #30 follow-up, not a #31 change.
+- G8 · `close/switch-then-refocus` rep 1 restored Mail (E1) instead of Obsidian (E2); rep 2 and both earlier reps went to Obsidian · **watch** · 32 s untraced gap before the refocus click; the host history is the only path to Mail, so either the observer missed Obsidian or Mail was touched. The HEAD rerun decides.
+- G9 · a palette lil opened while the user is in the browser records the browser itself as the app-supplied external app; the host excludes the browser from its history and history wins (F10), so the close restores the last non-browser app instead of the browser · **needs adjudication (Lucas)** · AC7 says the browser window is restored when it truly preceded the run. Proposed root fix: the app never reports the target browser as an external app, so the extension falls back to its own last focused window. Not in `9a26be7`.
