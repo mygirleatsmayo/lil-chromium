@@ -196,6 +196,25 @@ test("a ⌘W close restores the prior context at the last-tab removal, before Ch
   assert.deepEqual(env.outgoing().at(-1), fixture("message-restore-focus"));
 });
 
+// Only a lil unwinds focus at its teardown. A normal window closing with focus
+// is Chromium's own business: no prior context, no restoration.
+test("closing a focused normal window flagged closing restores nothing at its teardown", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  await env.deliver(arm());
+  await openPrimaryWindow(env);
+  const second = await env.chrome.windows.create({ url: "https://second.example/", type: "normal", focused: true });
+  const requestsBefore = env.outgoing().filter((m) => m.type === "restore-focus").length;
+
+  await env.chrome.windows.remove(second.id);
+
+  const [tabRemoved] = events(env, "tab-removed");
+  assert.equal(tabRemoved.detail.isWindowClosing, true);
+  assert.equal(tabRemoved.detail.heldFocus, true);
+  assert.deepEqual(events(env, "restore-attempt"), [], "no prior context was consulted");
+  assert.equal(env.outgoing().filter((m) => m.type === "restore-focus").length, requestsBefore);
+});
+
 test("a worker that woke mid-session still restores at tab removal, from the stored registry", async () => {
   // The lil and its registry entry predate this worker: nothing in memory
   // knows its prior context, and the teardown must still not wait for the

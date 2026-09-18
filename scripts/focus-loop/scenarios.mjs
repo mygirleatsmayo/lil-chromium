@@ -29,8 +29,8 @@
  * showed a Mail click arriving with the app itself frontmost (issue #31).
  */
 export const LAUNCHES = {
-  activating: { describe: () => "the lil is opened activating (`open <url>`), the path a clicked link takes" },
-  background: { describe: () => "the lil is opened in the background (`open -g <url>`), the source app kept in front" },
+  activating: "the lil is opened activating (`open <url>`), the path a clicked link takes",
+  background: "the lil is opened in the background (`open -g <url>`), the source app kept in front",
 };
 
 /** Arrangements the operator sets up once per scenario, then the harness verifies. */
@@ -72,7 +72,7 @@ function openScenario(arrangement, neighbours) {
     // The recorded #30 evidence was measured under a background open; the
     // opening symptom is scored on z-order alone, so that measurement stands.
     launch: "background",
-    summary: `open a lil from the source app; ${LAUNCHES.background.describe()}`,
+    summary: `open a lil from the source app; ${LAUNCHES.background}`,
     arrangement: { ...ARRANGEMENTS[arrangement], id: arrangement },
     neighbours: { ...NEIGHBOURS[neighbours], id: neighbours },
     steps: [
@@ -156,7 +156,7 @@ function closeScenario(name, launch) {
     kind: "close",
     defaultReps: 2,
     launch,
-    summary: `${closeCase.summary}; ${LAUNCHES[launch].describe()}`,
+    summary: `${closeCase.summary}; ${LAUNCHES[launch]}`,
     expectedFrom: closeCase.expectedFrom,
     steps: closeCase.steps,
   };

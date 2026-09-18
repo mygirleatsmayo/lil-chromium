@@ -154,8 +154,8 @@ export function createChrome(options = {}) {
     return Promise.reject(new Error(`No ${kind} with id ${id}`));
   }
 
-  // macOS keys the application's most recently focused remaining window when
-  // the key window closes; this order is what that handoff reads.
+  // The fake's key handoff: when a focused window closes, focus moves to the
+  // remaining window that most recently held it in this order.
   const focusOrder = [];
   function forgetFocus(id) {
     const at = focusOrder.indexOf(id);
