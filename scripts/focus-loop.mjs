@@ -29,7 +29,7 @@
 // red close control — and the run *watches* for those rather than asking for a
 // keystroke afterwards, because a keystroke is itself a focus change.
 //
-// See .mayosdd/tickets/evidence/issue-30-real-mac-focus-loop/README.md.
+// See .mayo/tickets/evidence/issue-30-real-mac-focus-loop/README.md.
 
 import path from "node:path";
 import readline from "node:readline/promises";
@@ -43,7 +43,7 @@ import { replay } from "./focus-loop/replay.mjs";
 import { browserLayout, displayOfApp, scoreRepetition, teardownInconclusive } from "./focus-loop/verdict.mjs";
 
 const REPO_ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
-const DEFAULT_OUT = path.join(REPO_ROOT, ".mayosdd/tickets/evidence/issue-30-real-mac-focus-loop");
+const DEFAULT_OUT = path.join(REPO_ROOT, ".mayo/tickets/evidence/issue-30-real-mac-focus-loop");
 const TAG = "LILFOCUS";
 
 const DEFAULTS = {
