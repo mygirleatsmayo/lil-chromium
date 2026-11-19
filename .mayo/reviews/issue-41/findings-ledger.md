@@ -25,7 +25,12 @@ Initial reviewed point: `3aa5666`
 - N1 · Inserting `PaletteResults` moved the doc lines "The only modifier keys that participate in a palette Return chord" onto the wrong type · **fix**: put them back above `PaletteReturnChord`.
 - C1 · No test covers the reply cap boundary (the implementer noted a real-size test needs a reply over 64 MiB) · **fix**: one focused test at a small cap: a line exactly at the cap is accepted, one byte over is rejected.
 
+## Remediation 2
+
+- N2 · `#expect(socketpair(...) == 0)` lets the cap test continue when the socket pair fails; both descriptors start at `0`, so the test can write to and close the runner's stdin · **fix**: `try #require` the socket pair before touching either descriptor.
+
 ## Review status
 
 - Full review 1: 5 Standards (all fix), 5 Spec (P1, P3, P4 fix; P2 won't-fix; P5 at PR time).
 - Remediation 1 (`3aa5666...a6d1d34`): S1/P1, S2, S3, S5, P3, P4 resolved; S4 unresolved (fix); 1 new defect (N1, fix); caller item C1 (fix).
+- Remediation 2 (`a6d1d34...4149555`): S4 residual, N1, C1 resolved; 1 new defect (N2, fix).
