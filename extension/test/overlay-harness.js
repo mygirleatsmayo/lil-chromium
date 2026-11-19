@@ -11,7 +11,9 @@ import { fileURLToPath } from "node:url";
 import { parseHTML, Event as DOMEvent } from "linkedom";
 
 export const OVERLAY_PATH = path.resolve(fileURLToPath(new URL("../overlay.js", import.meta.url)));
-const MANIFEST_PATH = path.resolve(fileURLToPath(new URL("../manifest.json", import.meta.url)));
+const MANIFEST = JSON.parse(
+  fs.readFileSync(path.resolve(fileURLToPath(new URL("../manifest.json", import.meta.url))), "utf8")
+);
 
 const quietConsole = {
   log() {},
@@ -256,7 +258,7 @@ function createChrome(options = {}) {
     runtime: {
       lastError: undefined,
       getManifest() {
-        return JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
+        return MANIFEST;
       },
       sendMessage(msg, cb) {
         messages.push(msg);
@@ -284,36 +286,26 @@ function createChrome(options = {}) {
 }
 
 /**
- * Chromium match-pattern test, reduced to the forms a manifest can use:
- * `<all_urls>`, a `*` scheme (http/https only), `*` / `*.suffix` / exact hosts,
- * and `*` path globs. `file:///*` has an empty host.
+ * Chromium's match-pattern test for only the forms the manifest uses: any
+ * host and path of one scheme (`http`, `https`), or any local file path
+ * (`file:` with an empty host). Any other form throws, so a manifest
+ * change cannot silently slip past the harness.
  */
-function matchesPattern(pattern, href) {
-  const url = new URL(href);
-  const scheme = url.protocol.slice(0, -1);
-  if (pattern === "<all_urls>") return ["http", "https", "file", "ws", "wss", "ftp"].includes(scheme);
-  const m = /^(\*|[a-z]+):\/\/([^/]*)(\/.*)$/.exec(pattern);
-  if (!m) return false;
-  const [, pScheme, pHost, pPath] = m;
-  if (pScheme === "*" ? !["http", "https"].includes(scheme) : pScheme !== scheme) return false;
-  const host = url.hostname;
-  const hostOk =
-    pHost === "*" || pHost === host || (pHost.startsWith("*.") && (host === pHost.slice(2) || host.endsWith(pHost.slice(1))));
-  if (!hostOk) return false;
-  const glob = new RegExp("^" + pPath.split("*").map((x) => x.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$");
-  return glob.test(url.pathname + url.search);
+function matchesPattern(pattern, url) {
+  const m = /^([a-z]+):\/\/(\*?)\/\*$/.exec(pattern);
+  if (!m) throw new Error(`overlay harness cannot read match pattern ${pattern}`);
+  return url.protocol === m[1] + ":" && (m[2] === "*" || url.host === "");
 }
 
 /**
- * Would the browser inject overlay.js into this page? Reads the real manifest,
- * and models the per-extension "Allow access to file URLs" toggle: when it is
- * off, the browser skips file:// pages even if the manifest matches them.
+ * Would the browser inject overlay.js into this page? Models the
+ * per-extension "Allow access to file URLs" toggle too: when it is off, the
+ * browser skips file:// pages even if the manifest matches them.
  */
-export function overlayInjects(href, { fileAccess = true } = {}) {
-  if (!fileAccess && href.startsWith("file:")) return false;
-  const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
-  return manifest.content_scripts.some(
-    (cs) => cs.js.includes("overlay.js") && cs.matches.some((p) => matchesPattern(p, href))
+function overlayInjects(url, { fileAccess = true } = {}) {
+  if (!fileAccess && url.protocol === "file:") return false;
+  return MANIFEST.content_scripts.some(
+    (cs) => cs.js.includes("overlay.js") && cs.matches.some((p) => matchesPattern(p, url))
   );
 }
 
@@ -397,7 +389,7 @@ export async function mountOverlay(options = {}) {
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   // The browser decides injection from the manifest; a page it skips gets no overlay at all.
-  if (overlayInjects(href, options)) vm.runInContext(fs.readFileSync(OVERLAY_PATH, "utf8"), sandbox, { filename: OVERLAY_PATH });
+  if (overlayInjects(u, options)) vm.runInContext(fs.readFileSync(OVERLAY_PATH, "utf8"), sandbox, { filename: OVERLAY_PATH });
   await flush();
 
   const host = [...document.documentElement.children].find((el) => shadows.has(el)) || null;
