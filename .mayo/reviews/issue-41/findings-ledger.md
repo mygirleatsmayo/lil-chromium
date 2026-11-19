@@ -29,9 +29,27 @@ Initial reviewed point: `3aa5666`
 
 - N2 · `#expect(socketpair(...) == 0)` lets the cap test continue when the socket pair fails; both descriptors start at `0`, so the test can write to and close the runner's stdin · **fix**: `try #require` the socket pair before touching either descriptor.
 
+## Final review 1
+
+### Standards
+
+- S6 · A click on a row still showing the previous query's results acts on it: type `settings`, delete the last `s`, click the Settings row before ranking lands, and Settings opens (PROTOCOL.md: a selectable Settings result for the complete words only) · **won't-fix** · Settled (extends P2): a click acts on the row on screen, the row the user aimed at; settling first would put a different row under the pointer. The PROTOCOL rule governs which queries produce the Settings row, and they still do. Return and ↑/↓ act on rows for the current text (P2).
+- S7 · `historyQuery` accepts any decodable reply without matching `id` or `type` (PROTOCOL.md: `id` for request/response matching) · **won't-fix**: predates #41 (`bf45a2f` decoded the reply the same way); each app request has its own connection, and the host does the `id` matching.
+- S8 · No runnable check for out-of-date handling; the relay failure test accepts any error, so a timeout passes (global rules: non-trivial logic leaves one runnable check) · **fix**: one focused test each: an older refresh landing after a newer one leaves the newer snapshot (P3); a ranking for an older query landing after a newer edit is not rendered ("out-of-date results dropped"). The failure test asserts the reported-failure error.
+- S9 · `autocompleteHost(for:)` is now a test-only forwarder to `results(for:)` (possible Middle Man) · **fix**: tests read `results(for:).autocompleteHost`; remove the forwarder.
+- S10 · The host repeats lock / `removeValue(forKey: id)` / unlock in forwarding failure and reply delivery (possible Duplicated Code) · **fix**: one atomic take of a pending query, used by both.
+- S11 · `RelayError.readTimeout` also covers EOF and an over-cap reply (possible Mysterious Name) · **fix**: a name that covers any missing or rejected reply line.
+
+### Spec
+
+- P1 (again) · "A refresh that fails or times out keeps the previous snapshot": a Primary failure falls through to the next routed socket, and a real empty history from that browser empties the palette · **won't-fix** · Settled (amends P1): a refresh fails when no routed socket returns real history. PROTOCOL.md's routing order (steps 1–3) decides which browser's history the palette shows, as before #41; a real reply from the next routed browser is a successful refresh, even when empty.
+- P6 · "it runs off the main thread with out-of-date results dropped": a caret move leaves the ranking generation unchanged; type `git`, press ← while ranking is pending, and the completion still rewrites the field and replaces the caret with a selected suffix · **fix** · Settled: a completion applies only to the field state it was ranked for (same text, caret at the end, no selection); any edit, caret move or selection change since drops the completion. The rows still render, since they depend on the text alone.
+- P5 (again) · integration obligation, as above.
+
 ## Review status
 
 - Full review 1: 5 Standards (all fix), 5 Spec (P1, P3, P4 fix; P2 won't-fix; P5 at PR time).
 - Remediation 1 (`3aa5666...a6d1d34`): S1/P1, S2, S3, S5, P3, P4 resolved; S4 unresolved (fix); 1 new defect (N1, fix); caller item C1 (fix).
 - Remediation 2 (`a6d1d34...4149555`): S4 residual, N1, C1 resolved; 1 new defect (N2, fix).
 - Remediation 3 (`4149555...52e16bb`): N2 resolved, no new defects. Ledger resolved; final full review next.
+- Final review 1 (`bf45a2f...103b92e`): Standards S8–S11 fix; S6, S7 won't-fix. Spec P6 fix; P1 (again) settled won't-fix; P5 at PR time.
