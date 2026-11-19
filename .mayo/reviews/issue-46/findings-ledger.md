@@ -27,7 +27,7 @@ Initial reviewed point: `07ffe5a`
 ## Remediation 1
 
 - S2 residual · `hostWhitelisted(parsed.hostname, sleep.whitelist)` drops the earlier `.toLowerCase()`; non-special schemes keep the hostname's case · **fix** (S2 not yet met): both guards keep their previous hostname normalization.
-- N1 · A guard abort after the nap is staged leaves the registry entry marked asleep with the old URL; the lil's next navigation is not recorded, and a browser restart reopens the old page · **fix** · Settled: an aborted nap leaves the lil's registry entry as it was before the nap was staged, so later navigation records normally and a restart reopens the page the lil actually shows.
+- N1 · A guard abort after the nap is staged leaves the registry entry marked asleep with the old URL; the lil's next navigation is not recorded, and a browser restart reopens the old page · **fix** · Settled: an aborted nap leaves the lil's registry entry as it was before the nap was staged, so later navigation records normally and a restart reopens the page the lil actually shows. Clarified after the fix (implementer's question): "as it was before" covers the nap state; the navigation that caused the abort is recorded like any navigation, including its `lastInteraction` time.
 
 ## Review status
 
