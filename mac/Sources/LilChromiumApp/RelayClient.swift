@@ -122,8 +122,8 @@ enum RelayClient {
 
     /// Read one newline-delimited line of at most `maxBytes` (newline
     /// excluded). Returns nil on EOF, on timeout without a complete line, or
-    /// once the line would pass the cap.
-    private static func readLine(_ fd: Int32, maxBytes: Int = 8 * 1024 * 1024) -> Data? {
+    /// for a line over the cap.
+    static func readLine(_ fd: Int32, maxBytes: Int = 8 * 1024 * 1024) -> Data? {
         let lineBuffer = LineBuffer()
         var buf = [UInt8](repeating: 0, count: 65536)
         while true {
@@ -133,11 +133,12 @@ enum RelayClient {
                 if errno == EINTR { continue }
                 return nil // includes EAGAIN on RCVTIMEO expiry
             }
-            let chunk = Data(buf[0..<n])
-            // Check the line's length before buffering more of it.
-            let lineBytesInChunk = chunk.firstIndex(of: 0x0A) ?? n
-            if lineBuffer.pending.count + lineBytesInChunk > maxBytes { return nil }
-            if let line = lineBuffer.append(chunk).first { return line }
+            // LineBuffer's one scan finds the delimiter; the cap is checked on
+            // what it reports. At most one chunk is buffered past the cap.
+            if let line = lineBuffer.append(Data(buf[0..<n])).first {
+                return line.count <= maxBytes ? line : nil
+            }
+            if lineBuffer.pending.count > maxBytes { return nil }
         }
     }
 

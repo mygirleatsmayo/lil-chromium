@@ -60,4 +60,20 @@ struct RelayHistoryTests {
             try RelayClient.historyQuery(.historyWindow(id: "q-2"), socketPath: path)
         }
     }
+
+    /// The reply cap bounds the line itself: a line exactly at the cap is
+    /// read, one byte over is rejected, never accepted.
+    @Test(.bug(id: 41), arguments: [(length: 16, accepted: true), (length: 17, accepted: false)])
+    func aReplyLineIsReadUpToTheCapAndNoFurther(length: Int, accepted: Bool) throws {
+        var fds: [Int32] = [0, 0]
+        #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
+        defer { close(fds[0]) }
+        let line = Data(repeating: UInt8(ascii: "x"), count: length) + Data([0x0A])
+        #expect(line.withUnsafeBytes { write(fds[1], $0.baseAddress, line.count) } == line.count)
+        close(fds[1])
+
+        let read = RelayClient.readLine(fds[0], maxBytes: 16)
+
+        #expect(read == (accepted ? line.dropLast() : nil))
+    }
 }
