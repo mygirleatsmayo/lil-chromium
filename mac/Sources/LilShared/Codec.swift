@@ -6,6 +6,12 @@ import Foundation
 /// line, no pretty-printing). These helpers keep that contract in one place.
 public enum LilCodec {
 
+    /// The largest message the relay path carries: Chrome's own cap on a
+    /// message an extension sends to its native host (64 MiB, per Chrome's
+    /// native messaging docs). A full history-window reply (issue #41) is
+    /// several MB; nothing larger can reach the host, so neither hop cuts lower.
+    public static let maxMessageBytes = 64 * 1024 * 1024
+
     /// A single encoder configured to emit compact JSON with no stray newlines.
     /// (JSONEncoder never inserts newlines unless `.prettyPrinted` is set, so
     /// the encoded bytes are safe to frame with a trailing '\n'.)

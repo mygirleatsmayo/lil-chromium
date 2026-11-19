@@ -509,6 +509,28 @@ test("history-query replies with the shared history-result rows, including spars
   assert.equal(sparse.lastVisitTime, 0);
 });
 
+test("the palette's history-window query returns every item in the window, not a count (#41)", async () => {
+  const now = Date.now();
+  const day = 24 * 3600 * 1000;
+  // More than the old 3,000 cap, spread across the 90-day window, plus one
+  // page the browser would still report from before the window.
+  const history = Array.from({ length: 3500 }, (_, i) => ({
+    url: `https://site${i}.example/`,
+    title: `Site ${i}`,
+    lastVisitTime: now - (i % 89) * day,
+    visitCount: 1,
+    typedCount: 0,
+  }));
+  history.push({ url: "https://ancient.example/", title: "Ancient", lastVisitTime: now - 120 * day });
+  const env = await boot({ history });
+  const query = fixture("message-history-query-window");
+  await env.deliver(query);
+  const reply = env.outgoing().filter((m) => m.type === "history-result").at(-1);
+  assert.equal(reply.id, query.id);
+  assert.equal(reply.items.length, 3500);
+  assert.ok(!reply.items.some((i) => i.url === "https://ancient.example/"));
+});
+
 test("promote to another browser posts open-external and removes the lil", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));

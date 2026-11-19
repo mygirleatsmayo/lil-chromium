@@ -1,0 +1,43 @@
+import Foundation
+import Testing
+@testable import LilChromiumApp
+@testable import LilShared
+@testable import lilchromium_host
+
+/// The palette's history snapshot over a real relay socket (issue #41): the
+/// host's own `SocketServer` on one side, the app's `RelayClient` on the other.
+struct RelayHistoryTests {
+
+    /// A full-window reply is tens of thousands of rows and several megabytes,
+    /// and the browser may take seconds to gather it. Neither may turn it into
+    /// an empty or cut-off result.
+    @Test(.bug(id: 41)) func aSlowMultiMegabyteHistoryReplyArrivesIntact() throws {
+        let count = 30_000
+        let items = (0..<count).map { i in
+            HistoryItem(
+                url: "https://site\(i).example/" + String(repeating: "p", count: 200),
+                title: "Page \(i) " + String(repeating: "t", count: 60),
+                lastVisitTime: Double(i), visitCount: 1, typedCount: 0
+            )
+        }
+        // Short path: sun_path holds 104 bytes.
+        let path = "/tmp/lil-test-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
+        let server = SocketServer(path: path)
+        #expect(server.bindAndListen().ok)
+        defer { server.stop() }
+        server.onLine = { line, conn in
+            guard let query = try? LilCodec.decodeLine(HistoryQueryMessage.self, from: line) else { return }
+            // Longer than any single-read timeout the client used to allow.
+            Thread.sleep(forTimeInterval: 2.5)
+            let reply = try! LilCodec.encodeLine(HistoryResultMessage(id: query.id, items: items))
+            #expect(reply.count > 8 * 1024 * 1024, "the reply must exceed the old 8 MB read cap")
+            conn.writeLine(reply)
+        }
+        server.start()
+
+        let received = try RelayClient.historyQuery(.historyWindow(id: "q-1"), socketPath: path)
+
+        #expect(received.count == count)
+        #expect(received.last == items.last)
+    }
+}

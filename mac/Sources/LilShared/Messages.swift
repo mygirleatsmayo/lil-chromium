@@ -179,6 +179,12 @@ public struct HistoryQueryMessage: Codable, Sendable {
         self.text = text
         self.maxResults = maxResults
     }
+
+    /// Every item in the extension's history window (issue #41): `maxResults`
+    /// 0 is the protocol's "no cap" (docs/PROTOCOL.md history-query).
+    public static func historyWindow(id: String) -> HistoryQueryMessage {
+        HistoryQueryMessage(id: id, text: "", maxResults: 0)
+    }
 }
 
 /// One history entry as returned by the extension.

@@ -636,7 +636,8 @@ export function createChrome(options = {}) {
           if (!q) return true;
           return (h.url || "").toLowerCase().includes(q) || (h.title || "").toLowerCase().includes(q);
         });
-        if (typeof maxResults === "number") items = items.slice(0, maxResults);
+        // Chromium treats 0 as "no cap" (QueryOptions::max_count); see answerHistoryQuery.
+        if (typeof maxResults === "number" && maxResults > 0) items = items.slice(0, maxResults);
         return items.map((h) => ({ ...h }));
       },
     },

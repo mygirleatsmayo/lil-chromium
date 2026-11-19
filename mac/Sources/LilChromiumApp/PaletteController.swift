@@ -283,9 +283,10 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
 
     private func refreshHistory() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let items = (try? RelayClient.historyQuery(text: "", maxResults: 3000)) ?? []
-            // Build the index off the main thread (parsing 3000 URLs is the
-            // expensive part; do it once here, not per keystroke).
+            // A failed or timed-out refresh keeps the snapshot the palette has.
+            guard let items = try? RelayClient.historyWindow() else { return }
+            // Build the index off the main thread (parsing every URL in the
+            // window is the expensive part; do it once here, not per keystroke).
             let index = Ranking.buildIndex(items: items)
             DispatchQueue.main.async {
                 guard let self = self else { return }
