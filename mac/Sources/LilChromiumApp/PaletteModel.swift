@@ -79,6 +79,45 @@ final class PaletteModel {
         return copy
     }
 
+    // MARK: - Out-of-date results (issue #41)
+
+    /// A history refresh in flight. Only the newest may install its snapshot.
+    struct RefreshTicket: Equatable { fileprivate let number: Int }
+    /// A keystroke ranking in flight. Only the newest may render.
+    struct RankingTicket: Equatable { fileprivate let number: Int }
+
+    private var newestRefresh = 0
+    private var newestRanking = 0
+
+    func beginRefresh() -> RefreshTicket {
+        newestRefresh += 1
+        return RefreshTicket(number: newestRefresh)
+    }
+
+    /// Install `index` unless a newer refresh began after `ticket`'s, so an
+    /// older refresh that lands last never replaces a newer snapshot.
+    @discardableResult
+    func install(_ index: Ranking.HistoryIndex, from ticket: RefreshTicket) -> Bool {
+        guard ticket.number == newestRefresh else { return false }
+        self.index = index
+        return true
+    }
+
+    /// Begin a ranking; every earlier ranking is now out of date.
+    func beginRanking() -> RankingTicket {
+        newestRanking += 1
+        return RankingTicket(number: newestRanking)
+    }
+
+    /// Put every ranking in flight out of date (close, or Return settling).
+    func outdateRankings() {
+        newestRanking += 1
+    }
+
+    func isCurrent(_ ticket: RankingTicket) -> Bool {
+        ticket.number == newestRanking
+    }
+
     /// Replace the cached snapshot and rebuild the index off the main thread's
     /// hot path is the caller's job; this just stores the prebuilt index.
     func setIndex(_ index: Ranking.HistoryIndex) {

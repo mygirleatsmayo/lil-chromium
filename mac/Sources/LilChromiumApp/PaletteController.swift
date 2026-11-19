@@ -30,15 +30,10 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// Typed queries rank off the main thread: across a full history window
     /// (20,000 items) one keystroke takes ~100 ms in a release build (issue
     /// #41). Serial, so a newer query never races an older one; each edit
-    /// cancels the queued one and bumps `rankGeneration`, so a result that
-    /// lands after a newer edit is dropped.
+    /// cancels the queued one and takes a new model ranking ticket, so a
+    /// result that lands after a newer edit is dropped.
     private let rankQueue = DispatchQueue(label: "com.lilchromium.palette.rank", qos: .userInteractive)
     private var pendingRank: DispatchWorkItem?
-    private var rankGeneration = 0
-
-    /// Bumped by each history refresh; only the newest may install its
-    /// snapshot, so an older refresh that lands last never replaces it.
-    private var refreshGeneration = 0
 
     /// Anchor read fresh at each show() (a cheap file read, always fresh) and
     /// cached for the session so per-keystroke repositioning doesn't re-read the
@@ -299,8 +294,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     // MARK: - Data flow
 
     private func refreshHistory() {
-        refreshGeneration += 1
-        let generation = refreshGeneration
+        let ticket = model.beginRefresh()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             // A failed or timed-out refresh keeps the snapshot the palette has.
             guard let items = try? RelayClient.historyWindow() else { return }
@@ -308,8 +302,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
             // window is the expensive part; do it once here, not per keystroke).
             let index = Ranking.buildIndex(items: items)
             DispatchQueue.main.async {
-                guard let self, generation == self.refreshGeneration else { return }
-                self.model.setIndex(index)
+                guard let self, self.model.install(index, from: ticket) else { return }
                 // Re-render with whatever is currently typed.
                 self.reload(query: self.committedQuery)
             }
@@ -320,16 +313,20 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// newer edit arrived meanwhile. `autocomplete` also offers inline
     /// type-ahead for the top hit once the rows land.
     private func reload(query: String, autocomplete: Bool = false) {
-        cancelPendingRank()
-        let generation = rankGeneration
+        pendingRank?.cancel()
+        let ticket = model.beginRanking()
         let worker = model.copy()
         let work = DispatchWorkItem { [weak self] in
             let results = worker.results(for: query)
             DispatchQueue.main.async {
-                guard let self, generation == self.rankGeneration else { return }
+                guard let self, self.model.isCurrent(ticket) else { return }
                 self.pendingRank = nil
                 self.render(results.rows)
-                if autocomplete, let host = results.autocompleteHost, let field = self.inputField {
+                // Rows depend on the text alone; a completion also needs the
+                // caret and selection it was ranked for.
+                if autocomplete, let host = results.autocompleteHost,
+                   let field = self.inputField, let editor = field.fieldText,
+                   Self.completionApplies(rankedFor: query, text: field.stringValue, selection: editor.selectedRange) {
                     self.applyAutocomplete(typed: query, host: host, field: field)
                 }
             }
@@ -342,7 +339,14 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     private func cancelPendingRank() {
         pendingRank?.cancel()
         pendingRank = nil
-        rankGeneration += 1
+        model.outdateRankings()
+    }
+
+    /// A completion applies only to the field state it was ranked for: the
+    /// same text, caret at its end, nothing selected. Any edit, caret move or
+    /// selection change since drops it (issue #41).
+    static func completionApplies(rankedFor query: String, text: String, selection: NSRange) -> Bool {
+        text == query && selection == NSRange(location: (query as NSString).length, length: 0)
     }
 
     /// Keyboard selection and Return act on the rows for what is typed now:

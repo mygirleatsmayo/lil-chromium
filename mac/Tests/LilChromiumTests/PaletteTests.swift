@@ -641,3 +641,48 @@ struct PaletteActionTests {
         #expect(model.action(for: "private search", selectedRow: selectedRow, chord: chord) == nil)
     }
 }
+
+/// Results that land late (issue #41): history refreshes and keystroke
+/// rankings run off the main thread, and only the newest of each may land.
+struct PaletteOutOfDateTests {
+
+    private func snapshot(_ url: String) -> Ranking.HistoryIndex {
+        Ranking.buildIndex(items: [HistoryItem(url: url, title: "", lastVisitTime: 0, visitCount: 1, typedCount: 0)], nowMs: 0)
+    }
+
+    @Test(.bug(id: 41)) func anOlderRefreshLandingLastLeavesTheNewerSnapshot() {
+        let model = PaletteModel()
+        let older = model.beginRefresh()
+        let newer = model.beginRefresh()
+
+        #expect(model.install(snapshot("https://newer.example/"), from: newer))
+        #expect(!model.install(snapshot("https://older.example/"), from: older))
+
+        #expect(model.rows(for: "").map(\.host) == ["newer.example"])
+    }
+
+    @Test(.bug(id: 41)) func aRankingForAnOlderQueryIsNotRenderedAfterANewerEdit() {
+        let model = PaletteModel()
+        let older = model.beginRanking()
+        let newer = model.beginRanking()
+
+        #expect(!model.isCurrent(older))
+        #expect(model.isCurrent(newer))
+        // Closing the palette, or Return settling the rows, outdates it too.
+        model.outdateRankings()
+        #expect(!model.isCurrent(newer))
+    }
+
+    /// A completion applies only to the field state it was ranked for: the
+    /// same text, caret at the end, nothing selected.
+    @MainActor
+    @Test(.bug(id: 41), arguments: [
+        (text: "git", selection: NSRange(location: 3, length: 0), applies: true),
+        (text: "git", selection: NSRange(location: 2, length: 0), applies: false), // caret moved
+        (text: "git", selection: NSRange(location: 0, length: 3), applies: false), // text selected
+        (text: "gi", selection: NSRange(location: 2, length: 0), applies: false),  // edited
+    ])
+    func aCompletionAppliesOnlyToTheFieldStateItWasRankedFor(text: String, selection: NSRange, applies: Bool) {
+        #expect(PaletteController.completionApplies(rankedFor: "git", text: text, selection: selection) == applies)
+    }
+}
