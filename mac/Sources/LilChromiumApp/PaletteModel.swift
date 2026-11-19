@@ -35,6 +35,46 @@ struct PaletteAction: Equatable {
     let hint: String
 }
 
+/// What the palette field holds (issue #38): the text the user typed and, while
+/// inline type-ahead shows one, the history row it completes to. The field
+/// displays `text` with `completionRange` selected. The completion is the
+/// default action, so the field, the top row, and Return never disagree.
+struct PaletteInput {
+    /// Text the user entered; excludes the auto-appended remainder.
+    fileprivate(set) var typed = ""
+    /// The origin row whose host the field is completed to, if any.
+    fileprivate(set) var completion: PaletteRow?
+
+    /// The full field text: typed text plus the completed host's remainder,
+    /// with the user's casing kept for the typed prefix.
+    var text: String {
+        guard let host = completion?.host else { return typed }
+        return typed + host.dropFirst(typed.count)
+    }
+
+    /// The selected remainder in UTF-16 units (NSRange), nil with no completion.
+    var completionRange: NSRange? {
+        guard completion != nil else { return nil }
+        let base = (typed as NSString).length
+        return NSRange(location: base, length: (text as NSString).length - base)
+    }
+
+    /// The field's selection moved. If the field still shows the completed
+    /// text but the remainder is no longer exactly selected (→, ⌘→, End, a
+    /// click), the user accepted it: the full text becomes the typed query.
+    /// Returns whether the query changed. A selection change that arrives
+    /// with different text belongs to an edit and is left to `editing`.
+    @discardableResult
+    mutating func selectionDidChange(to range: NSRange, in fieldText: String) -> Bool {
+        guard let completionRange, fieldText == text, range != completionRange else {
+            return false
+        }
+        typed = fieldText
+        completion = nil
+        return true
+    }
+}
+
 /// The only modifier keys that participate in a palette Return chord.
 /// AppKit lock state and key-origin metadata never cross this boundary.
 struct PaletteReturnChord: OptionSet, Equatable, Sendable {
@@ -118,6 +158,33 @@ final class PaletteModel {
         )
     }
 
+    /// Return for the current field state. Forced searches (⇧) always search
+    /// the typed text, never the completed host.
+    func action(
+        for input: PaletteInput,
+        selectedRow: PaletteRow?,
+        chord: PaletteReturnChord
+    ) -> PaletteAction? {
+        action(for: input.typed, selectedRow: selectedRow, chord: chord)
+    }
+
+    /// The user changed the field text (typing, deleting, pasting). Type-ahead
+    /// fires only when the change extends the typed text — never after a
+    /// deletion — and only to a host the text strictly prefixes.
+    func editing(_ input: PaletteInput, to newText: String) -> PaletteInput {
+        let isInsertion = newText.count > input.typed.count
+            && newText.lowercased().hasPrefix(input.typed.lowercased())
+        var next = PaletteInput()
+        next.typed = newText
+        if isInsertion, !newText.isEmpty,
+           let host = autocompleteHost(for: newText),
+           host.lowercased().hasPrefix(newText.lowercased()),
+           host.count > newText.count {
+            next.completion = originRow(host: host)
+        }
+        return next
+    }
+
     /// The host offered for inline type-ahead. When a history row sits above
     /// Search, that is the host Enter opens — ghost text must name it too.
     /// Otherwise the highest-scoring host-prefix origin, else nil.
@@ -192,6 +259,16 @@ final class PaletteModel {
         return Array(rows.prefix(maxRows))
     }
 
+    /// Rows for the field state. A displayed completion leads; below it sit the
+    /// typed text's own rows, minus any that open the same page.
+    func rows(for input: PaletteInput) -> [PaletteRow] {
+        let typedRows = rows(for: input.typed)
+        guard let top = input.completion else { return typedRows }
+        let key = Ranking.normalizeURLKey(top.actionURL)
+        let rest = typedRows.filter { Ranking.normalizeURLKey($0.actionURL) != key }
+        return Array(([top] + rest).prefix(maxRows))
+    }
+
     /// Among eligible registrable-label matches, frecency is the tie-breaker
     /// (criterion 6). Match-tier `score` is ignored here; `isBefore` only
     /// breaks equal-frecency ties so the pick stays a total order.
@@ -221,6 +298,16 @@ final class PaletteModel {
             host: r.host,
             autocompleteHost: r.host
         )
+    }
+
+    /// The site row for `host`, as ranking would show its origin.
+    private func originRow(host: String) -> PaletteRow? {
+        guard let origin = index.origins.first(where: { $0.host == host }) else { return nil }
+        return historyRow(Ranking.RankedResult(
+            title: origin.displayTitle, url: origin.url, host: origin.host,
+            score: origin.frecency, isOrigin: true, frecency: origin.frecency,
+            matchesRegistrableLabel: false
+        ))
     }
 
     private func settingsRow() -> PaletteRow {
