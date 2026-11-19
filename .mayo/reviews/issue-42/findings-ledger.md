@@ -38,3 +38,4 @@ Initial reviewed point: `1b572dd`
 - Full review 1: 5 Standards (all fix), 5 Spec (P4, P5 fix; P1–P3 settled won't-fix, P1/P2 pending Lucas).
 - Remediation 1 (`3edaf6c...8f69e48`): all 7 fix items resolved, no new defects.
 - Final review 1 (`bf45a2f...ad49f35`): 3 Standards (S7 fix; S6 won't-fix; S8 integration), 3 Spec (P8 fix; P6, P7 settled won't-fix).
+- Remediation 2 (`ad49f35...5897e86`): S7, P8 resolved, no new defects. Ledger resolved; ready to integrate once Lucas answers D, E (P1, P2, P6) and approves the merge flow.
