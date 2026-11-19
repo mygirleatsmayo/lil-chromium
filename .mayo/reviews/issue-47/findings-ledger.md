@@ -46,6 +46,10 @@ Initial reviewed point: `438f7db`
 
 - C1 · `Promise.withResolvers()` needs Node 22; `package.json` declares `"node": ">=20"`, so the suite breaks on Node 20–21 (raised by the implementer) · **fix**: stay within the declared engine (`new Promise` covers it); changing the engine floor is Lucas's call, outside #47.
 
+## Remediation 5
+
+- N3 · The early-page test awaits `env.deliver(...)` before checking the reply, so the lil finishes opening first; the test still passes with the registration signal removed (`worker.test.js`) · **fix**: hold a step after registration open and check the reply before releasing it, so the test fails without the registration signal.
+
 ## Review status
 
 - Full review 1: 4 Standards (all fix), 3 Spec (P2 fix, P1 pending Lucas, P3 live check).
@@ -54,3 +58,4 @@ Initial reviewed point: `438f7db`
 - Final review 1 (`bf45a2f...c846091`): Standards N1 residual, S5, S6 fix; S7 won't-fix. Spec P4 fix; P1 pending Lucas; P3 live check.
 - Remediation 3 (`c846091...796ff02`): N1 residual, S5, S6, P4 resolved; 1 new defect (N2, fix). P1 pending Lucas; P3 live check.
 - Remediation 4 (`796ff02...e12cd54`): N2 unresolved (fix); no other new defects. P1 pending Lucas; P3 live check.
+- Remediation 5 (`e12cd54...95d223e`): N2, C1 resolved; 1 new test gap (N3, fix). P1 pending Lucas; P3 live check.
