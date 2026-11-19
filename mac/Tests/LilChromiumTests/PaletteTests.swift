@@ -422,6 +422,125 @@ struct PaletteOrderingTests {
     }
 }
 
+/// The any-order matching contract for multi-word queries (issue #42). Every
+/// assertion names rows in order — never a score.
+struct PaletteAnyOrderTests {
+
+    private let nowMs: Double = 1_700_000_000_000
+
+    private func visit(_ url: String, title: String, visits: Int = 5) -> HistoryItem {
+        HistoryItem(url: url, title: title, lastVisitTime: nowMs - 86_400_000,
+                    visitCount: visits, typedCount: 0)
+    }
+
+    /// A palette over `items` plus example.com's root page, so the site's origin
+    /// row is titled "Example" and never matches the queries under test.
+    private func model(_ items: [HistoryItem]) -> PaletteModel {
+        let model = PaletteModel()
+        let root = visit("https://example.com/", title: "Example", visits: 50)
+        model.setIndex(Ranking.buildIndex(items: items + [root], nowMs: nowMs))
+        model.searchEngine = .defaults
+        return model
+    }
+
+    private func historyURLs(_ rows: [PaletteRow]) -> [String] {
+        rows.filter { $0.kind == .history }.map(\.actionURL)
+    }
+
+    private let gizmoPages = [
+        HistoryItem(url: "https://example.com/a", title: "Gizmo alignment fix",
+                    lastVisitTime: 1_700_000_000_000 - 86_400_000, visitCount: 5, typedCount: 0),
+        HistoryItem(url: "https://example.com/b", title: "Gizmos realignment fixture",
+                    lastVisitTime: 1_700_000_000_000 - 86_400_000, visitCount: 10, typedCount: 0),
+    ]
+
+    @Test("Repeated terms and extra spaces change nothing", .bug(id: 42))
+    func repeatedTermsAndExtraSpacesChangeNothing() {
+        let palette = model(gizmoPages)
+
+        #expect(historyURLs(palette.rows(for: "  fix   gizmo fix  "))
+            == historyURLs(palette.rows(for: "fix gizmo")))
+    }
+
+    /// A term that only matches as a scattered subsequence disqualifies the page.
+    @Test("Fuzzy matching never applies to one term of a multi-term query", .bug(id: 42))
+    func fuzzyNeverAppliesPerTerm() {
+        let rows = model([visit("https://example.com/1", title: "SwiftUI Basics")])
+            .rows(for: "basics swui")
+
+        #expect(rows.map(\.kind) == [.search])
+    }
+
+    /// "sui bsc" matches only as a whole-query subsequence; it is still found.
+    @Test("Whole-query matches are never lost", .bug(id: 42))
+    func wholeQueryMatchesAreNeverLost() {
+        let rows = model([visit("https://example.com/1", title: "SwiftUI Basics")])
+            .rows(for: "sui bsc")
+
+        #expect(rows.map(\.kind) == [.search, .history])
+        #expect(rows[1].actionURL == "https://example.com/1")
+    }
+
+    /// Every term of the first page starts a title word; the second page's
+    /// "alignment" only sits inside "realignment". Its weakest term ranks it
+    /// lower despite more visits.
+    @Test("The weakest term sets an any-order match's tier", .bug(id: 42))
+    func weakestTermSetsTheTier() {
+        let rows = model(gizmoPages).rows(for: "fix alignment gizmo")
+
+        #expect(historyURLs(rows) == ["https://example.com/a", "https://example.com/b"])
+    }
+
+    /// "swift basics" is a dense whole-query subsequence of both titles, but only
+    /// "SwiftUI Basics" also has both words as literal title-word prefixes. That
+    /// stronger tier outranks the more frecent fuzzy-only page.
+    @Test("The stronger of whole-query and any-order tiers wins", .bug(id: 42))
+    func strongerTierWins() {
+        let rows = model([
+            visit("https://example.com/fuzzy", title: "Swift basic stats", visits: 20),
+            visit("https://example.com/both", title: "SwiftUI Basics", visits: 5),
+        ]).rows(for: "swift basics")
+
+        #expect(historyURLs(rows) == ["https://example.com/both", "https://example.com/fuzzy"])
+    }
+
+    @Test("Any-order rows do not depend on history order", .bug(id: 42))
+    func rowsDoNotDependOnHistoryOrder() {
+        let history = ["c", "a", "b"].map { visit("https://example.com/\($0)", title: "Gizmo fix") }
+
+        let forward = historyURLs(model(history).rows(for: "fix gizmo"))
+        let reversed = historyURLs(model(history.reversed()).rows(for: "fix gizmo"))
+
+        #expect(forward == reversed)
+        #expect(forward == ["https://example.com/a", "https://example.com/b", "https://example.com/c"])
+    }
+
+    /// Both terms hit github.com's registrable label and title, yet the whole
+    /// query is not a literal domain match, so Search still leads.
+    @Test("A multi-term query never puts history above Search", .bug(id: 42))
+    func multiTermNeverLeadsSearch() {
+        let rows = model([visit("https://github.com/", title: "GitHub hub", visits: 90)])
+            .rows(for: "hub git")
+
+        #expect(rows.map(\.kind) == [.search, .history])
+    }
+
+    @Test("Per-host cap and duplicate collapsing still apply", .bug(id: 42))
+    func perHostCapAndDuplicatesStillApply() {
+        let history = [
+            visit("https://example.com/a", title: "Gizmo fix"),
+            visit("https://www.example.com/a", title: "Gizmo fix"),
+            visit("https://example.com/b", title: "Gizmo fix"),
+            visit("https://example.com/c", title: "Gizmo fix"),
+            visit("https://example.com/d", title: "Gizmo fix"),
+        ]
+
+        #expect(historyURLs(model(history).rows(for: "fix gizmo")) == [
+            "https://example.com/a", "https://example.com/b", "https://example.com/c",
+        ])
+    }
+}
+
 /// Return chooses a concrete palette action at the native model boundary.
 /// The controller strips lock/key-origin metadata before this seam, leaving
 /// only Command, Shift, Option, and Control in the finite chord domain.
