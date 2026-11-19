@@ -43,6 +43,10 @@ Initial reviewed point: `07ffe5a`
 
 - N4 (new) · While a nap-document check (`napDocumentMayRemain`) is pending outside the queue, a second navigation of the same lil also sees `slept` and is skipped; the cleanup then writes `originalUrl`, so the registry and a restart reopen `/` while the lil shows `/next` (`518922d` saved `/next`) · **fix** · Settled (amends N3): a lil's own navigations are handled in arrival order, so its registry url ends as the last URL it reported; a navigation that arrives while that lil's nap check or cleanup is pending is recorded after it, never skipped. The ordering is per lil: N3 still holds, and one lil's pending check or capture deletion never delays another lil's record. Test: stall the first nap-document check, navigate to `/next`; the registry ends at `/next` and a restart reopens it.
 
+## Remediation 5
+
+- N5 (new) · The per-lil queue waits on `clearNapState`'s capture deletion, so a lil's later events are handled late, against later state: with the first nap's deletion stalled, navigate to `/next`, nap and wake again; once the deletion ends, the second nap's queued release is recorded as `url`, and a restart reopens a nap page whose capture is gone (`4b5f231` restored `/next`) · **fix** · Settled: root cause is a late event read against later state, and the registry can then hold a URL the user can never return to. Two requirements: (1) a lil's registry `url` never holds a nap-page URL, however late its event is handled; (2) capture I/O never holds a lil's navigation queue: the per-lil order (N4) covers the nap check and the registry change, and the capture deletion runs after, outside it. Test: the reviewer's sequence ends with `url` at `/next`, and a restart reopens it.
+
 ## Review status
 
 - Full review 1: 4 Standards (S1, S2, S4 fix; S3 won't-fix), 4 Spec (P1, P3 fix; P2, P4 won't-fix), 1 caller item (fix).
@@ -50,3 +54,4 @@ Initial reviewed point: `07ffe5a`
 - Remediation 2 (`111c2b7...d11c5c3`): S2 residual resolved; N1 unresolved and N2 new, merged into one root-cause fix.
 - Remediation 3 (`d11c5c3...518922d`): N2 resolved; earlier items still resolved; N1 unresolved (root cause widened to every registry writer); 1 new defect (N3, fix).
 - Remediation 4 (`518922d...4b5f231`): N1, N3 resolved; earlier items still resolved; 1 new defect (N4, fix).
+- Remediation 5 (`4b5f231...64e895f`): N4 resolved; earlier items still resolved; 1 new defect (N5, fix).
