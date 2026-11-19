@@ -24,3 +24,4 @@ Initial reviewed point: `1e09f76`
 
 - Full review 1: 4 Standards, 3 Spec. All marked fix.
 - Remediation 1 (`4f52c0d...b5a33fc`): S1–S4, P1, P2 resolved; P3 residual adjudicated won't-fix (see P3); 1 new defect (N1, fix).
+- Remediation 2 (`b5a33fc...27ebd4f`): N1 resolved, no new defects.
