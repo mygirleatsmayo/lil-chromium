@@ -155,6 +155,8 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         // with the field: the stack detaches it while hidden, so the field
         // spans the row; while shown, the field yields width and scrolls, so
         // the hint never overlaps typed text.
+        // verified: macOS 27.0.1, 2026-11-19 probe — hiding the hint returns its width plus
+        // the 10pt spacing to the field; shown, field.maxX < hint.minX.
         let tabHint = NSTextField(labelWithString: "")
         tabHint.font = .systemFont(ofSize: 13, weight: .regular)
         tabHint.textColor = .tertiaryLabelColor
@@ -494,6 +496,9 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
             // completion) whatever row is selected. Always consumed, so an
             // empty query keeps focus in the field instead of moving it to
             // the Settings/Close buttons.
+            // verified: macOS 27.0.1, 2026-11-19 probe — plain Tab arrives here as
+            // `insertTab:`; returning true leaves the field editor first
+            // responder with its text unchanged.
             if let action = model.tabAction(for: committedQuery) { perform(action) }
             return true
         case #selector(NSResponder.moveUp(_:)):
