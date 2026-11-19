@@ -44,6 +44,8 @@ Initial reviewed point: `438f7db`
 
 - N2 (still unresolved) · `.map((c) => c.done)` then `await Promise.allSettled(pending)` fixes the wait list at request time; a normal window keeps waiting after the unrelated creation learns its window id, and an early request from a lil keeps waiting after its own lil registers · **fix** (N2 not yet met): the Remediation 3 rule holds for the whole wait, not only when the request arrives. The answer comes as soon as the sender's lil is registered or no pending creation can still be the sender's.
 
+- C1 · `Promise.withResolvers()` needs Node 22; `package.json` declares `"node": ">=20"`, so the suite breaks on Node 20–21 (raised by the implementer) · **fix**: stay within the declared engine (`new Promise` covers it); changing the engine floor is Lucas's call, outside #47.
+
 ## Review status
 
 - Full review 1: 4 Standards (all fix), 3 Spec (P2 fix, P1 pending Lucas, P3 live check).
