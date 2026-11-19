@@ -16,7 +16,7 @@ struct PaletteRowsTests {
     private func makeModel() throws -> PaletteModel {
         let history = try Fixture.decode(HistoryResultMessage.self, from: "message-history-result")
         let model = PaletteModel()
-        model.setIndex(Ranking.buildIndex(items: history.items, nowMs: nowMs))
+        model.install(Ranking.buildIndex(items: history.items, nowMs: nowMs), from: model.beginRefresh())
         model.searchEngine = try Fixture.decode(LilConfig.self, from: "config-v2-complete").searchEngine
         return model
     }
@@ -184,7 +184,7 @@ struct PaletteOrderingTests {
 
     private func model(_ items: [HistoryItem]) -> PaletteModel {
         let model = PaletteModel()
-        model.setIndex(Ranking.buildIndex(items: items, nowMs: nowMs))
+        model.install(Ranking.buildIndex(items: items, nowMs: nowMs), from: model.beginRefresh())
         model.searchEngine = .defaults
         return model
     }

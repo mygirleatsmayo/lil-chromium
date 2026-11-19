@@ -118,12 +118,6 @@ final class PaletteModel {
         ticket.number == newestRanking
     }
 
-    /// Replace the cached snapshot and rebuild the index off the main thread's
-    /// hot path is the caller's job; this just stores the prebuilt index.
-    func setIndex(_ index: Ranking.HistoryIndex) {
-        self.index = index
-    }
-
     /// Resolve Return at the native palette boundary. Unsupported modifier
     /// combinations return nil so extra keys cannot fall through to an action.
     func action(
