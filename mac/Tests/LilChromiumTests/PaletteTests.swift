@@ -643,56 +643,104 @@ struct PaletteActionTests {
 }
 
 /// Inline completion is the default action (issue #38): the field text, the
-/// top row, and plain Return always name the same destination.
-///
-/// The palette is driven the way its field editor drives it: each typed
-/// character replaces the selected completion remainder, or lands at the caret.
+/// top row, and Return always name the same destination.
 struct PaletteCompletionTests {
 
-    private let nowMs: Double = 1_700_000_000_000
+    private static let nowMs: Double = 1_700_000_000_000
 
-    /// GitHub (the only `git…` host) plus an unrelated site, Startpage search.
-    private func palette() -> PaletteModel {
-        let visit = { (url: String, title: String) in
-            HistoryItem(url: url, title: title, lastVisitTime: nowMs - 86_400_000,
-                        visitCount: 40, typedCount: 10)
-        }
-        let model = PaletteModel()
-        model.setIndex(Ranking.buildIndex(items: [
+    private static func visit(_ url: String, _ title: String, visits: Int = 40) -> HistoryItem {
+        HistoryItem(url: url, title: title, lastVisitTime: nowMs - 86_400_000,
+                    visitCount: visits, typedCount: visits / 4)
+    }
+
+    /// GitHub (the only `git…` host) with one deeper page, an unrelated site,
+    /// and Startpage search.
+    private func palette(
+        _ items: [HistoryItem] = [
             visit("https://github.com/", "GitHub"),
+            visit("https://github.com/acme/app", "acme/app", visits: 8),
             visit("https://example.com/", "Example"),
-        ], nowMs: nowMs))
-        model.searchEngine = .defaults
+        ],
+        engine: SearchEngineConfig = .defaults
+    ) -> PaletteModel {
+        let model = PaletteModel()
+        model.setIndex(Ranking.buildIndex(items: items, nowMs: Self.nowMs))
+        model.searchEngine = engine
         return model
     }
 
-    private func type(
-        _ characters: String,
-        into palette: PaletteModel,
-        after input: PaletteInput = PaletteInput()
-    ) -> PaletteInput {
-        characters.reduce(input) { palette.editing($0, to: $0.typed + String($1)) }
+    /// The keys that accept a completion without editing, as the field
+    /// editor delivers them.
+    enum Acceptance: CaseIterable, Sendable { case right, commandRight, end, click }
+
+    /// The palette as its field editor drives it: an edit replaces the
+    /// selection and posts the new caret before the text change; key commands
+    /// reach the palette before the editor runs them; the editor then reports
+    /// where the selection landed. Edits and acceptance put the selection back
+    /// on the top row, and Return acts on the selected row, as the controller does.
+    struct Field {
+        let palette: PaletteModel
+        private(set) var input = PaletteInput()
+        private(set) var selected = 0
+
+        var rows: [PaletteRow] { palette.rows(for: input) }
+
+        /// Each character replaces the selected remainder, or lands at the caret.
+        mutating func type(_ characters: String) {
+            for c in characters { edit(to: input.typed + String(c)) }
+        }
+
+        /// Backspace deletes the selected remainder, else the last character.
+        mutating func backspace() {
+            edit(to: input.completionRange == nil ? String(input.text.dropLast()) : input.typed)
+        }
+
+        mutating func accept(by key: Acceptance) {
+            let end = NSRange(location: (input.text as NSString).length, length: 0)
+            switch key {
+            case .right: command(#selector(NSResponder.moveRight(_:)), then: end)
+            case .commandRight: command(#selector(NSResponder.moveToRightEndOfLine(_:)), then: end)
+            case .end: command(#selector(NSResponder.scrollToEndOfDocument(_:)), then: nil)
+            case .click: select(NSRange(location: 3, length: 0))
+            }
+        }
+
+        mutating func down() { selected = (selected + 1) % rows.count }
+
+        func pressReturn(_ chord: PaletteReturnChord = .plain) -> PaletteAction? {
+            palette.action(for: input.typed, selectedRow: rows[selected], chord: chord)
+        }
+
+        private mutating func edit(to text: String) {
+            select(NSRange(location: (text as NSString).length, length: 0), in: text)
+            input = palette.editing(input, to: text)
+            selected = 0
+        }
+
+        private mutating func command(_ selector: Selector, then selection: NSRange?) {
+            if input.handle(selector) { selected = 0 }
+            if let selection { select(selection) }
+        }
+
+        private mutating func select(_ range: NSRange, in text: String? = nil) {
+            if input.selectionDidChange(to: range, in: text ?? input.text) { selected = 0 }
+        }
     }
 
-    /// What Return does with the top row selected.
-    private func returnAction(
-        _ palette: PaletteModel,
-        _ input: PaletteInput,
-        _ chord: PaletteReturnChord = .plain
-    ) -> PaletteAction? {
-        palette.action(for: input, selectedRow: palette.rows(for: input).first, chord: chord)
+    private func field(typing text: String, in palette: PaletteModel? = nil) -> Field {
+        var field = Field(palette: palette ?? self.palette())
+        field.type(text)
+        return field
     }
 
-    @Test func typedPrefixCompletesToTheHostAndReturnOpensIt() throws {
-        let palette = palette()
-        let input = type("g", into: palette)
+    @Test(.bug(id: 38)) func typedPrefixCompletesToTheHostAndReturnOpensIt() throws {
+        let field = field(typing: "g")
 
-        #expect(input.text == "github.com")
-        #expect(input.completionRange == NSRange(location: 1, length: 9))
-        let top = try #require(palette.rows(for: input).first)
-        #expect(top.kind == .history)
-        #expect(top.actionURL == "https://github.com")
-        let action = try #require(returnAction(palette, input))
+        #expect(field.input.text == "github.com")
+        #expect(field.input.completionRange == NSRange(location: 1, length: 9))
+        #expect(field.rows.first?.kind == .history)
+        #expect(field.rows.first?.actionURL == "https://github.com")
+        let action = try #require(field.pressReturn())
         #expect(action.kind == .open)
         #expect(action.url == "https://github.com")
         #expect(action.hint == "⏎ Open")
@@ -702,41 +750,46 @@ struct PaletteCompletionTests {
     /// search and not the half-typed URL.
     @Test(.bug(id: 38), arguments: ["github.", "github.c", "github.co"])
     func dottedTextOpensTheCompletedHost(_ typed: String) throws {
-        let palette = palette()
-        let input = type(typed, into: palette)
+        let field = field(typing: typed)
 
-        #expect(input.text == "github.com")
-        let rows = palette.rows(for: input)
-        #expect(rows.first?.actionURL == "https://github.com")
-        let action = try #require(returnAction(palette, input))
+        #expect(field.input.text == "github.com")
+        #expect(field.rows.first?.actionURL == "https://github.com")
+        let action = try #require(field.pressReturn())
         #expect(action.kind == .open)
         #expect(action.url == "https://github.com")
         #expect(action.hint == "⏎ Open")
     }
 
-    /// Below the completion sit the typed text's own rows, in today's order,
-    /// with GitHub not repeated.
+    /// Below the completion sit the typed text's own rows in today's order —
+    /// Open, Search, remaining history — with GitHub not repeated.
     @Test(.bug(id: 38)) func rowsBelowTheCompletionAreTheTypedTextsRows() {
-        let palette = palette()
-
-        let urlLike = palette.rows(for: type("github.c", into: palette))
-        #expect(urlLike.map(\.actionURL) == [
+        #expect(field(typing: "github.c").rows.map(\.actionURL) == [
             "https://github.com",
             "https://github.c",
             "https://www.startpage.com/sp/search?query=github.c",
+            "https://github.com/acme/app",
         ])
-        #expect(urlLike.map(\.kind) == [.history, .openURL, .search])
-
-        let plain = palette.rows(for: type("git", into: palette))
-        #expect(plain.map(\.actionURL) == [
+        #expect(field(typing: "git").rows.map(\.actionURL) == [
             "https://github.com",
             "https://www.startpage.com/sp/search?query=git",
+            "https://github.com/acme/app",
+        ])
+    }
+
+    /// The Search row stays even when its URL sits on the completed host.
+    @Test(.bug(id: 38)) func searchRowOnTheCompletedHostStays() {
+        let ddg = SearchEngineConfig(name: "DuckDuckGo", template: "https://duckduckgo.com/?q=%s",
+                                     provider: "duckduckgo")
+        let palette = palette([Self.visit("https://duckduckgo.com/", "DuckDuckGo")], engine: ddg)
+
+        #expect(field(typing: "duck", in: palette).rows.map(\.actionURL) == [
+            "https://duckduckgo.com",
+            "https://duckduckgo.com/?q=duck",
         ])
     }
 
     @Test(.bug(id: 38)) func commandReturnOpensTheCompletedHostIncognito() throws {
-        let palette = palette()
-        let action = try #require(returnAction(palette, type("github.c", into: palette), [.command]))
+        let action = try #require(field(typing: "github.c").pressReturn([.command]))
 
         #expect(action.kind == .open)
         #expect(action.url == "https://github.com")
@@ -747,76 +800,71 @@ struct PaletteCompletionTests {
     /// Forced search uses what the user typed, never the completed host.
     @Test(.bug(id: 38), arguments: [PaletteReturnChord.shift, [.command, .shift]])
     func shiftReturnSearchesTheTypedText(_ chord: PaletteReturnChord) throws {
-        let palette = palette()
-        let action = try #require(returnAction(palette, type("github.", into: palette), chord))
+        let action = try #require(field(typing: "github.").pressReturn(chord))
 
         #expect(action.kind == .search)
         #expect(action.url == "https://www.startpage.com/sp/search?query=github.")
         #expect(action.incognito == chord.contains(.command))
     }
 
-    /// →, ⌘→, End, or a click drop the selection without editing: the whole
-    /// field text becomes the query, as if the user had typed it.
-    @Test(.bug(id: 38), arguments: [
-        NSRange(location: 10, length: 0),  // →, ⌘→, End: caret after the text
-        NSRange(location: 3, length: 0),   // a click inside the text
-    ])
-    func acceptingTheCompletionMakesTheFieldTextTheQuery(_ selection: NSRange) throws {
-        let palette = palette()
-        var input = type("git", into: palette)
+    /// Choosing the Search row under a completion searches the typed text.
+    @Test(.bug(id: 38)) func selectedSearchRowSearchesTheTypedText() throws {
+        var field = field(typing: "github.")
+        field.down()
 
-        let accepted = input.selectionDidChange(to: selection, in: "github.com")
-        #expect(accepted)
-        #expect(input.text == "github.com")
-        #expect(input.completionRange == nil)
-        let rows = palette.rows(for: input)
-        #expect(rows.map(\.kind) == palette.rows(for: "github.com").map(\.kind))
-        #expect(rows.first?.kind == .openURL)
-        let action = try #require(returnAction(palette, input))
-        #expect(action.url == "https://github.com")
-        #expect(action.hint == "⏎ Open")
+        let action = try #require(field.pressReturn())
+        #expect(action.kind == .search)
+        #expect(action.url == "https://www.startpage.com/sp/search?query=github.")
+        #expect(action.hint == "⏎ Search")
     }
 
-    /// Re-selecting the remainder, or a selection change while the text is
-    /// mid-edit (the field editor posts it before the text-change callback),
-    /// is not an acceptance.
-    @Test(.bug(id: 38)) func selectionThatStillShowsTheCompletionChangesNothing() {
+    /// →, ⌘→, End, or a click drop the selection without editing: the whole
+    /// field text becomes the query, as if the user had typed it.
+    @Test(.bug(id: 38), arguments: Acceptance.allCases)
+    func acceptingTheCompletionMakesTheFieldTextTheQuery(_ key: Acceptance) throws {
         let palette = palette()
-        var input = type("git", into: palette)
+        var field = field(typing: "git", in: palette)
+        field.down()
+        field.accept(by: key)
 
-        let reselected = input.selectionDidChange(to: NSRange(location: 3, length: 7), in: "github.com")
-        let midEdit = input.selectionDidChange(to: NSRange(location: 4, length: 0), in: "gitx")
-        #expect(!reselected)
-        #expect(!midEdit)
-        #expect(input.text == "github.com")
-        #expect(input.completionRange == NSRange(location: 3, length: 7))
+        #expect(field.input.text == "github.com")
+        #expect(field.input.completionRange == nil)
+        #expect(field.selected == 0)
+        #expect(field.rows.map(\.actionURL) == palette.rows(for: "github.com").map(\.actionURL))
+        #expect(field.rows.first?.kind == .openURL)
+        let action = try #require(field.pressReturn())
+        #expect(action.url == "https://github.com")
+        #expect(action.hint == "⏎ Open")
     }
 
     /// Backspace or Delete on the selected remainder leaves the typed text as
     /// the query, and type-ahead stays off until the next inserted character.
     @Test(.bug(id: 38)) func deletingTheRemainderLeavesTheTypedText() throws {
-        let palette = palette()
-        let deleted = palette.editing(type("github.", into: palette), to: "github.")
+        var field = field(typing: "github.")
+        field.backspace()
 
-        #expect(deleted.text == "github.")
-        #expect(deleted.completionRange == nil)
-        #expect(palette.rows(for: deleted).first?.kind == .search)
-        #expect(returnAction(palette, deleted)?.url == "https://www.startpage.com/sp/search?query=github.")
+        #expect(field.input.text == "github.")
+        #expect(field.input.completionRange == nil)
+        #expect(field.rows.first?.kind == .search)
+        #expect(field.pressReturn()?.url == "https://www.startpage.com/sp/search?query=github.")
 
-        let retyped = type("c", into: palette, after: deleted)
-        #expect(retyped.text == "github.com")
-        #expect(returnAction(palette, retyped)?.url == "https://github.com")
+        field.type("c")
+        #expect(field.input.text == "github.com")
+        #expect(field.pressReturn()?.url == "https://github.com")
     }
 
-    /// With no completion on screen, rows and Return are exactly today's.
+    /// With no completion on screen, rows and Return are exactly today's, and
+    /// the accepting keys change nothing.
     @Test(.bug(id: 38), arguments: ["quarterly review", "example.com/pricing", "news"])
     func withoutACompletionNothingChanges(_ typed: String) {
         let palette = palette()
-        let input = type(typed, into: palette)
+        var field = field(typing: typed, in: palette)
+        Acceptance.allCases.forEach { field.accept(by: $0) }
 
-        #expect(input.completionRange == nil)
-        #expect(palette.rows(for: input).map(\.actionURL) == palette.rows(for: typed).map(\.actionURL))
+        #expect(field.input.text == typed)
+        #expect(field.input.completionRange == nil)
+        #expect(field.rows.map(\.actionURL) == palette.rows(for: typed).map(\.actionURL))
         let today = palette.action(for: typed, selectedRow: palette.rows(for: typed).first, chord: .plain)
-        #expect(returnAction(palette, input) == today)
+        #expect(field.pressReturn() == today)
     }
 }

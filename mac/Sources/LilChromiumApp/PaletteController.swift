@@ -28,7 +28,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// so the selection changes it causes are not read as the user accepting it.
     /// verified: setting `stringValue` on an editing field posts
     /// didChangeSelection with the caret at the end — an apparent acceptance.
-    private var isShowingCompletion = false
+    private var isApplyingCompletion = false
 
     /// Anchor read fresh at each show() (a cheap file read, always fresh) and
     /// cached for the session so per-keystroke repositioning doesn't re-read the
@@ -380,7 +380,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
 
     private func actionHint(for row: PaletteRow) -> String? {
         model.action(
-            for: input,
+            for: input.typed,
             selectedRow: row,
             chord: currentReturnChord
         )?.hint
@@ -391,7 +391,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     private func activateSelection(chord: PaletteReturnChord = .plain) {
         guard !currentRows.isEmpty, selectedIndex < currentRows.count else { return }
         guard let action = model.action(
-            for: input,
+            for: input.typed,
             selectedRow: currentRows[selectedIndex],
             chord: chord
         ) else { return }
@@ -461,6 +461,13 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// "Enter select-alls" bug). `cancelOperation` returns false so Esc bubbles
     /// to the panel's cancelOperation → close().
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if input.handle(selector) {
+            // Drop the selected remainder so the field reads as accepted.
+            textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+            selectedIndex = 0
+            reload()
+            return true
+        }
         switch selector {
         case #selector(NSResponder.insertNewline(_:)):
             activateSelection(chord: returnChordOnCurrentEvent())
@@ -492,8 +499,8 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// remainder, so the next keystroke replaces it ("git" → "git[hub.com]").
     private func showCompletion(in field: PaletteSearchField) {
         guard let range = input.completionRange, let editor = field.fieldText else { return }
-        isShowingCompletion = true
-        defer { isShowingCompletion = false }
+        isApplyingCompletion = true
+        defer { isApplyingCompletion = false }
         field.stringValue = input.text
         editor.selectedRange = range
     }
@@ -506,7 +513,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// the edited text (≠ `input.text`, so a no-op), then controlTextDidChange;
     /// moveRight: and moveToEndOfLine: post it with the text unchanged.
     @objc private func fieldSelectionDidChange(_ note: Notification) {
-        guard !isShowingCompletion,
+        guard !isApplyingCompletion,
               let editor = inputField?.fieldText,
               (note.object as AnyObject?) === editor,
               input.selectionDidChange(to: editor.selectedRange, in: editor.string)

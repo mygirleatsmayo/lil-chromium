@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import LilShared
 
 /// A single selectable row in the palette.
@@ -64,14 +64,32 @@ struct PaletteInput {
     /// click), the user accepted it: the full text becomes the typed query.
     /// Returns whether the query changed. A selection change that arrives
     /// with different text belongs to an edit and is left to `editing`.
-    @discardableResult
     mutating func selectionDidChange(to range: NSRange, in fieldText: String) -> Bool {
         guard let completionRange, fieldText == text, range != completionRange else {
             return false
         }
-        typed = fieldText
-        completion = nil
+        acceptCompletion()
         return true
+    }
+
+    /// A key command reached the field before its editor runs it. End accepts
+    /// a displayed completion here because its command only scrolls; → and ⌘→
+    /// move the caret and accept through `selectionDidChange`. Returns whether
+    /// the query changed (the caller then consumes the command).
+    /// verified: StandardKeyBinding.dict plus a live field editor — → sends
+    /// moveRight: and ⌘→ moveToRightEndOfLine:, each then posting the caret at
+    /// the end; End sends scrollToEndOfDocument: and leaves the selection.
+    mutating func handle(_ command: Selector) -> Bool {
+        guard command == #selector(NSResponder.scrollToEndOfDocument(_:)), completion != nil else {
+            return false
+        }
+        acceptCompletion()
+        return true
+    }
+
+    private mutating func acceptCompletion() {
+        typed = text
+        completion = nil
     }
 }
 
@@ -156,16 +174,6 @@ final class PaletteModel {
             incognito: incognito,
             hint: "\(shortcut) \(verb)\(suffix)"
         )
-    }
-
-    /// Return for the current field state. Forced searches (⇧) always search
-    /// the typed text, never the completed host.
-    func action(
-        for input: PaletteInput,
-        selectedRow: PaletteRow?,
-        chord: PaletteReturnChord
-    ) -> PaletteAction? {
-        action(for: input.typed, selectedRow: selectedRow, chord: chord)
     }
 
     /// The user changed the field text (typing, deleting, pasting). Type-ahead
@@ -260,12 +268,14 @@ final class PaletteModel {
     }
 
     /// Rows for the field state. A displayed completion leads; below it sit the
-    /// typed text's own rows, minus any that open the same page.
+    /// typed text's own rows, minus the history row for the same destination.
+    /// Open and Search rows always stay.
     func rows(for input: PaletteInput) -> [PaletteRow] {
         let typedRows = rows(for: input.typed)
         guard let top = input.completion else { return typedRows }
-        let key = Ranking.normalizeURLKey(top.actionURL)
-        let rest = typedRows.filter { Ranking.normalizeURLKey($0.actionURL) != key }
+        let rest = typedRows.filter {
+            $0.kind != .history || !Ranking.isSameDestination($0.actionURL, top.actionURL)
+        }
         return Array(([top] + rest).prefix(maxRows))
     }
 
@@ -303,11 +313,7 @@ final class PaletteModel {
     /// The site row for `host`, as ranking would show its origin.
     private func originRow(host: String) -> PaletteRow? {
         guard let origin = index.origins.first(where: { $0.host == host }) else { return nil }
-        return historyRow(Ranking.RankedResult(
-            title: origin.displayTitle, url: origin.url, host: origin.host,
-            score: origin.frecency, isOrigin: true, frecency: origin.frecency,
-            matchesRegistrableLabel: false
-        ))
+        return historyRow(Ranking.RankedResult(origin: origin))
     }
 
     private func settingsRow() -> PaletteRow {
