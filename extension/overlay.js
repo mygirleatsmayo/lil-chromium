@@ -417,8 +417,8 @@
           white-space: nowrap;
           box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.05);
         }
-        .url .host { font-weight: 600; }
-        .url .path { opacity: 0.5; overflow: hidden; text-overflow: ellipsis; }
+        .url .strong { font-weight: 600; }
+        .url .muted { opacity: 0.5; overflow: hidden; text-overflow: ellipsis; }
 
         .hidden { display: none !important; }
 
@@ -749,54 +749,48 @@
       if (href === lastRenderedHref) return;
       lastRenderedHref = href;
       urlDisplay.innerHTML = "";
-      let hostText = href;
-      let pathText = "";
-      try {
-        const u = new URL(href);
-        if (u.protocol === "file:") {
-          renderFilePath(u.pathname);
-          return;
-        }
-        hostText = u.host || u.protocol;
-        pathText = (u.pathname || "") + (u.search || "") + (u.hash || "");
-        if (pathText === "/") pathText = "";
-      } catch (_) {
-        /* non-URL href — show raw */
-      }
-      const h = document.createElement("span");
-      h.className = "host";
-      h.textContent = hostText;
-      urlDisplay.appendChild(h);
-      if (pathText) {
-        const p = document.createElement("span");
-        p.className = "path";
-        p.textContent = pathText;
-        urlDisplay.appendChild(p);
+      for (const [role, text] of displaySegments(href)) {
+        if (!text) continue;
+        const span = document.createElement("span");
+        span.className = role;
+        span.textContent = text;
+        urlDisplay.appendChild(span);
       }
     }
 
-    // A file has no host, so its name takes the emphasized slot and the folder
-    // leads in the dimmed style. The folder comes first so a long one truncates
-    // with an ellipsis while the file name stays visible.
-    function renderFilePath(pathname) {
+    // The compact address as [class, text] spans: "strong" for the part that
+    // names the page, "muted" for the rest.
+    function displaySegments(href) {
+      let u;
+      try {
+        u = new URL(href);
+      } catch (_) {
+        return [["strong", href]]; // non-URL href — show raw
+      }
+      if (u.protocol === "file:") return fileSegments(u.pathname);
+      const rest = u.pathname + u.search + u.hash;
+      return [
+        ["strong", u.host || u.protocol],
+        ["muted", rest === "/" ? "" : rest],
+      ];
+    }
+
+    // A file has no host, so its name is strong and its folder leads, muted.
+    // The folder comes first so a long one truncates with an ellipsis while
+    // the file name stays visible. A folder URL shows whole, strong.
+    function fileSegments(pathname) {
       let readable = pathname;
       try {
         readable = decodeURIComponent(pathname);
       } catch (_) {
         /* malformed escape — show it encoded */
       }
-      // A folder URL ends in "/": show the whole path emphasized instead.
-      const cut = readable.endsWith("/") ? 0 : readable.lastIndexOf("/") + 1;
-      if (cut > 0) {
-        const dir = document.createElement("span");
-        dir.className = "path";
-        dir.textContent = readable.slice(0, cut);
-        urlDisplay.appendChild(dir);
-      }
-      const name = document.createElement("span");
-      name.className = "host";
-      name.textContent = readable.slice(cut);
-      urlDisplay.appendChild(name);
+      if (readable.endsWith("/")) return [["strong", readable]];
+      const cut = readable.lastIndexOf("/") + 1;
+      return [
+        ["muted", readable.slice(0, cut)],
+        ["strong", readable.slice(cut)],
+      ];
     }
 
     function focusAddress() {

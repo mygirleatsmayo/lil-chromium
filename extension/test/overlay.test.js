@@ -233,7 +233,7 @@ test("a local file shows its decoded path, and the full URL when focused", async
   const href = "file:///Users/luke/My%20Notes/index.html";
   const page = await mountOverlay({ url: href });
   assert.equal(page.urlDisplay.textContent, "/Users/luke/My Notes/index.html");
-  assert.equal(page.urlDisplay.querySelector(".host").textContent, "index.html");
+  assert.equal(page.urlDisplay.querySelector(".strong").textContent, "index.html");
 
   page.key(page.window, "l", { metaKey: true });
   assert.equal(page.addr.value, href);
