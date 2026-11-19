@@ -134,11 +134,6 @@ final class PaletteModel {
         )
     }
 
-    /// The host offered for inline type-ahead (see `results(for:)`).
-    func autocompleteHost(for query: String) -> String? {
-        results(for: query).autocompleteHost
-    }
-
     /// The rows to display for `query` (see `results(for:)`).
     func rows(for query: String) -> [PaletteRow] {
         results(for: query).rows

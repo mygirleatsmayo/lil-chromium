@@ -138,11 +138,8 @@ final class Relay {
             pendingLock.lock()
             pendingHistory[id] = conn
             pendingLock.unlock()
-            if !forwardToExtension(line, kind: "history-query") {
-                pendingLock.lock()
-                let waiting = pendingHistory.removeValue(forKey: id)
-                pendingLock.unlock()
-                if waiting != nil { replyDisconnected() }
+            if !forwardToExtension(line, kind: "history-query"), takePendingHistory(id) != nil {
+                replyDisconnected()
             }
 
         case MessageType.open.rawValue:
@@ -201,6 +198,14 @@ final class Relay {
         return ok
     }
 
+    /// Atomically claim the connection awaiting history-query `id`, so only
+    /// one path (its reply, or a failed forward) answers it.
+    private func takePendingHistory(_ id: String) -> SocketConnection? {
+        pendingLock.lock()
+        defer { pendingLock.unlock() }
+        return pendingHistory.removeValue(forKey: id)
+    }
+
     // MARK: - Extension -> relay
 
     private func handleExtensionMessage(_ data: Data) {
@@ -215,11 +220,7 @@ final class Relay {
                 hlog("extension: history-result without id dropped")
                 return
             }
-            pendingLock.lock()
-            let conn = pendingHistory.removeValue(forKey: id)
-            pendingLock.unlock()
-
-            guard let conn = conn else {
+            guard let conn = takePendingHistory(id) else {
                 hlog("extension: history-result for unknown id \(id) dropped")
                 return
             }

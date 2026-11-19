@@ -19,7 +19,8 @@ enum RelayClient {
         case connectFailed
         case connectTimeout
         case writeFailed
-        case readTimeout
+        /// No reply line arrived: EOF, a read timeout, or a line over the cap.
+        case noReplyLine
         case decodeFailed
         /// The relay answered with a failure (`history-result.error`).
         case reportedFailure
@@ -242,7 +243,7 @@ enum RelayClient {
                 if !writeAll(fd, line) { throw RelayError.writeFailed }
                 guard let reply = readLine(fd),
                       let pong = try? LilCodec.decodeLine(PongMessage.self, from: reply) else {
-                    throw RelayError.readTimeout
+                    throw RelayError.noReplyLine
                 }
                 setLastServed(target.slug)
                 return pong.extensionConnected
@@ -283,7 +284,7 @@ enum RelayClient {
         var tv = timeval(tv_sec: 15, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         if !writeAll(fd, try LilCodec.encodeLine(message)) { throw RelayError.writeFailed }
-        guard let reply = readLine(fd, maxBytes: LilCodec.maxMessageBytes) else { throw RelayError.readTimeout }
+        guard let reply = readLine(fd, maxBytes: LilCodec.maxMessageBytes) else { throw RelayError.noReplyLine }
         guard let result = try? LilCodec.decodeLine(HistoryResultMessage.self, from: reply) else {
             throw RelayError.decodeFailed
         }

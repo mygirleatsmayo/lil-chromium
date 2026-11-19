@@ -96,8 +96,8 @@ struct PaletteRowsTests {
     @Test func autocompleteOffersOnlyAPrefixedHost() throws {
         let model = try makeModel()
 
-        #expect(model.autocompleteHost(for: "git") == "github.com")
-        #expect(model.autocompleteHost(for: "quarterly budget review") == nil)
+        #expect(model.results(for: "git").autocompleteHost == "github.com")
+        #expect(model.results(for: "quarterly budget review").autocompleteHost == nil)
     }
 }
 
@@ -323,7 +323,7 @@ struct PaletteOrderingTests {
         #expect(rows[0].actionURL == "https://github.com")
         #expect(rows[2].actionURL == "https://hubspot.com")
         #expect(rows[0].host == "github.com")
-        #expect(palette.autocompleteHost(for: "hub") == rows[0].host)
+        #expect(palette.results(for: "hub").autocompleteHost == rows[0].host)
     }
 
     /// SP2: seven ineligible host-prefix rows would fill the old rank budget

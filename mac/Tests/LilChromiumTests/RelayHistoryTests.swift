@@ -56,7 +56,7 @@ struct RelayHistoryTests {
         }
         server.start()
 
-        #expect(throws: (any Error).self) {
+        #expect(throws: RelayClient.RelayError.reportedFailure) {
             try RelayClient.historyQuery(.historyWindow(id: "q-2"), socketPath: path)
         }
     }
