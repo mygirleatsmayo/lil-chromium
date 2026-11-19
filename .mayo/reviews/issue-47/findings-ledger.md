@@ -21,8 +21,24 @@ Initial reviewed point: `438f7db`
 - S2 residual · The harness regex `^([a-z]+):\/\/(\*?)\/\*$` still accepts forms the manifest doesn't use (`ftp://*/*`) · **fix** (S2 not yet met): accept exactly the forms the manifest uses (`http://*/*`, `https://*/*`, `file:///*`); anything else throws.
 - N1 · `cs.matches.some(...)` stops at the first match, so an unsupported pattern after it never throws · **fix**: every pattern in the entry is checked, so an unsupported one throws regardless of order.
 
+## Final review 1
+
+### Standards
+
+- N1 residual · With file access off, `overlayInjects` returns `false` before checking the patterns, so an unsupported pattern after `file:///*` passes silently · **fix** (N1 not yet met): check every pattern before the file-access test.
+- S5 · The dirty-form test waits 600 ms on a real timer beside the harness's existing `clock: true` / `clock.advance()` (global rules, YAGNI: reuse what exists) · **fix**: drive the debounce with the harness clock.
+- S6 · Comment "so its page is never lost" overstates the hand-off guard; under P2's settled terms the launch can still fail after posting · **fix**: say the lil stays open when posting fails.
+- S7 · `isLaunchable` checks scheme prefixes (possible Mysterious Name) · **won't-fix**: the name states the rule (the host launches only these URLs) and its doc comment names the schemes; a mechanism name like `hasAllowedURLPrefix` would say less.
+
+### Spec
+
+- P4 · "A lil showing a `file://` page has the full hoverbar": the worker registers a new lil only after refocusing it; a page that asks `isEphemeral` before registration gets `false`, and the overlay stops for good. Local files load fast enough to hit this. The ordering predates #47 · **fix** · Settled: a lil's page always gets the hoverbar, however fast it loads; the worker must answer `isEphemeral` truthfully for a lil it is still creating. Fix the root cause in the worker's lil creation, not with an overlay retry.
+- P1 · still **needs adjudication (Lucas)**.
+- P3 · still Lucas's live check.
+
 ## Review status
 
 - Full review 1: 4 Standards (all fix), 3 Spec (P2 fix, P1 pending Lucas, P3 live check).
 - Remediation 1 (`e85a1d5...2c9a7a9`): S1, S3, S4 resolved; P2 resolved under the amended interpretation; S2 unresolved (fix); 1 new defect (N1, fix).
 - Remediation 2 (`2c9a7a9...32e9d79`): S2 residual and N1 resolved, no new defects. P1 pending Lucas; P3 live check.
+- Final review 1 (`bf45a2f...c846091`): Standards N1 residual, S5, S6 fix; S7 won't-fix. Spec P4 fix; P1 pending Lucas; P3 live check.
