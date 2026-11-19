@@ -27,9 +27,14 @@ Initial reviewed point: `07ffe5a`
 ## Remediation 1
 
 - S2 residual · `hostWhitelisted(parsed.hostname, sleep.whitelist)` drops the earlier `.toLowerCase()`; non-special schemes keep the hostname's case · **fix** (S2 not yet met): both guards keep their previous hostname normalization.
-- N1 · A guard abort after the nap is staged leaves the registry entry marked asleep with the old URL; the lil's next navigation is not recorded, and a browser restart reopens the old page · **fix** · Settled: an aborted nap leaves the lil's registry entry as it was before the nap was staged, so later navigation records normally and a restart reopens the page the lil actually shows. Clarified after the fix (implementer's question): "as it was before" covers the nap state; the navigation that caused the abort is recorded like any navigation, including its `lastInteraction` time.
+- N1 · A guard abort after the nap is staged leaves the registry entry marked asleep with the old URL; the lil's next navigation is not recorded, and a browser restart reopens the old page · **fix** · Settled: an aborted nap leaves the lil's registry entry as it was before the nap was staged, so later navigation records normally and a restart reopens the page the lil actually shows. Clarified after the fix (implementer's question): "as it was before" covers the nap state; the navigation that caused the abort is recorded like any navigation. Superseded by Remediation 2 below.
+
+## Remediation 2
+
+- N1 (still unresolved) and N2 (new) · The rollback now writes `pending.url` from a `tabs.get` snapshot. Racing the navigation handler, it can be overwritten by the old URL (N1), or itself overwrite a newer navigation the handler already saved (N2: registry keeps `/` while the lil shows `/next`). The test holds a live reference to the entry (`const before = env.registry()[…]`), so it can miss changes · **fix** · Settled: root cause first. While a nap is staged, the navigation handler reads any user navigation as a finished wake (`clearNapState` resets `url` to `originalUrl`); that misreading is the defect, and patching the rollback around it races. Requirements: (1) a user navigation while a nap is staged is recorded by the same path, with the same fields, as an awake lil's navigation; (2) the rollback only removes the nap fields and the capture, and never writes navigation fields from a snapshot; (3) the tests compare against deep copies and cover both orders (navigation before and after the rollback). Restart reopens the page the lil shows in every order.
 
 ## Review status
 
 - Full review 1: 4 Standards (S1, S2, S4 fix; S3 won't-fix), 4 Spec (P1, P3 fix; P2, P4 won't-fix), 1 caller item (fix).
 - Remediation 1 (`ffa8ec5...111c2b7`): S1, S4, P1, P3, C1 resolved; S2 unresolved (fix); 1 new defect (N1, fix). C2, C3 accepted.
+- Remediation 2 (`111c2b7...d11c5c3`): S2 residual resolved; N1 unresolved and N2 new, merged into one root-cause fix.
