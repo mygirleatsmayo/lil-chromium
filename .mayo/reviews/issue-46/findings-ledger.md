@@ -21,6 +21,15 @@ Initial reviewed point: `07ffe5a`
 
 - C1 · "The guard is independent: it works with the audio guard, form guard, and whitelist each on or off": sweep tests run the local guard only with the other guards off (raised by the implementer) · **fix**: cover the local guard skipping with each other guard on.
 
+- C2 · The whitelist check moved into `sleepLil` with the local guard, so it also checks the page actually napped (raised by the implementer) · **accepted**: it follows from S2's single parse and fixes the same race for the whitelist.
+- C3 · A lil whose URL cannot be parsed is now skipped by the automatic sweep; before, it was napped (raised by the implementer) · **accepted** · Settled: when the guards cannot read the page, the sweep keeps the lil awake.
+
+## Remediation 1
+
+- S2 residual · `hostWhitelisted(parsed.hostname, sleep.whitelist)` drops the earlier `.toLowerCase()`; non-special schemes keep the hostname's case · **fix** (S2 not yet met): both guards keep their previous hostname normalization.
+- N1 · A guard abort after the nap is staged leaves the registry entry marked asleep with the old URL; the lil's next navigation is not recorded, and a browser restart reopens the old page · **fix** · Settled: an aborted nap leaves the lil's registry entry as it was before the nap was staged, so later navigation records normally and a restart reopens the page the lil actually shows.
+
 ## Review status
 
 - Full review 1: 4 Standards (S1, S2, S4 fix; S3 won't-fix), 4 Spec (P1, P3 fix; P2, P4 won't-fix), 1 caller item (fix).
+- Remediation 1 (`ffa8ec5...111c2b7`): S1, S4, P1, P3, C1 resolved; S2 unresolved (fix); 1 new defect (N1, fix). C2, C3 accepted.
