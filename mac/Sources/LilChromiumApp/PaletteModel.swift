@@ -35,14 +35,14 @@ struct PaletteAction: Equatable {
     let hint: String
 }
 
-/// The only modifier keys that participate in a palette Return chord.
-/// AppKit lock state and key-origin metadata never cross this boundary.
 /// One query's rows and inline type-ahead host, from a single ranking pass.
 struct PaletteResults {
     let rows: [PaletteRow]
     let autocompleteHost: String?
 }
 
+/// The only modifier keys that participate in a palette Return chord.
+/// AppKit lock state and key-origin metadata never cross this boundary.
 struct PaletteReturnChord: OptionSet, Equatable, Sendable {
     let rawValue: UInt8
 
