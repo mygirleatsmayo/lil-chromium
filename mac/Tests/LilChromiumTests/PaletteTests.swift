@@ -164,19 +164,21 @@ struct PaletteSettingsAccessTests {
     }
 }
 
-/// Row ORDER around the Search action (issue #13).
-///
-/// The rule under test: for non-empty, non-URL text, only a contiguous literal
-/// match inside the distinctive label of a history entry's registrable domain
-/// may sit above Search. Public suffixes (e.g. `com`) never promote.
-/// Every assertion names rows and action URLs in order — never a score.
-struct PaletteOrderingTests {
+/// Shared history fixtures for palette suites that build their own history.
+/// A suite adds standing pages through `baseHistory`.
+protocol PaletteHistoryFixture {
+    /// Pages present in every palette the suite builds.
+    var baseHistory: [HistoryItem] { get }
+}
+
+extension PaletteHistoryFixture {
+    var baseHistory: [HistoryItem] { [] }
 
     /// A fixed clock; every fixture visit is expressed as an age against it.
-    private let nowMs: Double = 1_700_000_000_000
+    var nowMs: Double { 1_700_000_000_000 }
 
     /// One history entry. Defaults describe an ordinary, recently visited page.
-    private func visit(
+    func visit(
         _ url: String,
         title: String = "",
         visits: Int = 5,
@@ -192,17 +194,27 @@ struct PaletteOrderingTests {
         )
     }
 
-    /// A palette model over exactly `items`, searching with the Startpage default.
-    private func model(_ items: HistoryItem...) -> PaletteModel {
+    /// A palette model over `items` plus `baseHistory`, searching with the
+    /// Startpage default.
+    func model(_ items: HistoryItem...) -> PaletteModel {
         model(items)
     }
 
-    private func model(_ items: [HistoryItem]) -> PaletteModel {
+    func model(_ items: [HistoryItem]) -> PaletteModel {
         let model = PaletteModel()
-        model.setIndex(Ranking.buildIndex(items: items, nowMs: nowMs))
+        model.setIndex(Ranking.buildIndex(items: items + baseHistory, nowMs: nowMs))
         model.searchEngine = .defaults
         return model
     }
+}
+
+/// Row ORDER around the Search action (issue #13).
+///
+/// The rule under test: for non-empty, non-URL text, only a contiguous literal
+/// match inside the distinctive label of a history entry's registrable domain
+/// may sit above Search. Public suffixes (e.g. `com`) never promote.
+/// Every assertion names rows and action URLs in order — never a score.
+struct PaletteOrderingTests: PaletteHistoryFixture {
 
     // MARK: - Above Search: literal registrable-domain matches
 
@@ -424,23 +436,12 @@ struct PaletteOrderingTests {
 
 /// The any-order matching contract for multi-word queries (issue #42). Every
 /// assertion names rows in order — never a score.
-struct PaletteAnyOrderTests {
+struct PaletteAnyOrderTests: PaletteHistoryFixture {
 
-    private let nowMs: Double = 1_700_000_000_000
-
-    private func visit(_ url: String, title: String, visits: Int = 5) -> HistoryItem {
-        HistoryItem(url: url, title: title, lastVisitTime: nowMs - 86_400_000,
-                    visitCount: visits, typedCount: 0)
-    }
-
-    /// A palette over `items` plus example.com's root page, so the site's origin
-    /// row is titled "Example" and never matches the queries under test.
-    private func model(_ items: [HistoryItem]) -> PaletteModel {
-        let model = PaletteModel()
-        let root = visit("https://example.com/", title: "Example", visits: 50)
-        model.setIndex(Ranking.buildIndex(items: items + [root], nowMs: nowMs))
-        model.searchEngine = .defaults
-        return model
+    /// example.com's root page, so the site's origin row is titled "Example"
+    /// and never matches the queries under test.
+    var baseHistory: [HistoryItem] {
+        [visit("https://example.com/", title: "Example", visits: 50)]
     }
 
     private func historyURLs(_ rows: [PaletteRow]) -> [String] {
@@ -462,6 +463,16 @@ struct PaletteAnyOrderTests {
 
         #expect(historyURLs(palette.rows(for: "fix gizmo")) == expected)
         #expect(historyURLs(palette.rows(for: "  fix   gizmo fix  ")) == expected)
+    }
+
+    /// The whole-query fuzzy fallback sees the normalized query too.
+    @Test("Extra spaces and repeats don't change a fuzzy-only match", .bug(id: 42))
+    func normalizationReachesTheFuzzyFallback() {
+        let palette = model([visit("https://example.com/1", title: "SwiftUI Basics")])
+        let expected = ["https://example.com/1"]
+
+        #expect(historyURLs(palette.rows(for: "sui bsc")) == expected)
+        #expect(historyURLs(palette.rows(for: "  sui   bsc sui ")) == expected)
     }
 
     /// A term that only matches as a scattered subsequence disqualifies the page.
