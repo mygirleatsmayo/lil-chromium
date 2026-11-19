@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { mountOverlay, OVERLAY_PATH } from "./overlay-harness.js";
+import { mountOverlay, OVERLAY_PATH, flush } from "./overlay-harness.js";
 
 test("boots the production overlay, not a copy", async () => {
   const page = await mountOverlay();
@@ -207,4 +207,40 @@ test("omnibox and menu rows use the same icon system as the bar", async () => {
   assert.ok(checked, "the menu marks a current choice");
   assertIconContract(checked.querySelector("svg.check"), "check");
   assert.doesNotMatch(menu.textContent, /[✓▾]/);
+});
+
+test("a lil on a local dev server gets the hoverbar", async () => {
+  const page = await mountOverlay({ url: "http://localhost:5173/app" });
+  assert.ok(page.bar, "localhost pages carry the hoverbar");
+  assert.equal(page.urlDisplay.textContent, "localhost:5173/app");
+});
+
+test("a lil showing a local file gets the hoverbar and reports activity", async () => {
+  const page = await mountOverlay({ url: "file:///Users/luke/Notes/index.html" });
+  assert.ok(page.bar, "file pages carry the hoverbar");
+  assert.ok(page.chrome.messages.some((m) => m.action === "interaction"));
+
+  const field = page.document.createElement("textarea");
+  page.document.body.appendChild(field);
+  field.value = "draft";
+  field.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  await flush();
+  assert.ok(page.chrome.messages.some((m) => m.action === "formDirty" && m.dirty === true));
+});
+
+test("a local file shows its decoded path, and the full URL when focused", async () => {
+  const href = "file:///Users/luke/My%20Notes/index.html";
+  const page = await mountOverlay({ url: href });
+  assert.equal(page.urlDisplay.textContent, "/Users/luke/My Notes/index.html");
+  assert.equal(page.urlDisplay.querySelector(".host").textContent, "index.html");
+
+  page.key(page.window, "l", { metaKey: true });
+  assert.equal(page.addr.value, href);
+});
+
+test("a local file lil gets no hoverbar when the browser denies file access", async () => {
+  const page = await mountOverlay({ url: "file:///Users/luke/index.html", fileAccess: false });
+  assert.equal(page.host, null);
+  assert.deepEqual(page.chrome.messages, []);
 });

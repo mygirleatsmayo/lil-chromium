@@ -753,6 +753,10 @@
       let pathText = "";
       try {
         const u = new URL(href);
+        if (u.protocol === "file:") {
+          renderFilePath(u.pathname);
+          return;
+        }
         hostText = u.host || u.protocol;
         pathText = (u.pathname || "") + (u.search || "") + (u.hash || "");
         if (pathText === "/") pathText = "";
@@ -769,6 +773,30 @@
         p.textContent = pathText;
         urlDisplay.appendChild(p);
       }
+    }
+
+    // A file has no host, so its name takes the emphasized slot and the folder
+    // leads in the dimmed style. The folder comes first so a long one truncates
+    // with an ellipsis while the file name stays visible.
+    function renderFilePath(pathname) {
+      let readable = pathname;
+      try {
+        readable = decodeURIComponent(pathname);
+      } catch (_) {
+        /* malformed escape — show it encoded */
+      }
+      // A folder URL ends in "/": show the whole path emphasized instead.
+      const cut = readable.endsWith("/") ? 0 : readable.lastIndexOf("/") + 1;
+      if (cut > 0) {
+        const dir = document.createElement("span");
+        dir.className = "path";
+        dir.textContent = readable.slice(0, cut);
+        urlDisplay.appendChild(dir);
+      }
+      const name = document.createElement("span");
+      name.className = "host";
+      name.textContent = readable.slice(cut);
+      urlDisplay.appendChild(name);
     }
 
     function focusAddress() {

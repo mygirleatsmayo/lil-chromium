@@ -284,6 +284,40 @@ function createChrome(options = {}) {
 }
 
 /**
+ * Chromium match-pattern test, reduced to the forms a manifest can use:
+ * `<all_urls>`, a `*` scheme (http/https only), `*` / `*.suffix` / exact hosts,
+ * and `*` path globs. `file:///*` has an empty host.
+ */
+function matchesPattern(pattern, href) {
+  const url = new URL(href);
+  const scheme = url.protocol.slice(0, -1);
+  if (pattern === "<all_urls>") return ["http", "https", "file", "ws", "wss", "ftp"].includes(scheme);
+  const m = /^(\*|[a-z]+):\/\/([^/]*)(\/.*)$/.exec(pattern);
+  if (!m) return false;
+  const [, pScheme, pHost, pPath] = m;
+  if (pScheme === "*" ? !["http", "https"].includes(scheme) : pScheme !== scheme) return false;
+  const host = url.hostname;
+  const hostOk =
+    pHost === "*" || pHost === host || (pHost.startsWith("*.") && (host === pHost.slice(2) || host.endsWith(pHost.slice(1))));
+  if (!hostOk) return false;
+  const glob = new RegExp("^" + pPath.split("*").map((x) => x.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$");
+  return glob.test(url.pathname + url.search);
+}
+
+/**
+ * Would the browser inject overlay.js into this page? Reads the real manifest,
+ * and models the per-extension "Allow access to file URLs" toggle: when it is
+ * off, the browser skips file:// pages even if the manifest matches them.
+ */
+export function overlayInjects(href, { fileAccess = true } = {}) {
+  if (!fileAccess && href.startsWith("file:")) return false;
+  const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
+  return manifest.content_scripts.some(
+    (cs) => cs.js.includes("overlay.js") && cs.matches.some((p) => matchesPattern(p, href))
+  );
+}
+
+/**
  * Mount the production overlay in a fresh page. Returns the closed shadow
  * via a harness-only attachShadow stash — overlay.js still requests closed.
  */
@@ -293,9 +327,10 @@ export async function mountOverlay(options = {}) {
   const window = parseHTML("<!DOCTYPE html><html><head></head><body></body></html>");
   const document = window.document;
   const href = options.url || "https://example.com/docs";
+  const u = new URL(href);
   Object.defineProperty(window, "location", {
     configurable: true,
-    value: { href, protocol: "https:", host: "example.com", pathname: "/docs", search: "", hash: "" },
+    value: { href, protocol: u.protocol, host: u.host, pathname: u.pathname, search: u.search, hash: u.hash },
   });
   window.matchMedia = () => ({ matches: false, addEventListener() {}, media: "" });
   window.KeyboardEvent = KeyboardEvent;
@@ -361,7 +396,8 @@ export async function mountOverlay(options = {}) {
   };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
-  vm.runInContext(fs.readFileSync(OVERLAY_PATH, "utf8"), sandbox, { filename: OVERLAY_PATH });
+  // The browser decides injection from the manifest; a page it skips gets no overlay at all.
+  if (overlayInjects(href, options)) vm.runInContext(fs.readFileSync(OVERLAY_PATH, "utf8"), sandbox, { filename: OVERLAY_PATH });
   await flush();
 
   const host = [...document.documentElement.children].find((el) => shadows.has(el)) || null;
