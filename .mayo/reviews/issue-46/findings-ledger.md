@@ -39,9 +39,14 @@ Initial reviewed point: `07ffe5a`
 - N3 (new) · `serializeRegistry(() => recordNavigation(changeInfo, tab))` holds the queue through `clearNapState`'s capture deletion; a stalled deletion in one lil keeps another lil's navigation from being recorded · **fix** · Settled: the queue covers only the registry's read, change and write. Other I/O (captures, tab queries) runs outside it, and each change decides from the registry it reads inside the queue, not from an earlier read.
 - Tests for both: a bounds change racing the rollback leaves no nap state; a stalled capture deletion in one lil does not delay another lil's navigation record.
 
+## Remediation 4
+
+- N4 (new) · While a nap-document check (`napDocumentMayRemain`) is pending outside the queue, a second navigation of the same lil also sees `slept` and is skipped; the cleanup then writes `originalUrl`, so the registry and a restart reopen `/` while the lil shows `/next` (`518922d` saved `/next`) · **fix** · Settled (amends N3): a lil's own navigations are handled in arrival order, so its registry url ends as the last URL it reported; a navigation that arrives while that lil's nap check or cleanup is pending is recorded after it, never skipped. The ordering is per lil: N3 still holds, and one lil's pending check or capture deletion never delays another lil's record. Test: stall the first nap-document check, navigate to `/next`; the registry ends at `/next` and a restart reopens it.
+
 ## Review status
 
 - Full review 1: 4 Standards (S1, S2, S4 fix; S3 won't-fix), 4 Spec (P1, P3 fix; P2, P4 won't-fix), 1 caller item (fix).
 - Remediation 1 (`ffa8ec5...111c2b7`): S1, S4, P1, P3, C1 resolved; S2 unresolved (fix); 1 new defect (N1, fix). C2, C3 accepted.
 - Remediation 2 (`111c2b7...d11c5c3`): S2 residual resolved; N1 unresolved and N2 new, merged into one root-cause fix.
 - Remediation 3 (`d11c5c3...518922d`): N2 resolved; earlier items still resolved; N1 unresolved (root cause widened to every registry writer); 1 new defect (N3, fix).
+- Remediation 4 (`518922d...4b5f231`): N1, N3 resolved; earlier items still resolved; 1 new defect (N4, fix).
