@@ -332,6 +332,8 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     }
 
     private func clickRow(_ idx: Int) {
+        // A stale index must open nothing, not the previously selected row.
+        guard currentRows.indices.contains(idx) else { return }
         selection.click(idx)
         refreshHighlights()
         activateSelection()

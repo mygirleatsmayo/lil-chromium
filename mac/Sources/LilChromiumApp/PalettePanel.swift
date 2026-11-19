@@ -12,6 +12,7 @@ import AppKit
 ///
 /// It CAN become key (so the search field is typeable) without activating the
 /// app, via `.nonactivatingPanel` + `canBecomeKey = true` + orderFrontRegardless.
+@MainActor
 final class PalettePanel: NSPanel {
 
     /// The controller owns close(); we forward Esc to it.

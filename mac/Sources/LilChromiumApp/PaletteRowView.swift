@@ -49,12 +49,17 @@ final class PaletteResultsStackView: NSStackView {
     override func mouseMoved(with event: NSEvent) { onPointerChange?() }
     override func mouseExited(with event: NSEvent) { onPointerChange?() }
 
-    /// The index of the row under `windowPoint` (window coordinates), or nil.
+    /// The index of the row a click at `windowPoint` (window coordinates)
+    /// would hit, or nil. Uses the window's own hit test, as a click does, so
+    /// shared row edges and the list's bottom edge resolve the same way.
     /// Lays out first so freshly rebuilt rows answer with their real frames.
     func rowIndex(atWindowPoint windowPoint: NSPoint) -> Int? {
+        guard let root = window?.contentView else { return nil }
         layoutSubtreeIfNeeded()
-        let point = convert(windowPoint, from: nil)
-        return arrangedSubviews.firstIndex { $0.frame.contains(point) }
+        // hitTest takes the point in the receiver's superview's coordinates.
+        var view = root.hitTest(root.superview?.convert(windowPoint, from: nil) ?? windowPoint)
+        while let v = view, v.superview !== self { view = v.superview }
+        return view.flatMap { arrangedSubviews.firstIndex(of: $0) }
     }
 }
 
