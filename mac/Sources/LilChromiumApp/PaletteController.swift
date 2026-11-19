@@ -36,6 +36,10 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     private var pendingRank: DispatchWorkItem?
     private var rankGeneration = 0
 
+    /// Bumped by each history refresh; only the newest may install its
+    /// snapshot, so an older refresh that lands last never replaces it.
+    private var refreshGeneration = 0
+
     /// Anchor read fresh at each show() (a cheap file read, always fresh) and
     /// cached for the session so per-keystroke repositioning doesn't re-read the
     /// config file. Refreshed on the next show().
@@ -295,6 +299,8 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     // MARK: - Data flow
 
     private func refreshHistory() {
+        refreshGeneration += 1
+        let generation = refreshGeneration
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             // A failed or timed-out refresh keeps the snapshot the palette has.
             guard let items = try? RelayClient.historyWindow() else { return }
@@ -302,7 +308,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
             // window is the expensive part; do it once here, not per keystroke).
             let index = Ranking.buildIndex(items: items)
             DispatchQueue.main.async {
-                guard let self = self else { return }
+                guard let self, generation == self.refreshGeneration else { return }
                 self.model.setIndex(index)
                 // Re-render with whatever is currently typed.
                 self.reload(query: self.committedQuery)
