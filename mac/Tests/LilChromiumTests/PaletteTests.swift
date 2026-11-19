@@ -439,18 +439,24 @@ struct PaletteActionTests {
     struct ForcedSearchCase: Sendable, CustomTestStringConvertible {
         let name: String
         let hint: String
+        let incognito: Bool
         let resolve: @Sendable (PaletteModel, String, PaletteRow) -> PaletteAction?
         var testDescription: String { name }
     }
 
     @Test(
-        "Shift-Return and Tab force search for the typed text",
+        "Shift-Return, Command-Shift-Return, and Tab force search for the typed text",
         .bug(id: 14), .bug(id: 44),
         arguments: [
-            ForcedSearchCase(name: "Shift-Return", hint: "⇧⏎ Search") {
+            ForcedSearchCase(name: "Shift-Return", hint: "⇧⏎ Search", incognito: false) {
                 $0.action(for: $1, selectedRow: $2, chord: [.shift])
             },
-            ForcedSearchCase(name: "Tab", hint: "Search ⇥") { model, query, _ in
+            ForcedSearchCase(
+                name: "Command-Shift-Return", hint: "⇧⌘⏎ Search Incognito", incognito: true
+            ) {
+                $0.action(for: $1, selectedRow: $2, chord: [.command, .shift])
+            },
+            ForcedSearchCase(name: "Tab", hint: "Search ⇥", incognito: false) { model, query, _ in
                 model.tabAction(for: query)
             },
         ]
@@ -468,7 +474,7 @@ struct PaletteActionTests {
 
         #expect(action.kind == .search)
         #expect(action.url == "https://kagi.com/search?q=privacy%20news")
-        #expect(action.incognito == false)
+        #expect(action.incognito == shortcut.incognito)
         #expect(action.hint == shortcut.hint)
     }
 
@@ -493,28 +499,6 @@ struct PaletteActionTests {
         #expect(action.url == "https://example.com/private")
         #expect(action.incognito == true)
         #expect(action.hint == "⌘⏎ Open Incognito")
-    }
-
-    @Test("Command-Shift-Return forces incognito search", .bug(id: 14))
-    func commandShiftReturnForcesIncognitoSearch() throws {
-        let model = PaletteModel()
-        model.searchEngine = SearchEngineConfig(
-            name: "Kagi",
-            template: "https://kagi.com/search?q=%s",
-            provider: "kagi"
-        )
-        let selectedRow = try #require(model.rows(for: "example.com/private").first)
-
-        let action = try #require(model.action(
-            for: "secret cats",
-            selectedRow: selectedRow,
-            chord: [.command, .shift]
-        ))
-
-        #expect(action.kind == .search)
-        #expect(action.url == "https://kagi.com/search?q=secret%20cats")
-        #expect(action.incognito == true)
-        #expect(action.hint == "⇧⌘⏎ Search Incognito")
     }
 
     @Test("Return uses the current selection", .bug(id: 14))
