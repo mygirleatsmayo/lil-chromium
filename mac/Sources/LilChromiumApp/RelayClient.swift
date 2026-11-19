@@ -241,9 +241,9 @@ enum RelayClient {
                 let id = UUID().uuidString
                 let line = try LilCodec.encodeLine(PingMessage(id: id))
                 if !writeAll(fd, line) { throw RelayError.writeFailed }
-                guard let reply = readLine(fd),
-                      let pong = try? LilCodec.decodeLine(PongMessage.self, from: reply) else {
-                    throw RelayError.noReplyLine
+                guard let reply = readLine(fd) else { throw RelayError.noReplyLine }
+                guard let pong = try? LilCodec.decodeLine(PongMessage.self, from: reply) else {
+                    throw RelayError.decodeFailed
                 }
                 setLastServed(target.slug)
                 return pong.extensionConnected
