@@ -16,3 +16,4 @@ Initial reviewed point: `fe8fa9e`
 ## Review status
 
 - Full review 1: 3 Standards (S2, S3 fix; S1 integration), 0 Spec.
+- Remediation 1 (`fe8fa9e...1590a93`): S2, S3 resolved, no new defects.
