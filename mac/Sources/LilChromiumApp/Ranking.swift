@@ -462,11 +462,13 @@ enum Ranking {
     }
 
     /// Whether two URLs open the same page: `normalizeURLKey` equivalence
-    /// (case, `www.`, trailing slash) with the query kept, since a different
-    /// query is a different page.
+    /// (case, scheme, `www.`, trailing slash) with the port and query kept,
+    /// since either one names a different page.
     static func isSameDestination(_ a: String, _ b: String) -> Bool {
-        normalizeURLKey(a) == normalizeURLKey(b)
-            && URLComponents(string: a)?.query == URLComponents(string: b)?.query
+        let (ca, cb) = (URLComponents(string: a), URLComponents(string: b))
+        return normalizeURLKey(a) == normalizeURLKey(b)
+            && ca?.port == cb?.port
+            && ca?.query == cb?.query
     }
 
     /// "github.com" → "Github", "news.ycombinator.com" → "News". Best-effort

@@ -707,6 +707,9 @@ struct PaletteCompletionTests {
 
         mutating func down() { selected = (selected + 1) % rows.count }
 
+        /// A mouse selection: the field reports only the new range.
+        mutating func drag(selecting range: NSRange) { select(range) }
+
         func pressReturn(_ chord: PaletteReturnChord = .plain) -> PaletteAction? {
             palette.action(for: input.typed, selectedRow: rows[selected], chord: chord)
         }
@@ -835,6 +838,35 @@ struct PaletteCompletionTests {
         let action = try #require(field.pressReturn())
         #expect(action.url == "https://github.com")
         #expect(action.hint == "⏎ Open")
+    }
+
+    /// A selection that still covers exactly the remainder (re-selected by
+    /// mouse, or posted mid-edit with the new text) leaves the completion
+    /// pending and the selected row where it was.
+    @Test(.bug(id: 38)) func selectionStillCoveringTheCompletionChangesNothing() throws {
+        var field = field(typing: "git")
+        field.down()
+        field.drag(selecting: NSRange(location: 3, length: 7))
+
+        #expect(field.input.text == "github.com")
+        #expect(field.input.completionRange == NSRange(location: 3, length: 7))
+        #expect(field.selected == 1)
+
+        field.type("h")
+        #expect(field.input.completionRange == NSRange(location: 4, length: 6))
+        #expect(field.pressReturn()?.url == "https://github.com")
+    }
+
+    /// Only the dedupe key's trivial differences make two URLs one page; a
+    /// different port or query is a different destination.
+    @Test(.bug(id: 38), arguments: [
+        ("https://example.com", "https://www.Example.com/", true),
+        ("https://example.com", "http://example.com", true),
+        ("https://example.com", "https://example.com:8443/", false),
+        ("https://example.com", "https://example.com/?tab=1", false),
+    ])
+    func sameDestinationIgnoresOnlyTrivialDifferences(_ a: String, _ b: String, _ same: Bool) {
+        #expect(Ranking.isSameDestination(a, b) == same)
     }
 
     /// Backspace or Delete on the selected remainder leaves the typed text as
