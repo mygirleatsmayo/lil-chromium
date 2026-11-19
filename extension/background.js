@@ -872,6 +872,12 @@ async function restorePriorContext(priorContext, at) {
   await focusWindow(prior.windowId);
 }
 
+// Lils still being created. A lil's page can load and ask `isEphemeral`
+// before its window is registered (a local file loads that fast; the window id
+// is not even known until windows.create resolves), so that answer waits for
+// in-flight creations instead of reporting a premature false.
+const lilCreations = new Set();
+
 /**
  * Open one lil and bring it into the lifecycle. Returns the created window, or
  * null if creation failed.
@@ -893,6 +899,16 @@ async function restorePriorContext(priorContext, at) {
  *                the host's ephemeralDefault, lastInteraction stamped now).
  */
 async function openLil(spec) {
+  const creation = createLil(spec);
+  lilCreations.add(creation);
+  try {
+    return await creation;
+  } finally {
+    lilCreations.delete(creation);
+  }
+}
+
+async function createLil(spec) {
   const adopting = spec.tabId !== undefined;
   if (!adopting && (typeof spec.url !== "string" || !spec.url)) {
     log("openLil: missing url");
@@ -2236,6 +2252,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       switch (msg.action) {
         case "isEphemeral": {
+          // Only this answer waits: isEphemeralWindow also runs inside
+          // createLil, where waiting on creations would deadlock.
+          await Promise.allSettled(lilCreations);
           sendResponse({
             ephemeral: await isEphemeralWindow(senderWindowId),
             incognito: incognitoLils.has(senderWindowId),

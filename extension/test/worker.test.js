@@ -523,6 +523,21 @@ test("promote to another browser posts open-external and removes the lil", async
   assert.equal(Object.keys(env.registry()).length, 0);
 });
 
+test("a page that loads before its lil is registered still learns it is a lil", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  // The page asks the moment its tab exists, before openLil has registered
+  // the window (a local file can load that fast).
+  let asked;
+  env.chrome.tabs.onCreated.addListener((tab) => {
+    if (asked) return;
+    assert.equal(env.registry()[tab.windowId], undefined, "asked before registration");
+    asked = env.messageLater({ action: "isEphemeral" }, { tab });
+  });
+  await env.deliver({ type: "open", url: "file:///Users/luke/index.html", left: 10, top: 10 });
+  assert.equal((await asked).ephemeral, true);
+});
+
 test("promoting a file lil to another browser carries the file URL", async () => {
   const env = await boot();
   const lil = await openTitledLil(env, { url: "file:///Users/luke/index.html" });
