@@ -37,6 +37,12 @@ struct PaletteAction: Equatable {
 
 /// The only modifier keys that participate in a palette Return chord.
 /// AppKit lock state and key-origin metadata never cross this boundary.
+/// One query's rows and inline type-ahead host, from a single ranking pass.
+struct PaletteResults {
+    let rows: [PaletteRow]
+    let autocompleteHost: String?
+}
+
 struct PaletteReturnChord: OptionSet, Equatable, Sendable {
     let rawValue: UInt8
 
@@ -128,26 +134,14 @@ final class PaletteModel {
         )
     }
 
-    /// The host offered for inline type-ahead. When a history row sits above
-    /// Search, that is the host Enter opens — ghost text must name it too.
-    /// Otherwise the highest-scoring host-prefix origin, else nil.
+    /// The host offered for inline type-ahead (see `results(for:)`).
     func autocompleteHost(for query: String) -> String? {
-        autocompleteHost(for: query, rows: rows(for: query))
+        results(for: query).autocompleteHost
     }
 
-    /// `autocompleteHost(for:)` reusing the rows already computed for `query`,
-    /// so a keystroke ranks the history once, not twice.
-    func autocompleteHost(for query: String, rows: [PaletteRow]) -> String? {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty, !URLIntent.looksLikeURL(trimmed) {
-            if let top = rows.first, top.kind == .history {
-                return top.host
-            }
-        }
-        let ranked = Ranking.rank(query: query, index: index, limit: 1)
-        guard let first = ranked.first,
-              let host = first.autocompleteHostValue else { return nil }
-        return host
+    /// The rows to display for `query` (see `results(for:)`).
+    func rows(for query: String) -> [PaletteRow] {
+        results(for: query).rows
     }
 
     /// Compute the rows to display for `query`.
@@ -163,12 +157,19 @@ final class PaletteModel {
     /// URL-like input instead leads with "Open <url>" and puts Search directly
     /// after it, so navigation is never mistaken for search.
     /// Empty query: top-8 by frecency, no search row.
-    func rows(for query: String) -> [PaletteRow] {
+    ///
+    /// The autocomplete host comes from the same ranking pass: when a history
+    /// row sits above Search, that is the host Enter opens — ghost text must
+    /// name it too. Otherwise the best history match's host, else nil.
+    func results(for query: String) -> PaletteResults {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if trimmed.isEmpty {
             let matches = Ranking.rank(query: "", index: index, limit: maxRows)
-            return matches.map { historyRow($0) }
+            return PaletteResults(
+                rows: matches.map { historyRow($0) },
+                autocompleteHost: matches.first?.autocompleteHostValue
+            )
         }
 
         var rows: [PaletteRow] = []
@@ -182,6 +183,7 @@ final class PaletteModel {
             index: index,
             limit: max(maxRows, index.pages.count + index.origins.count)
         )
+        let bestMatchHost = matches.first?.autocompleteHostValue
 
         if SettingsAction.matchesQuery(trimmed) {
             rows.append(settingsRow())
@@ -204,8 +206,10 @@ final class PaletteModel {
 
         rows.append(searchRow(trimmed))
         rows.append(contentsOf: matches.map(historyRow))
+        rows = Array(rows.prefix(maxRows))
 
-        return Array(rows.prefix(maxRows))
+        let topHistoryHost = rows.first.flatMap { !looksURL && $0.kind == .history ? $0.host : nil }
+        return PaletteResults(rows: rows, autocompleteHost: topHistoryHost ?? bestMatchHost)
     }
 
     /// Among eligible registrable-label matches, frecency is the tie-breaker

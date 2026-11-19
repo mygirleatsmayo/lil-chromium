@@ -318,13 +318,12 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         let generation = rankGeneration
         let worker = model.copy()
         let work = DispatchWorkItem { [weak self] in
-            let rows = worker.rows(for: query)
-            let host = autocomplete ? worker.autocompleteHost(for: query, rows: rows) : nil
+            let results = worker.results(for: query)
             DispatchQueue.main.async {
                 guard let self, generation == self.rankGeneration else { return }
                 self.pendingRank = nil
-                self.render(rows)
-                if let host, let field = self.inputField {
+                self.render(results.rows)
+                if autocomplete, let host = results.autocompleteHost, let field = self.inputField {
                     self.applyAutocomplete(typed: query, host: host, field: field)
                 }
             }
