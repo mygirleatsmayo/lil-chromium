@@ -59,3 +59,4 @@ Initial reviewed point: `438f7db`
 - Remediation 3 (`c846091...796ff02`): N1 residual, S5, S6, P4 resolved; 1 new defect (N2, fix). P1 pending Lucas; P3 live check.
 - Remediation 4 (`796ff02...e12cd54`): N2 unresolved (fix); no other new defects. P1 pending Lucas; P3 live check.
 - Remediation 5 (`e12cd54...95d223e`): N2, C1 resolved; 1 new test gap (N3, fix). P1 pending Lucas; P3 live check.
+- Remediation 6 (`95d223e...b9a2e41`): N3 resolved; earlier items still resolved; no new defects. Ready to integrate. P1 pending Lucas; P3 live check.
