@@ -1150,23 +1150,29 @@ function inLilOrder(windowId, task) {
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (!changeInfo.url) return;
   if (!tab || tab.windowId === undefined) return;
-  await inLilOrder(tab.windowId, () => handleNavigation(changeInfo, tab));
+  // The capture deletion runs after the lil's queue lets go: capture I/O never
+  // holds that lil's later navigations.
+  const staleCapture = await inLilOrder(tab.windowId, () => handleNavigation(changeInfo, tab));
+  if (staleCapture) await safe(idbDelete(staleCapture), "idbDelete nap leftover");
 });
 
+// Records a lil's navigation; returns the capture key of a nap it found left
+// over, for the caller to delete outside the lil's queue.
 async function handleNavigation(changeInfo, tab) {
   const windowId = tab.windowId;
-  // Don't overwrite the "real" url with the sleep-page URL — slept entries
-  // keep their originalUrl and are managed by sleep/wake directly. A staged
-  // nap is not a nap yet (see stagedNaps): only its own release is skipped;
-  // any other navigation records like an awake lil's. Returns the capture key
-  // of a nap whose active, user-visible document has left the nap URL.
+  // A nap page is never the lil's url, however late its event is handled:
+  // slept entries keep their real page in originalUrl, and a restart cannot
+  // return to a nap page whose capture may be gone. A staged nap is not a nap
+  // yet (see stagedNaps): any other navigation records like an awake lil's.
+  // Returns the capture key of a nap whose active, user-visible document has
+  // left the nap URL.
+  if (isSleepPageUrl(changeInfo.url)) return null;
   const leftover = await updateRegistry((reg) => {
     const entry = reg[String(windowId)];
     if (!entry) return null;
     const staged = stagedNaps.has(windowId);
-    if (staged && isSleepPageUrl(changeInfo.url)) return null; // the nap's own release
     if (entry.slept && !staged) {
-      return tab.active && !isSleepPageUrl(changeInfo.url) ? { captureKey: entry.sleepCaptureKey } : null;
+      return tab.active ? { captureKey: entry.sleepCaptureKey } : null;
     }
     entry.url = changeInfo.url;
     return null;
@@ -1175,9 +1181,8 @@ async function handleNavigation(changeInfo, tab) {
   // capture work. An inactive same-window wake preload reporting the original
   // URL is not a completed wake and must not clear nap state; neither is the
   // fresh document of a swap that still has a nap document to fall back to.
-  if (leftover && !(await napDocumentMayRemain(windowId))) {
-    await clearNapState(windowId, leftover.captureKey);
-  }
+  if (!leftover || (await napDocumentMayRemain(windowId))) return null;
+  return (await clearNapRegistry(windowId, leftover.captureKey)) ? leftover.captureKey : null;
 }
 
 chrome.windows.onBoundsChanged.addListener(async (win) => {
@@ -1730,17 +1735,23 @@ function waitForWakeSwap(tabId, startedAt) {
 // wake replacement, and as the event-driven backstop when the nap document is
 // already gone. The entry is cleared only while it is still that nap.
 async function clearNapState(windowId, captureKey) {
-  await updateRegistry((reg) => {
+  await clearNapRegistry(windowId, captureKey);
+  if (captureKey) await safe(idbDelete(captureKey), "idbDelete wake");
+}
+
+// The registry half of clearNapState; true when it cleared the entry.
+function clearNapRegistry(windowId, captureKey) {
+  return updateRegistry((reg) => {
     const entry = reg[String(windowId)];
-    if (!entry || !entry.slept || entry.sleepCaptureKey !== captureKey) return;
+    if (!entry || !entry.slept || entry.sleepCaptureKey !== captureKey) return false;
     entry.url = entry.originalUrl || entry.url;
     delete entry.slept;
     delete entry.sleepCaptureKey;
     delete entry.originalUrl;
     delete entry.originalTitle;
     entry.lastInteraction = Date.now();
+    return true;
   });
-  if (captureKey) await safe(idbDelete(captureKey), "idbDelete wake");
 }
 
 // A wake preload is usable only when it actually sits in the napping lil.

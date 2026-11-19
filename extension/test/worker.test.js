@@ -1550,6 +1550,55 @@ test("a lil's navigation during its own pending nap-document check is recorded a
   assert.equal(restarted.windows()[0].tabs[0].url, "https://napping.example/next", "a restart reopens it");
 });
 
+test("a stalled capture deletion never lets a later nap page become the lil's url", { timeout: 5000 }, async () => {
+  let deleteGate = null;
+  const env = await boot({ clock: true, idbDeleteGate: () => deleteGate });
+  const lil = await openTitledLil(env, { url: "https://napping.example/", title: "Napping" });
+  assert.equal((await env.message({ action: "sleepThisLil" }, sender(lil))).ok, true);
+
+  // As in Chromium, the browser does not wait for the worker's onUpdated
+  // listeners: a nap's release returns while its event is still queued.
+  const pending = [];
+  const onUpdated = env.chrome.tabs.onUpdated;
+  const fire = onUpdated.fire;
+  onUpdated.fire = async (...event) => void pending.push(fire.apply(onUpdated, event));
+
+  // The first nap's page leaves on its own; clearing it deletes its capture,
+  // and every capture deletion hangs from here until released.
+  let release;
+  deleteGate = new Promise((resolve) => (release = resolve));
+  pending.push(env.chrome.tabs.update(lil.tabs[0].id, { url: "https://napping.example/" }));
+  await env.flush();
+  pending.push(env.chrome.tabs.update(lil.tabs[0].id, { url: "https://napping.example/next" }));
+  await env.flush();
+  assert.equal(registryEntry(env, lil).url, "https://napping.example/next", "the deletion does not hold the lil's queue");
+
+  // Nap and wake again while that deletion is still out.
+  pending.push(env.messageLater({ action: "sleepThisLil" }, sender(lil)));
+  await env.flush();
+  await env.clock.advance(1000); // past the capture throttle
+  await env.flush();
+  assert.match(lilTab(env, lil).url, NAP_PAGE, "the second nap took");
+  pending.push(env.messageLater({ action: "wakeLil" }, sender(lil)));
+  await env.flush();
+  await env.clock.advance(500);
+  await env.flush();
+
+  release();
+  deleteGate = null;
+  await env.flush();
+  await env.clock.advance(500); // a wake held behind the deletion runs its timers now
+  while (pending.length) await Promise.all(pending.splice(0));
+  await env.flush();
+
+  const entry = registryEntry(env, lil);
+  assert.equal(entry.url, "https://napping.example/next", "never a nap page");
+  assert.equal(entry.slept, undefined);
+  const restarted = await boot({ storage: { ephemeralWindows: { [lil.id]: entry } } });
+  await restarted.startup();
+  assert.equal(restarted.windows()[0].tabs[0].url, "https://napping.example/next", "a restart reopens it");
+});
+
 test("the local guard leaves look-alike remote hosts subject to automatic Lil Nap", async () => {
   for (const url of ["https://localhost.example.com/", "http://128.0.0.1/", "https://notlocalhost/"]) {
     const env = await boot();
