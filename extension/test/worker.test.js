@@ -584,6 +584,54 @@ test("a window no pending creation can be answers at once", async () => {
   assert.equal(reply.ephemeral, false);
 });
 
+test("a normal window stops waiting once a pending creation turns out to be another window", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://mail.example/", type: "normal" });
+  await env.flush();
+  // Hold the lil before its window id is known, then again after.
+  let releaseCreate, releaseFocus;
+  const beforeId = new Promise((r) => (releaseCreate = r));
+  const afterId = new Promise((r) => (releaseFocus = r));
+  env.chrome.tabs.onCreated.addListener(() => beforeId);
+  const update = env.chrome.windows.update;
+  env.chrome.windows.update = async (...args) => {
+    await afterId;
+    return update(...args);
+  };
+  const opening = env.deliver({ type: "open", url: "https://example.org/", left: 20, top: 20 });
+  await env.flush();
+  const asked = env.messageLater({ action: "isEphemeral" }, sender(normal));
+  releaseCreate();
+  const reply = await settlesNow(env, asked);
+  releaseFocus();
+  await opening;
+  assert.ok(reply, "answered once the pending lil's window was known");
+  assert.equal(reply.ephemeral, false);
+});
+
+test("an early page stops waiting once its own lil registers", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  // Another lil stays held before its window id is known throughout.
+  let releaseOther;
+  const other = new Promise((r) => (releaseOther = r));
+  let created = 0;
+  let asked;
+  env.chrome.tabs.onCreated.addListener((tab) => {
+    if (++created === 1) return other;
+    asked = env.messageLater({ action: "isEphemeral" }, { tab });
+  });
+  const openingOther = env.deliver({ type: "open", url: "https://example.org/", left: 20, top: 20 });
+  await env.flush();
+  await env.deliver({ type: "open", url: "file:///Users/luke/index.html", left: 10, top: 10 });
+  const reply = await settlesNow(env, asked);
+  releaseOther();
+  await openingOther;
+  assert.ok(reply, "answered once its own lil registered");
+  assert.equal(reply.ephemeral, true);
+});
+
 test("promoting a file lil to another browser carries the file URL", async () => {
   const env = await boot();
   const lil = await openTitledLil(env, { url: "file:///Users/luke/index.html" });
