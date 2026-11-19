@@ -650,23 +650,27 @@ struct PaletteSelectionTests {
     @Test("Pointer hover never changes the selected row or the Return action", .bug(id: 40))
     func hoverNeverChangesTheReturnAction() throws {
         let model = PaletteModel()
-        let rows = model.rows(for: "example.com/pricing")  // Open, then Search
         var selection = PaletteSelection()
-        selection.rowsChanged(count: rows.count, resetSelection: true)
 
-        selection.hover(1)
-        // The list rebuilds while the pointer stays parked over row 1.
+        // The pointer rests on row 1 (Search) under "example.com/pricing".
+        var rows = model.rows(for: "example.com/pricing")
         selection.rowsChanged(count: rows.count, resetSelection: true)
         selection.hover(1)
+        let first = try #require(model.returnAction(
+            for: "example.com/pricing", rows: rows, selection: selection, chord: .plain))
+        #expect(first.url == "https://example.com/pricing")
+        #expect(first.hint == "⏎ Open")
 
-        let action = try #require(model.action(
-            for: "example.com/pricing",
-            selectedRow: rows[selection.selected],
-            chord: .plain
-        ))
-        #expect(selection.selected == 0)
-        #expect(action.url == "https://example.com/pricing")
-        #expect(action.hint == "⏎ Open")
+        // The user types; the list rebuilds with different rows under the
+        // parked pointer, which re-reports row 1 (now Search, not Settings).
+        rows = model.rows(for: "settings")
+        selection.rowsChanged(count: rows.count, resetSelection: true)
+        selection.hover(1)
+        let second = try #require(model.returnAction(
+            for: "settings", rows: rows, selection: selection, chord: .plain))
+        #expect(rows[1].kind == .search)
+        #expect(second.kind == .settings)
+        #expect(second.hint == "⏎ Settings")
     }
 
     @Test("Selected and hovered rows highlight independently; selected wins on one row", .bug(id: 40))

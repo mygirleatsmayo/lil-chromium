@@ -35,8 +35,9 @@ final class FaviconCache {
     /// URLSession with default config (respects system proxy/TLS). Shared.
     private let session: URLSession
 
-    /// Hosts with an in-flight fetch, so we don't hammer the service.
-    private var inFlight = Set<String>()
+    /// Callers waiting on each host's in-flight fetch. One request per host;
+    /// every waiter gets its result, so a row built mid-fetch still fills in.
+    private var waiters: [String: [(NSImage?) -> Void]] = [:]
 
     /// A reusable globe placeholder (tinted secondary).
     let placeholder: NSImage
@@ -94,21 +95,13 @@ final class FaviconCache {
     // MARK: - Network
 
     private func fetch(host: String, completion: @escaping (NSImage?) -> Void) {
-        guard !host.isEmpty else { completion(nil); return }
-        // Coalesce concurrent requests for the same host: still call completion
-        // for this caller, but only issue one network request.
-        let alreadyFetching = inFlight.contains(host)
-        inFlight.insert(host)
-
-        guard let url = faviconURL(for: host) else { completion(nil); return }
-        if alreadyFetching {
-            // Another fetch is in flight; when it finishes it writes to disk +
-            // memory. Fall back to a fresh request here anyway is wasteful, so
-            // just deliver nil now (placeholder stays) — the next render hits
-            // the warmed cache. Keeps this simple and non-blocking.
-            completion(nil)
+        guard !host.isEmpty, let url = faviconURL(for: host) else { completion(nil); return }
+        // Coalesce concurrent requests for the same host into one request.
+        if waiters[host] != nil {
+            waiters[host]?.append(completion)
             return
         }
+        waiters[host] = [completion]
 
         let key = host.lowercased() as NSString
         let diskURL = diskPath(for: host)
@@ -117,14 +110,14 @@ final class FaviconCache {
             // Runs on a URLSession background queue. Hop to main for all state.
             DispatchQueue.main.async {
                 guard let self = self else { return }
-                self.inFlight.remove(host)
+                let callbacks = self.waiters.removeValue(forKey: host) ?? []
 
                 guard
                     let data = data, !data.isEmpty,
                     let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
                     let img = NSImage(data: data)
                 else {
-                    completion(nil)
+                    callbacks.forEach { $0(nil) }
                     return
                 }
                 self.memory.setObject(img, forKey: key)
@@ -132,7 +125,7 @@ final class FaviconCache {
                 DispatchQueue.global(qos: .utility).async {
                     try? data.write(to: diskURL, options: .atomic)
                 }
-                completion(img)
+                callbacks.forEach { $0(img) }
             }
         }
         task.resume()

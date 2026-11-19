@@ -277,8 +277,8 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     }
 
     private func currentPanelHeight() -> CGFloat {
-        let rows = min(currentRows.count, maxResultRows)
-        return inputRowHeight + CGFloat(rows) * resultRowHeight
+        // `reload` already caps rows at maxResultRows.
+        inputRowHeight + CGFloat(currentRows.count) * resultRowHeight
     }
 
     // MARK: - Data flow
@@ -340,12 +340,11 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// Hover follows the row actually under the pointer, read from the window
     /// rather than inferred from enter/exit events, so rebuilt rows, a resized
     /// panel, and a reopened palette all land on the truth. Visual only.
-    private func syncHoverToPointer() {
+    /// PalettePanel also calls this while a press's tracking loop runs.
+    func syncHoverToPointer() {
         var hovered: Int?
         if let panel, panel.isVisible, let stack = resultsStack {
-            stack.layoutSubtreeIfNeeded()
-            let point = stack.convert(panel.mouseLocationOutsideOfEventStream, from: nil)
-            hovered = stack.arrangedSubviews.firstIndex { $0.frame.contains(point) }
+            hovered = stack.rowIndex(atWindowPoint: panel.mouseLocationOutsideOfEventStream)
         }
         guard hovered != selection.hovered else { return }
         selection.hover(hovered)
@@ -364,28 +363,24 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         for (i, view) in stack.arrangedSubviews.enumerated() {
             guard let rowView = view as? PaletteRowView, i < currentRows.count else { continue }
             let highlight = selection.highlight(for: i)
-            rowView.setHighlight(highlight,
-                                 hint: highlight == .selected ? actionHint(for: currentRows[i]) : nil)
+            rowView.setHighlight(highlight, hint: highlight == .selected ? selectedHint : nil)
         }
     }
 
-    private func actionHint(for row: PaletteRow) -> String? {
-        model.action(
-            for: committedQuery,
-            selectedRow: row,
-            chord: currentReturnChord
-        )?.hint
+    /// The hint names exactly what Return would do with the held modifiers.
+    private var selectedHint: String? {
+        returnAction(chord: currentReturnChord)?.hint
+    }
+
+    private func returnAction(chord: PaletteReturnChord) -> PaletteAction? {
+        model.returnAction(for: committedQuery, rows: currentRows,
+                           selection: selection, chord: chord)
     }
 
     /// Resolve and open the current Return action. Mouse clicks use the plain
     /// chord; keyboard submission uses the current event's semantic chord.
     private func activateSelection(chord: PaletteReturnChord = .plain) {
-        guard currentRows.indices.contains(selection.selected) else { return }
-        guard let action = model.action(
-            for: committedQuery,
-            selectedRow: currentRows[selection.selected],
-            chord: chord
-        ) else { return }
+        guard let action = returnAction(chord: chord) else { return }
         if action.kind == .settings {
             requestSettings()
             return

@@ -3,7 +3,7 @@
 ///   - selected: the keyboard's row. Starts at the top, moves with ↑/↓, changes
 ///     on click. Return opens it.
 ///   - hovered: the row under the pointer. Visual only.
-struct PaletteSelection: Equatable {
+struct PaletteSelection {
 
     enum Highlight: Equatable {
         case none
@@ -15,7 +15,7 @@ struct PaletteSelection: Equatable {
 
     private(set) var selected = 0
     private(set) var hovered: Int?
-    private(set) var rowCount = 0
+    private var rowCount = 0
 
     /// The list was rebuilt. A new query (or a fresh open) sends the selection
     /// back to the top; otherwise it is clamped. Hover is cleared: the caller

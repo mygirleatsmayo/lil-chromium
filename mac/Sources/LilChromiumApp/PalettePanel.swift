@@ -21,10 +21,33 @@ final class PalettePanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     override func sendEvent(_ event: NSEvent) {
-        if event.type == .flagsChanged {
+        switch event.type {
+        case .flagsChanged:
             paletteDelegate?.modifierFlagsDidChange(event.modifierFlags)
+        case .leftMouseDown:
+            trackingPointerDuringPress { super.sendEvent(event) }
+            return
+        default:
+            break
         }
         super.sendEvent(event)
+    }
+
+    /// A press runs its control's own tracking loop inside `sendEvent` (e.g.
+    /// the field editor's drag-select), and that loop dequeues the drag events
+    /// itself, so no tracking area sees the pointer cross the results (#40).
+    /// Poll the pointer on a timer the loop's run-loop mode still services,
+    /// only for the press's duration, then sync once more on release.
+    private func trackingPointerDuringPress(_ dispatch: () -> Void) {
+        let poll = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.paletteDelegate?.syncHoverToPointer() }
+        }
+        RunLoop.current.add(poll, forMode: .common)
+        defer {
+            poll.invalidate()
+            paletteDelegate?.syncHoverToPointer()
+        }
+        dispatch()
     }
 
     /// Esc at the panel level (also reached from the search field's

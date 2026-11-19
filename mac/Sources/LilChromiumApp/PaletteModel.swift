@@ -118,6 +118,19 @@ final class PaletteModel {
         )
     }
 
+    /// What Return does right now: the selected row's action, never the
+    /// hovered one's. The controller's Return handler and the selected row's
+    /// hint both resolve through here, so they cannot disagree.
+    func returnAction(
+        for query: String,
+        rows: [PaletteRow],
+        selection: PaletteSelection,
+        chord: PaletteReturnChord
+    ) -> PaletteAction? {
+        guard rows.indices.contains(selection.selected) else { return nil }
+        return action(for: query, selectedRow: rows[selection.selected], chord: chord)
+    }
+
     /// The host offered for inline type-ahead. When a history row sits above
     /// Search, that is the host Enter opens — ghost text must name it too.
     /// Otherwise the highest-scoring host-prefix origin, else nil.

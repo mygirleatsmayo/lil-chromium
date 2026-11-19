@@ -3,6 +3,7 @@ import AppKit
 /// Draws the accent-tinted rounded-rect highlight behind a row. Hovered uses
 /// the selected pill's shape at lower opacity; a row has exactly one highlight,
 /// so the two never stack.
+@MainActor
 final class RowBackgroundView: NSView {
     var highlight: PaletteSelection.Highlight = .none {
         didSet { if highlight != oldValue { needsDisplay = true } }
@@ -25,8 +26,9 @@ final class RowBackgroundView: NSView {
     }
 }
 
-/// The results list. Reports every pointer move, entry, and exit so the
-/// controller can hit-test the row actually under the pointer.
+/// The results list. Reports every pointer move, entry, and exit, and answers
+/// which row sits under a point, so the controller never walks its layout.
+@MainActor
 final class PaletteResultsStackView: NSStackView {
 
     var onPointerChange: (() -> Void)?
@@ -46,12 +48,21 @@ final class PaletteResultsStackView: NSStackView {
     override func mouseEntered(with event: NSEvent) { onPointerChange?() }
     override func mouseMoved(with event: NSEvent) { onPointerChange?() }
     override func mouseExited(with event: NSEvent) { onPointerChange?() }
+
+    /// The index of the row under `windowPoint` (window coordinates), or nil.
+    /// Lays out first so freshly rebuilt rows answer with their real frames.
+    func rowIndex(atWindowPoint windowPoint: NSPoint) -> Int? {
+        layoutSubtreeIfNeeded()
+        let point = convert(windowPoint, from: nil)
+        return arrangedSubviews.firstIndex { $0.frame.contains(point) }
+    }
 }
 
 /// A single 44pt palette row:
 ///   [favicon 20×20 rounded 4] [title 13 medium] [flex] [dimmed domain 11] [hint]
 /// Highlight = accent pill (see RowBackgroundView). Hover is tracked by the
 /// results list, not the row; a click is routed to the controller (select+open).
+@MainActor
 final class PaletteRowView: NSView {
 
     /// Index of this row within the current result list (for click routing).
