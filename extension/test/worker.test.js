@@ -1557,11 +1557,17 @@ test("a stalled capture deletion never lets a later nap page become the lil's ur
   assert.equal((await env.message({ action: "sleepThisLil" }, sender(lil))).ok, true);
 
   // As in Chromium, the browser does not wait for the worker's onUpdated
-  // listeners: a nap's release returns while its event is still queued.
+  // listeners: a nap's release returns while its event is still queued. The
+  // second nap's release event is held until after its wake — the late event
+  // the worker must never record as the lil's url.
   const pending = [];
+  const heldNapEvents = [];
   const onUpdated = env.chrome.tabs.onUpdated;
   const fire = onUpdated.fire;
-  onUpdated.fire = async (...event) => void pending.push(fire.apply(onUpdated, event));
+  onUpdated.fire = async (...event) => {
+    if (NAP_PAGE.test((event[1] && event[1].url) || "")) heldNapEvents.push(event);
+    else pending.push(fire.apply(onUpdated, event));
+  };
 
   // The first nap's page leaves on its own; clearing it deletes its capture,
   // and every capture deletion hangs from here until released.
@@ -1589,6 +1595,10 @@ test("a stalled capture deletion never lets a later nap page become the lil's ur
   await env.flush();
   await env.clock.advance(500); // a wake held behind the deletion runs its timers now
   while (pending.length) await Promise.all(pending.splice(0));
+  await env.flush();
+  assert.equal(registryEntry(env, lil).slept, undefined, "the second nap has woken");
+  assert.equal(heldNapEvents.length, 1, "its release event is still held");
+  for (const event of heldNapEvents.splice(0)) await fire.apply(onUpdated, event);
   await env.flush();
 
   const entry = registryEntry(env, lil);
