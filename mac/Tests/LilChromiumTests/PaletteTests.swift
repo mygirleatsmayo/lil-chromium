@@ -92,6 +92,21 @@ struct PaletteRowsTests {
         #expect(rows.count <= 8)
     }
 
+    /// Word order never hides a page (issue #42): every term of a multi-word
+    /// query must appear in the host, title, or URL — in any order, in any field.
+    @Test(
+        "Multi-word queries find a page in any word order",
+        .bug(id: 42),
+        arguments: ["fix gizmo", "gizmo fix", "alignment gizmo", "github gizmo"]
+    )
+    func multiWordQueriesMatchInAnyOrder(_ query: String) throws {
+        let rows = try makeModel().rows(for: query)
+
+        #expect(rows.first?.kind == .search, "a multi-word query never leads Search")
+        #expect(rows.dropFirst().first?.actionURL
+            == "https://github.com/mygirleatsmayo/lil-chromium/commit/deadbeef")
+    }
+
     /// Inline autocomplete only offers a host that actually prefixes the query.
     @Test func autocompleteOffersOnlyAPrefixedHost() throws {
         let model = try makeModel()
