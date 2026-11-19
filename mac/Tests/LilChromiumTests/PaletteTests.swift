@@ -447,19 +447,21 @@ struct PaletteAnyOrderTests {
         rows.filter { $0.kind == .history }.map(\.actionURL)
     }
 
-    private let gizmoPages = [
-        HistoryItem(url: "https://example.com/a", title: "Gizmo alignment fix",
-                    lastVisitTime: 1_700_000_000_000 - 86_400_000, visitCount: 5, typedCount: 0),
-        HistoryItem(url: "https://example.com/b", title: "Gizmos realignment fixture",
-                    lastVisitTime: 1_700_000_000_000 - 86_400_000, visitCount: 10, typedCount: 0),
-    ]
+    private var gizmoPages: [HistoryItem] {
+        [
+            visit("https://example.com/a", title: "Gizmo alignment fix"),
+            visit("https://example.com/b", title: "Gizmos realignment fixture", visits: 10),
+        ]
+    }
 
+    /// Both pages start a title word with each term; the more visited leads.
     @Test("Repeated terms and extra spaces change nothing", .bug(id: 42))
     func repeatedTermsAndExtraSpacesChangeNothing() {
         let palette = model(gizmoPages)
+        let expected = ["https://example.com/b", "https://example.com/a"]
 
-        #expect(historyURLs(palette.rows(for: "  fix   gizmo fix  "))
-            == historyURLs(palette.rows(for: "fix gizmo")))
+        #expect(historyURLs(palette.rows(for: "fix gizmo")) == expected)
+        #expect(historyURLs(palette.rows(for: "  fix   gizmo fix  ")) == expected)
     }
 
     /// A term that only matches as a scattered subsequence disqualifies the page.
@@ -471,14 +473,18 @@ struct PaletteAnyOrderTests {
         #expect(rows.map(\.kind) == [.search])
     }
 
-    /// "sui bsc" matches only as a whole-query subsequence; it is still found.
+    /// "sui bsc" matches both pages only as a whole-query subsequence. They
+    /// are still found, and the dense match keeps its tier above the more
+    /// frecent scattered one.
     @Test("Whole-query matches are never lost", .bug(id: 42))
     func wholeQueryMatchesAreNeverLost() {
-        let rows = model([visit("https://example.com/1", title: "SwiftUI Basics")])
-            .rows(for: "sui bsc")
+        let rows = model([
+            visit("https://example.com/scattered", title: "Super user interface bus schedule", visits: 10),
+            visit("https://example.com/dense", title: "SwiftUI Basics"),
+        ]).rows(for: "sui bsc")
 
-        #expect(rows.map(\.kind) == [.search, .history])
-        #expect(rows[1].actionURL == "https://example.com/1")
+        #expect(rows.first?.kind == .search)
+        #expect(historyURLs(rows) == ["https://example.com/dense", "https://example.com/scattered"])
     }
 
     /// Every term of the first page starts a title word; the second page's
@@ -515,6 +521,22 @@ struct PaletteAnyOrderTests {
         #expect(forward == ["https://example.com/a", "https://example.com/b", "https://example.com/c"])
     }
 
+    /// `/A` and `/a` collapse to one page; with equal signal, the survivor
+    /// is the same whichever the browser reported first.
+    @Test("Case-only duplicates collapse independently of history order", .bug(id: 42))
+    func caseOnlyDuplicatesCollapseDeterministically() {
+        let history = [
+            visit("https://example.com/Gizmo", title: "Gizmo fix"),
+            visit("https://example.com/gizmo", title: "Gizmo fix"),
+        ]
+
+        let forward = historyURLs(model(history).rows(for: "fix gizmo"))
+        let reversed = historyURLs(model(history.reversed()).rows(for: "fix gizmo"))
+
+        #expect(forward == ["https://example.com/Gizmo"])
+        #expect(reversed == forward)
+    }
+
     /// Both terms hit github.com's registrable label and title, yet the whole
     /// query is not a literal domain match, so Search still leads.
     @Test("A multi-term query never puts history above Search", .bug(id: 42))
@@ -529,14 +551,15 @@ struct PaletteAnyOrderTests {
     func perHostCapAndDuplicatesStillApply() {
         let history = [
             visit("https://example.com/a", title: "Gizmo fix"),
-            visit("https://www.example.com/a", title: "Gizmo fix"),
+            visit("https://www.example.com/a", title: "Gizmo fix", visits: 9),
             visit("https://example.com/b", title: "Gizmo fix"),
             visit("https://example.com/c", title: "Gizmo fix"),
             visit("https://example.com/d", title: "Gizmo fix"),
         ]
 
+        // The more visited www. copy stands for /a; the plain copy never shows.
         #expect(historyURLs(model(history).rows(for: "fix gizmo")) == [
-            "https://example.com/a", "https://example.com/b", "https://example.com/c",
+            "https://www.example.com/a", "https://example.com/b", "https://example.com/c",
         ])
     }
 }
