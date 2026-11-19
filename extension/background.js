@@ -663,6 +663,21 @@ async function setRegistry(reg) {
   await safe(chrome.storage.local.set({ [REGISTRY_KEY]: reg }), "set registry");
 }
 
+// Runs registry read-modify-writes one at a time, so a write cannot carry a
+// stale read over another's change. Used by the navigation recorder and a
+// nap's staging and rollback, which race whenever a lil navigates mid-nap.
+let registryChain = Promise.resolve();
+function serializeRegistry(fn) {
+  const next = registryChain.then(fn, fn);
+  registryChain = next.catch(() => undefined);
+  return next;
+}
+
+// windowId -> captureKey of a nap that sleepLil has written to the registry but
+// not yet released or rolled back. Until then the lil is not napping: its
+// navigations are the user's and record as an awake lil's do.
+const stagedNaps = new Map();
+
 // Normalize expiry into "never" | "quit" | <hoursNumber>.
 function normalizeExpiry(v, fallback) {
   if (v === "never" || v === "quit") return v;
@@ -1111,6 +1126,10 @@ async function restoreWindows() {
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (!changeInfo.url) return;
   if (!tab || tab.windowId === undefined) return;
+  await serializeRegistry(() => recordNavigation(changeInfo, tab));
+});
+
+async function recordNavigation(changeInfo, tab) {
   const reg = await getRegistry();
   const key = String(tab.windowId);
   if (reg[key]) {
@@ -1121,7 +1140,11 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     // An inactive same-window wake preload reporting the original URL is not
     // a completed wake and must not clear nap state; neither is the fresh
     // document of a swap that still has a nap document to fall back to.
-    if (reg[key].slept) {
+    // A staged nap is not a nap yet (see stagedNaps): only its own release is
+    // skipped; any other navigation records below like an awake lil's.
+    const staged = stagedNaps.has(tab.windowId);
+    if (staged && isSleepPageUrl(changeInfo.url)) return; // the nap's own release
+    if (reg[key].slept && !staged) {
       if (tab.active && !isSleepPageUrl(changeInfo.url) && !(await napDocumentMayRemain(tab.windowId))) {
         await clearNapState(
           tab.windowId,
@@ -1134,7 +1157,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     reg[key].url = changeInfo.url;
     await setRegistry(reg);
   }
-});
+}
 
 chrome.windows.onBoundsChanged.addListener(async (win) => {
   if (!win || win.id === undefined) return;
@@ -1586,38 +1609,46 @@ async function sleepLil(windowId, { keepAwake = null } = {}) {
   const ctx = await getContext();
   const tint = ctx.sleep && ctx.sleep.tint ? ctx.sleep.tint : "purple";
 
-  // Mark registry BEFORE navigating so onUpdated doesn't clobber originalUrl.
-  const reg2 = await getRegistry();
-  if (reg2[String(windowId)]) {
-    reg2[String(windowId)].slept = true;
-    reg2[String(windowId)].sleepCaptureKey = captureKey;
-    reg2[String(windowId)].originalUrl = originalUrl;
-    reg2[String(windowId)].originalTitle = originalTitle;
-    await setRegistry(reg2);
-  }
+  // Stage the nap in the registry BEFORE releasing, so the release's nap URL
+  // is never recorded over the lil's real url.
+  stagedNaps.set(windowId, captureKey);
+  let released = false;
+  try {
+    await serializeRegistry(async () => {
+      const reg2 = await getRegistry();
+      if (!reg2[String(windowId)]) return;
+      reg2[String(windowId)].slept = true;
+      reg2[String(windowId)].sleepCaptureKey = captureKey;
+      reg2[String(windowId)].originalUrl = originalUrl;
+      reg2[String(windowId)].originalTitle = originalTitle;
+      await setRegistry(reg2);
+    });
 
-  const released = await replaceTabDocument(
-    tab.id,
-    sleepPageUrl({ captureKey, originalUrl, originalTitle, tint }),
-    guarded && { protocol: guarded.protocol, hostname: guarded.hostname }
-  );
-  if (!released) {
-    // The live document was never released, so the nap never happened: roll
-    // back this entry's nap-only registry fields and the freshly stored
-    // capture rather than claim a nap the user cannot see. A navigation during
-    // staging was taken by onUpdated for a nap leftover (cleared, URL reset to
-    // originalUrl) instead of recorded, so record the page the lil shows now.
-    const live = await safe(chrome.tabs.get(tab.id), "tabs.get nap rollback");
-    const reg3 = await getRegistry();
-    const pending = reg3[String(windowId)];
-    if (pending && (pending.sleepCaptureKey === captureKey || !pending.slept)) {
-      delete pending.slept;
-      delete pending.sleepCaptureKey;
-      delete pending.originalUrl;
-      delete pending.originalTitle;
-      pending.url = (live && live.url) || pending.url;
-      await setRegistry(reg3);
+    released = await replaceTabDocument(
+      tab.id,
+      sleepPageUrl({ captureKey, originalUrl, originalTitle, tint }),
+      guarded && { protocol: guarded.protocol, hostname: guarded.hostname }
+    );
+    if (!released) {
+      // The live document was never released, so the nap never happened: roll
+      // back this entry's nap-only registry fields and the freshly stored
+      // capture rather than claim a nap the user cannot see. Navigation fields
+      // are the recorder's alone: a navigation mid-staging recorded normally.
+      await serializeRegistry(async () => {
+        const reg3 = await getRegistry();
+        const pending = reg3[String(windowId)];
+        if (!pending || pending.sleepCaptureKey !== captureKey) return;
+        delete pending.slept;
+        delete pending.sleepCaptureKey;
+        delete pending.originalUrl;
+        delete pending.originalTitle;
+        await setRegistry(reg3);
+      });
     }
+  } finally {
+    if (stagedNaps.get(windowId) === captureKey) stagedNaps.delete(windowId);
+  }
+  if (!released) {
     await safe(idbDelete(captureKey), "idbDelete nap rollback");
     log("sleepLil: document replacement failed for", windowId);
     return false;

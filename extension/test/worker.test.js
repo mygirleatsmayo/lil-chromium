@@ -1392,32 +1392,62 @@ test("automatic Lil Nap never naps a local page the lil navigated to mid-nap", a
   assert.equal(env.captures().size, 0, "the rolled-back nap leaves no capture");
 });
 
-test("an automatic nap aborted after staging leaves the lil's registry entry as before", async () => {
+// Stages an automatic nap that the local guard then aborts: the user
+// navigates the lil to a local page just before the in-document release runs.
+// `deferEvent` holds that navigation's tabs.onUpdated until the caller flushes
+// it, modelling an event that reaches the worker only after the rollback.
+async function abortStagedNap({ deferEvent = false } = {}) {
   const env = await boot();
   const lil = await openTitledLil(env, { url: "https://remote.example/", title: "Remote" });
   await applySleepConfig(env, { enabled: true, afterMinutes: 45, audioGuard: false, formGuard: false, whitelist: [], localGuard: true });
   await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
   await parkIdle(env, lil, 46);
-  const before = env.registry()[String(lil.id)];
-  // The nap is staged in the registry; the user navigates to a local page just
-  // before the in-document release runs, so the guard aborts it.
+  const before = structuredClone(env.registry()[String(lil.id)]);
+  const onUpdated = env.chrome.tabs.onUpdated;
+  const fire = onUpdated.fire;
+  const deferred = [];
+  let duringStaging = null;
   const execute = env.chrome.scripting.executeScript;
   env.chrome.scripting.executeScript = async (...args) => {
     env.chrome.scripting.executeScript = execute;
+    if (deferEvent) onUpdated.fire = async (...event) => void deferred.push(event);
     await env.chrome.tabs.update(lil.tabs[0].id, { url: "http://localhost:3000/" });
+    onUpdated.fire = fire;
+    duringStaging = structuredClone(env.registry()[String(lil.id)]);
     return execute.apply(env.chrome.scripting, args);
   };
 
   await env.alarm();
+  const flush = async () => {
+    for (const event of deferred.splice(0)) await fire.apply(onUpdated, event);
+  };
+  return { env, lil, before, duringStaging, flush };
+}
 
+// Spread into this realm: the registry is cloned in the worker's context.
+const registryEntry = (env, lil) => ({ ...structuredClone(env.registry()[String(lil.id)]) });
+
+test("a navigation while a nap is staged is recorded like an awake lil's", async () => {
+  const { env, lil, before, duringStaging } = await abortStagedNap();
+
+  assert.equal(duringStaging.url, "http://localhost:3000/", "recorded at once, not reset to the napped page");
   assert.equal(lilTab(env, lil).url, "http://localhost:3000/");
-  // Spread into this realm: the registry is cloned in the worker's context.
-  const after = { ...env.registry()[String(lil.id)] };
-  assert.deepEqual(after, { ...before, url: "http://localhost:3000/" }, "only the live page is recorded");
+  assert.deepEqual(registryEntry(env, lil), { ...before, url: "http://localhost:3000/" });
   assert.equal(env.captures().size, 0);
 
   await env.chrome.tabs.update(lil.tabs[0].id, { url: "http://localhost:3000/next" });
-  assert.equal(env.registry()[String(lil.id)].url, "http://localhost:3000/next", "later navigation records");
+  assert.equal(registryEntry(env, lil).url, "http://localhost:3000/next", "later navigation records");
+});
+
+test("a navigation whose event lands after a nap's rollback is recorded like an awake lil's", async () => {
+  const { env, lil, before, duringStaging, flush } = await abortStagedNap({ deferEvent: true });
+  assert.equal(duringStaging.url, before.url, "no event yet, nothing recorded");
+  assert.deepEqual(registryEntry(env, lil), before, "the rollback restores the pre-nap entry");
+
+  await flush();
+
+  assert.deepEqual(registryEntry(env, lil), { ...before, url: "http://localhost:3000/" });
+  assert.equal(env.captures().size, 0);
 });
 
 test("the local guard leaves look-alike remote hosts subject to automatic Lil Nap", async () => {
