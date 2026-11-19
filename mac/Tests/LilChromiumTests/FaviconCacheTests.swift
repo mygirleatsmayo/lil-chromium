@@ -17,24 +17,26 @@ struct FaviconCacheTests {
         var pending: [@Sendable (Data?, URLResponse?) -> Void] = []
         let cache = FaviconCache(diskDir: diskDir) { _, done in pending.append(done) }
 
-        let delivered: [NSImage?] = await withCheckedContinuation { continuation in
-            var results: [NSImage?] = []
-            let collect: (NSImage?) -> Void = { image in
-                results.append(image)
-                if results.count == 2 { continuation.resume(returning: results) }
-            }
-            cache.icon(for: "example.com", completion: collect)
-            cache.icon(for: "example.com", completion: collect)  // joins in flight
+        var delivered: [NSImage?] = []
+        cache.icon(for: "example.com") { delivered.append($0) }
+        cache.icon(for: "example.com") { delivered.append($0) }  // joins in flight
+        #expect(pending.count == 1)
 
-            #expect(pending.count == 1)
-            let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 4, pixelsHigh: 4,
-                                          bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
-                                          isPlanar: false, colorSpaceName: .deviceRGB,
-                                          bytesPerRow: 0, bitsPerPixel: 0)
-            let png = bitmap?.representation(using: .png, properties: [:]) ?? Data()
-            let ok = HTTPURLResponse(url: URL(string: "https://www.google.com")!,
-                                     statusCode: 200, httpVersion: nil, headerFields: nil)
-            pending.forEach { $0(png, ok) }  // never hangs, even if 2 fetches ran
+        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 4, pixelsHigh: 4,
+                                      bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                      isPlanar: false, colorSpaceName: .deviceRGB,
+                                      bytesPerRow: 0, bitsPerPixel: 0)
+        let png = bitmap?.representation(using: .png, properties: [:]) ?? Data()
+        let ok = HTTPURLResponse(url: URL(string: "https://www.google.com")!,
+                                 statusCode: 200, httpVersion: nil, headerFields: nil)
+        pending.forEach { $0(png, ok) }
+
+        // The cache delivers on a main-queue hop the fake response just
+        // enqueued; the main queue is FIFO, so a block enqueued now runs after
+        // it. Resuming there drains delivery without waiting on a callback
+        // that a regression might never make.
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
         }
 
         #expect(delivered.count == 2)
