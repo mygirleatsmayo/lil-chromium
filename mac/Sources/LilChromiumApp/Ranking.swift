@@ -149,8 +149,10 @@ enum Ranking {
             if let existing = bestByKey[key] {
                 // Ties break on the URL so the surviving page never depends on
                 // the order the browser reported history in.
+                // Lowercased URLs can tie (`/A` vs `/a`), so the raw URL settles it.
                 let wins = page.frecency > existing.frecency
-                    || (page.frecency == existing.frecency && page.lowerURL < existing.lowerURL)
+                    || (page.frecency == existing.frecency
+                        && (page.lowerURL, page.item.url) < (existing.lowerURL, existing.item.url))
                 if wins { bestByKey[key] = page }
             } else {
                 bestByKey[key] = page
@@ -206,19 +208,16 @@ enum Ranking {
     /// Returns results already ordered best-first. The TOP HIT (if any host
     /// prefixes the query) is guaranteed at index 0.
     static func rank(query rawQuery: String, index: HistoryIndex, limit: Int) -> [RankedResult] {
-        let terms = queryTerms(rawQuery)
-        if terms.isEmpty {
+        let query = Query(rawQuery)
+        if query.terms.isEmpty {
             return topByFrecency(index: index, limit: limit)
         }
-        // Repeated terms and extra spaces change nothing: the whole-query
-        // matcher sees the canonical form, so "fix  gizmo fix" ≡ "fix gizmo".
-        let query = terms.joined(separator: " ")
 
         var scored: [RankedResult] = []
 
         // --- Origins: the only source of the host-prefix top hit. ---
         for origin in index.origins {
-            guard let tier = matchTier(query: query, terms: terms, host: origin.host,
+            guard let tier = matchTier(query, host: origin.host,
                                        title: origin.displayTitle.lowercased(),
                                        url: origin.url.lowercased(),
                                        isOrigin: true) else { continue }
@@ -229,13 +228,13 @@ enum Ranking {
                 score: tier * (origin.frecency + 0.1),
                 isOrigin: true,
                 frecency: origin.frecency,
-                matchesRegistrableLabel: queryMatchesRegistrableLabel(query, in: origin.registrableDomain)
+                matchesRegistrableLabel: queryMatchesRegistrableLabel(query.text, in: origin.registrableDomain)
             ))
         }
 
         // --- Pages. ---
         for page in index.pages {
-            guard let tier = matchTier(query: query, terms: terms, host: page.host,
+            guard let tier = matchTier(query, host: page.host,
                                        title: page.lowerTitle, url: page.lowerURL,
                                        isOrigin: false) else { continue }
             let title = page.item.title.isEmpty ? page.item.url : page.item.title
@@ -246,7 +245,7 @@ enum Ranking {
                 score: tier * (page.frecency + 0.1),
                 isOrigin: false,
                 frecency: page.frecency,
-                matchesRegistrableLabel: queryMatchesRegistrableLabel(query, in: page.registrableDomain)
+                matchesRegistrableLabel: queryMatchesRegistrableLabel(query.text, in: page.registrableDomain)
             ))
         }
 
@@ -277,23 +276,30 @@ enum Ranking {
 
     // MARK: - Match tiering
 
-    /// Lowercased, whitespace-split query terms, first occurrence kept, so
-    /// repeats and extra spaces never change the match.
-    static func queryTerms(_ rawQuery: String) -> [String] {
-        var seen = Set<String>()
-        return rawQuery.lowercased()
-            .split(whereSeparator: \.isWhitespace)
-            .map(String.init)
-            .filter { seen.insert($0).inserted }
+    /// A parsed palette query. Repeated terms and extra spaces change nothing:
+    /// `terms` are lowercased, whitespace-split, first occurrence kept, and
+    /// `text` is their canonical join, so "fix  gizmo fix" ≡ "fix gizmo".
+    struct Query {
+        let text: String
+        let terms: [String]
+
+        init(_ raw: String) {
+            var seen = Set<String>()
+            terms = raw.lowercased()
+                .split(whereSeparator: \.isWhitespace)
+                .map(String.init)
+                .filter { seen.insert($0).inserted }
+            text = terms.joined(separator: " ")
+        }
     }
 
     /// Best tier for a candidate: the whole-query tier or, for a multi-term
     /// query, the any-order tier — whichever is stronger (issue #42). nil → no
-    /// match (excluded). `query` is the canonical join of `terms`.
-    static func matchTier(query: String, terms: [String], host: String, title: String, url: String, isOrigin: Bool) -> Double? {
-        let whole = matchTier(query: query, host: host, title: title, url: url, isOrigin: isOrigin)
-        guard terms.count > 1 else { return whole }
-        return maxOptional(whole, anyOrderTier(terms: terms, host: host, title: title, url: url))
+    /// match (excluded).
+    static func matchTier(_ query: Query, host: String, title: String, url: String, isOrigin: Bool) -> Double? {
+        let whole = matchTier(query: query.text, host: host, title: title, url: url, isOrigin: isOrigin)
+        guard query.terms.count > 1 else { return whole }
+        return maxOptional(whole, anyOrderTier(terms: query.terms, host: host, title: title, url: url))
     }
 
     /// Any-order match: every term occurs LITERALLY in host, title, or URL
@@ -314,7 +320,7 @@ enum Ranking {
         if let tier = literalTier(query: query, host: host, title: title, url: url) {
             return tier
         }
-        // Tier 5: dense fuzzy subsequence against the better of host/title/url.
+        // Tier 5: dense fuzzy subsequence against the better of title/url.
         // Origins only get tiers 1–4 (a fuzzy host match is noise for a top hit).
         if isOrigin { return nil }
         let f1 = fuzzyDensity(query: query, text: title)
