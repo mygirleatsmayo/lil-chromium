@@ -1494,7 +1494,8 @@ test("a stalled capture deletion in one lil does not delay another lil's navigat
   let deleteGate = null;
   const env = await boot({ idbDeleteGate: () => deleteGate });
   const napping = await openTitledLil(env, { url: "https://napping.example/", title: "Napping" });
-  const other = await openTitledLil(env, { url: "https://other.example/", title: "Other" });
+  await env.deliver({ type: "open", url: "https://other.example/", left: 10, top: 10 });
+  const other = env.windows().find((w) => w.type === "popup" && w.id !== napping.id);
   assert.equal((await env.message({ action: "sleepThisLil" }, sender(napping))).ok, true);
 
   // The napping lil's page leaves the nap URL on its own, so the worker
