@@ -3378,3 +3378,14 @@ test("suite runs without a live profile or the repo as cwd", async () => {
     else process.env.HOME = originalHome;
   }
 });
+
+test("a lil on a page with no host offers no per-site nap item", async () => {
+  const env = await boot();
+  await env.installed();
+  const lil = await openTitledLil(env, { url: "file:///Users/luke/index.html" });
+  await env.chrome.windows.update(lil.id, { focused: true });
+  await env.flush();
+  const item = env.menus().find((m) => m.id === "toggle-whitelist");
+  assert.equal(item.visible, false);
+  assert.equal(env.menus().find((m) => m.id === "sleep-this-lil").visible, true);
+});
