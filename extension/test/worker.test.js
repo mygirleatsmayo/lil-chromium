@@ -1323,7 +1323,7 @@ const LOCAL_PAGE_URLS = [
   "http://[::1]:5173/",
 ];
 
-async function napIdleLil(env, url, sleepPatch) {
+async function sweepIdleLil(env, url, sleepPatch) {
   const lil = await openTitledLil(env, { url, title: "Local" });
   await applySleepConfig(env, {
     enabled: true,
@@ -1342,27 +1342,60 @@ async function napIdleLil(env, url, sleepPatch) {
 test("automatic Lil Nap independently skips every form of local page when the local guard is on", async () => {
   for (const url of LOCAL_PAGE_URLS) {
     const env = await boot();
-    const lil = await napIdleLil(env, url, { localGuard: true });
+    const lil = await sweepIdleLil(env, url, { localGuard: true });
 
     assert.equal(lilTab(env, lil).url, url, url);
     assert.equal(env.registry()[String(lil.id)].slept, undefined, url);
   }
 });
 
+test("the local guard skips a quiet local lil whichever other guard is on", async () => {
+  // Each other guard is on but its own condition is absent (no audio, no dirty
+  // form, host not listed), so only the local guard can keep the lil awake.
+  for (const others of [{ audioGuard: true }, { formGuard: true }, { whitelist: ["mail.google.com"] }]) {
+    const env = await boot();
+    const lil = await sweepIdleLil(env, "http://localhost:3000/", { localGuard: true, ...others });
+
+    assert.equal(lilTab(env, lil).url, "http://localhost:3000/", JSON.stringify(others));
+    assert.equal(env.registry()[String(lil.id)].slept, undefined, JSON.stringify(others));
+  }
+});
+
 test("automatic Lil Nap naps local pages like any other page when the local guard is off", async () => {
   for (const url of ["file:///Users/me/notes/index.html", "http://localhost:3000/"]) {
     const env = await boot();
-    const lil = await napIdleLil(env, url, { localGuard: false });
+    const lil = await sweepIdleLil(env, url, { localGuard: false });
 
     assert.match(lilTab(env, lil).url, NAP_PAGE, url);
     assert.equal(env.registry()[String(lil.id)].slept, true, url);
   }
 });
 
+test("automatic Lil Nap never naps a local page the lil navigated to mid-nap", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "https://remote.example/", title: "Remote" });
+  await applySleepConfig(env, { enabled: true, afterMinutes: 45, audioGuard: false, formGuard: false, whitelist: [], localGuard: true });
+  await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await parkIdle(env, lil, 46);
+  // The user navigates the lil to a local page after the sweep read the tab,
+  // while the nap capture is in flight.
+  const capture = env.chrome.tabs.captureVisibleTab;
+  env.chrome.tabs.captureVisibleTab = async (...args) => {
+    await env.chrome.tabs.update(lil.tabs[0].id, { url: "http://localhost:3000/" });
+    return capture(...args);
+  };
+
+  await env.alarm();
+
+  assert.equal(lilTab(env, lil).url, "http://localhost:3000/");
+  assert.equal(env.registry()[String(lil.id)].slept, undefined);
+  assert.equal(env.captures().size, 0, "the rolled-back nap leaves no capture");
+});
+
 test("the local guard leaves look-alike remote hosts subject to automatic Lil Nap", async () => {
   for (const url of ["https://localhost.example.com/", "http://128.0.0.1/", "https://notlocalhost/"]) {
     const env = await boot();
-    const lil = await napIdleLil(env, url, { localGuard: true });
+    const lil = await sweepIdleLil(env, url, { localGuard: true });
 
     assert.match(lilTab(env, lil).url, NAP_PAGE, url);
   }

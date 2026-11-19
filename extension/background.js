@@ -1489,20 +1489,25 @@ async function napDocumentMayRemain(windowId) {
 // the only truthful release: when scripting is unavailable or fails, return
 // false and leave the live document untouched — never degrade to
 // history-pushing navigation.
-async function replaceTabDocument(tabId, url) {
+// `onlyFrom` ({protocol, hostname}) refuses the release when the document has
+// since navigated to another page: the check runs inside the document, so no
+// navigation can land between it and the replace.
+async function replaceTabDocument(tabId, url, onlyFrom = null) {
   const execute = chrome.scripting && chrome.scripting.executeScript;
   if (typeof execute !== "function") return false;
   const injected = await safe(
     execute.call(chrome.scripting, {
       target: { tabId },
-      func: (nextUrl) => {
+      func: (nextUrl, from) => {
+        if (from && (location.protocol !== from.protocol || location.hostname !== from.hostname)) return false;
         location.replace(nextUrl);
+        return true;
       },
-      args: [url],
+      args: [url, onlyFrom],
     }),
     "scripting.executeScript replace"
   );
-  return !!injected;
+  return !!(injected && injected[0] && injected[0].result === true);
 }
 
 // Global capture throttle: serialize captures with a min gap so we never exceed
@@ -1548,7 +1553,10 @@ function dataUrlToBlob(dataUrl) {
 }
 
 // Put a lil to sleep. Caller has already checked guards. Returns true on success.
-async function sleepLil(windowId) {
+// `keepAwake(url)` carries the automatic sweep's page guards. sleepLil applies
+// it to the page it actually naps and pins the release to that page, so a
+// navigation after the check cannot slip past it. Manual nap passes none.
+async function sleepLil(windowId, { keepAwake = null } = {}) {
   if (incognitoLils.has(windowId)) return false; // never sleep incognito lils
   const reg = await getRegistry();
   const entry = reg[String(windowId)];
@@ -1560,6 +1568,8 @@ async function sleepLil(windowId) {
   const originalUrl = tab.url || entry.url || "";
   const originalTitle = typeof tab.title === "string" ? tab.title : "";
   if (!originalUrl || /^chrome-extension:\/\//i.test(originalUrl)) return false; // already a lil page
+  const guarded = keepAwake ? parseUrl(originalUrl) : null;
+  if (keepAwake && (!guarded || keepAwake(guarded))) return false;
 
   const dataUrl = await throttledCapture(windowId);
   if (!dataUrl) {
@@ -1588,7 +1598,8 @@ async function sleepLil(windowId) {
 
   const released = await replaceTabDocument(
     tab.id,
-    sleepPageUrl({ captureKey, originalUrl, originalTitle, tint })
+    sleepPageUrl({ captureKey, originalUrl, originalTitle, tint }),
+    guarded && { protocol: guarded.protocol, hostname: guarded.hostname }
   );
   if (!released) {
     // The live document was never released, so the nap never happened: roll
@@ -1776,16 +1787,25 @@ function hostOf(url) {
   }
 }
 
+function parseUrl(url) {
+  try {
+    return new URL(url);
+  } catch (_) {
+    return null;
+  }
+}
+
+// The automatic sweep's page guards (local pages, whitelisted domains) over one
+// parsed URL. Both read the hostname the URL parser already lowercased.
+function pageKeepsAwake(sleep, parsed) {
+  if (sleep.localGuard && isLocalPage(parsed)) return true; // file or localhost
+  return hostWhitelisted(parsed.hostname, sleep.whitelist); // whitelisted
+}
+
 // Is this a page on this Mac — a file, or a loopback/localhost host? The URL
 // parser already lowercases hosts and canonicalizes IPv4 (`127.1`) and IPv6
 // (`[0::1]`) spellings; a trailing root dot (`localhost.`) is still the same host.
-function isLocalPage(url) {
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch (_) {
-    return false;
-  }
+function isLocalPage(parsed) {
   if (parsed.protocol === "file:") return true;
   const host = parsed.hostname.replace(/\.$/, "");
   return (
@@ -1869,12 +1889,8 @@ async function runSweep() {
       if (!tab) continue;
       if (ctx.sleep.audioGuard && tab.audible) continue; // playing audio
       if (ctx.sleep.formGuard && dirtyTabs.has(tab.id)) continue; // unsubmitted form
-      const url = tab.url || entry.url;
-      if (ctx.sleep.localGuard && isLocalPage(url)) continue; // file or localhost
-      const host = hostOf(url);
-      if (hostWhitelisted(host, ctx.sleep.whitelist)) continue; // whitelisted
-
-      await sleepLil(windowId);
+      // Page guards (local, whitelist) run inside sleepLil, on the page it naps.
+      await sleepLil(windowId, { keepAwake: (parsed) => pageKeepsAwake(ctx.sleep, parsed) });
     }
 
     await cleanupOrphanCaptures();

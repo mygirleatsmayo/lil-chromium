@@ -712,13 +712,19 @@ export function createChrome(options = {}) {
               get href() {
                 return tab.url;
               },
+              get protocol() {
+                return new URL(tab.url).protocol;
+              },
+              get hostname() {
+                return new URL(tab.url).hostname;
+              },
               replace(nextUrl) {
                 navigateTab(tab, nextUrl, { replace: true });
                 changeInfo.url = nextUrl;
                 if (tab.title) changeInfo.title = tab.title;
               },
             };
-            vm.runInNewContext(`(${func.toString()})(...__args)`, {
+            const result = vm.runInNewContext(`(${func.toString()})(...__args)`, {
               location,
               document: {
                 get title() {
@@ -734,7 +740,7 @@ export function createChrome(options = {}) {
             if (Object.keys(changeInfo).length) {
               await events.tabs.onUpdated.fire(tabId, changeInfo, snapshotTab(tab));
             }
-            return [{ result: undefined }];
+            return [{ result }];
           },
         }
       : undefined,
