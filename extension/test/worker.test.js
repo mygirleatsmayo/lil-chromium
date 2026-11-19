@@ -1516,6 +1516,40 @@ test("a stalled capture deletion in one lil does not delay another lil's navigat
   assert.equal(env.captures().size, 0);
 });
 
+test("a lil's navigation during its own pending nap-document check is recorded after it", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "https://napping.example/", title: "Napping" });
+  assert.equal((await env.message({ action: "sleepThisLil" }, sender(lil))).ok, true);
+
+  // The nap page leaves on its own; the worker's whole-window tab query (does
+  // a nap document remain?) hangs until released.
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  const query = env.chrome.tabs.query;
+  env.chrome.tabs.query = async (filter) => {
+    if (filter && filter.windowId === lil.id && filter.active === undefined) {
+      env.chrome.tabs.query = query;
+      await held;
+    }
+    return query(filter);
+  };
+  const leaving = env.chrome.tabs.update(lil.tabs[0].id, { url: "https://napping.example/" });
+  await env.flush();
+  const next = env.chrome.tabs.update(lil.tabs[0].id, { url: "https://napping.example/next" });
+  await env.flush();
+  release();
+  await Promise.all([leaving, next]);
+  await env.flush();
+
+  const entry = registryEntry(env, lil);
+  assert.equal(entry.url, "https://napping.example/next", "the last URL the lil reported");
+  assert.equal(entry.slept, undefined);
+
+  const restarted = await boot({ storage: { ephemeralWindows: { [lil.id]: entry } } });
+  await restarted.startup();
+  assert.equal(restarted.windows()[0].tabs[0].url, "https://napping.example/next", "a restart reopens it");
+});
+
 test("the local guard leaves look-alike remote hosts subject to automatic Lil Nap", async () => {
   for (const url of ["https://localhost.example.com/", "http://128.0.0.1/", "https://notlocalhost/"]) {
     const env = await boot();

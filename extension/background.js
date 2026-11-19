@@ -1132,9 +1132,28 @@ async function restoreWindows() {
 // REGISTRY UPKEEP — react to tab/window events.
 // ===========================================================================
 
+// Per-lil queues for navigation handling: a lil's navigations are handled in
+// arrival order, so one that lands while that lil's nap check or cleanup is
+// pending is handled after it, and the registry ends at the last URL the lil
+// reported. Other lils have their own queues and never wait on this one.
+const navigationQueues = new Map();
+function inLilOrder(windowId, task) {
+  const next = (navigationQueues.get(windowId) || Promise.resolve()).then(task);
+  const tail = next.catch(() => undefined);
+  navigationQueues.set(windowId, tail);
+  tail.then(() => {
+    if (navigationQueues.get(windowId) === tail) navigationQueues.delete(windowId);
+  });
+  return next;
+}
+
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (!changeInfo.url) return;
   if (!tab || tab.windowId === undefined) return;
+  await inLilOrder(tab.windowId, () => handleNavigation(changeInfo, tab));
+});
+
+async function handleNavigation(changeInfo, tab) {
   const windowId = tab.windowId;
   // Don't overwrite the "real" url with the sleep-page URL — slept entries
   // keep their originalUrl and are managed by sleep/wake directly. A staged
@@ -1159,7 +1178,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (leftover && !(await napDocumentMayRemain(windowId))) {
     await clearNapState(windowId, leftover.captureKey);
   }
-});
+}
 
 chrome.windows.onBoundsChanged.addListener(async (win) => {
   if (!win || win.id === undefined) return;
