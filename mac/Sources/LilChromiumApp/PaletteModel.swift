@@ -118,6 +118,21 @@ final class PaletteModel {
         )
     }
 
+    /// Resolve Tab: search for the typed text whatever row is selected (the
+    /// Raycast Tab-to-Quick-AI pattern). Same action as ⇧Return. The hint is
+    /// the input row's trailing `Search ⇥` label; nil (no action, no hint)
+    /// for an empty query.
+    func tabAction(for query: String) -> PaletteAction? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return PaletteAction(
+            kind: .search,
+            url: searchRow(trimmed).actionURL,
+            incognito: false,
+            hint: "Search ⇥"
+        )
+    }
+
     /// The host offered for inline type-ahead. When a history row sits above
     /// Search, that is the host Enter opens — ghost text must name it too.
     /// Otherwise the highest-scoring host-prefix origin, else nil.

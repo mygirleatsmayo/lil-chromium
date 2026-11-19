@@ -457,6 +457,28 @@ struct PaletteActionTests {
         #expect(action.hint == "⇧⏎ Search")
     }
 
+    @Test("Tab searches the typed text", .bug(id: 44))
+    func tabSearchesTheTypedText() throws {
+        let model = PaletteModel()
+        model.searchEngine = SearchEngineConfig(
+            name: "Kagi",
+            template: "https://kagi.com/search?q=%s",
+            provider: "kagi"
+        )
+
+        let action = try #require(model.tabAction(for: "privacy news"))
+
+        #expect(action.kind == .search)
+        #expect(action.url == "https://kagi.com/search?q=privacy%20news")
+        #expect(action.incognito == false)
+        #expect(action.hint == "Search ⇥")
+    }
+
+    @Test("Tab does nothing for an empty query", .bug(id: 44), arguments: ["", "   "])
+    func tabDoesNothingForAnEmptyQuery(_ query: String) {
+        #expect(PaletteModel().tabAction(for: query) == nil)
+    }
+
     @Test("Command-Return opens incognito", .bug(id: 14))
     func commandReturnOpensIncognito() throws {
         let model = PaletteModel()
