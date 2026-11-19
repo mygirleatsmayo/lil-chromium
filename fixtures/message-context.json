@@ -13,6 +13,7 @@
     "afterMinutes": 45,
     "audioGuard": true,
     "formGuard": false,
+    "localGuard": false,
     "tint": "#3311aa",
     "whitelist": ["mail.google.com"]
   },

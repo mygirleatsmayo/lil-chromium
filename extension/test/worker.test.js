@@ -82,6 +82,7 @@ test("context fixture lands as host identity plus config objects, with no bundle
   assert.equal(context.linkBehavior, "new-lil");
   assert.equal(context.sleep.afterMinutes, 45);
   assert.equal(context.sleep.formGuard, false);
+  assert.equal(context.sleep.localGuard, false);
   assert.equal(context.sleep.tint, "#3311aa");
   assert.deepEqual(context.sleep.whitelist, ["mail.google.com"]);
   assert.equal(context.searchEngine.name, "Kagi");
@@ -133,6 +134,7 @@ test("v1 config fixture yields the same additive defaults as the native suite", 
   assert.equal(context.sleep.afterMinutes, 30);
   assert.equal(context.sleep.audioGuard, true);
   assert.equal(context.sleep.formGuard, true);
+  assert.equal(context.sleep.localGuard, true);
   assert.equal(context.sleep.tint, "purple");
   assert.equal(context.sleep.whitelist.length, 0);
   assert.equal(context.searchEngine.name, "Startpage");
@@ -1311,6 +1313,61 @@ test("automatic Lil Nap independently skips a whitelisted domain", async () => {
   assert.equal(env.registry()[String(lil.id)].slept, undefined);
 });
 
+// Every form of "local page" in PROTOCOL.md's localGuard definition.
+const LOCAL_PAGE_URLS = [
+  "file:///Users/me/notes/index.html",
+  "http://localhost:3000/",
+  "http://app.localhost/",
+  "http://127.0.0.1:8080/",
+  "http://127.42.0.9/",
+  "http://[::1]:5173/",
+];
+
+async function napIdleLil(env, url, sleepPatch) {
+  const lil = await openTitledLil(env, { url, title: "Local" });
+  await applySleepConfig(env, {
+    enabled: true,
+    afterMinutes: 45,
+    audioGuard: false,
+    formGuard: false,
+    whitelist: [],
+    ...sleepPatch,
+  });
+  await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await parkIdle(env, lil, 46);
+  await env.alarm();
+  return lil;
+}
+
+test("automatic Lil Nap independently skips every form of local page when the local guard is on", async () => {
+  for (const url of LOCAL_PAGE_URLS) {
+    const env = await boot();
+    const lil = await napIdleLil(env, url, { localGuard: true });
+
+    assert.equal(lilTab(env, lil).url, url, url);
+    assert.equal(env.registry()[String(lil.id)].slept, undefined, url);
+  }
+});
+
+test("automatic Lil Nap naps local pages like any other page when the local guard is off", async () => {
+  for (const url of ["file:///Users/me/notes/index.html", "http://localhost:3000/"]) {
+    const env = await boot();
+    const lil = await napIdleLil(env, url, { localGuard: false });
+
+    assert.match(lilTab(env, lil).url, NAP_PAGE, url);
+    assert.equal(env.registry()[String(lil.id)].slept, true, url);
+  }
+});
+
+test("the local guard leaves look-alike remote hosts subject to automatic Lil Nap", async () => {
+  for (const url of ["https://localhost.example.com/", "http://128.0.0.1/", "https://notlocalhost/"]) {
+    const env = await boot();
+    const lil = await napIdleLil(env, url, { localGuard: true });
+
+    assert.match(lilTab(env, lil).url, NAP_PAGE, url);
+  }
+});
+
 test("automatic Lil Nap independently skips an incognito lil", async () => {
   const env = await boot();
   const lil = await openTitledLil(env, { url: "https://private.example/", title: "Secret", incognito: true });
@@ -1357,6 +1414,19 @@ test("manual Let This Lil Nap ignores automatic-only guards but still refuses in
   const privateReply = await env.message({ action: "sleepThisLil" }, sender(privateLil));
   assert.equal(privateReply.ok, false);
   assert.equal(lilTab(env, privateLil).url, "https://private.example/");
+});
+
+test("manual Let This Lil Nap works on local pages while the local guard is on", async () => {
+  for (const url of ["file:///Users/me/notes/index.html", "http://localhost:3000/"]) {
+    const env = await boot();
+    const lil = await openTitledLil(env, { url, title: "Local" });
+    await applySleepConfig(env, { enabled: true, localGuard: true });
+
+    const reply = await env.message({ action: "sleepThisLil" }, sender(lil));
+
+    assert.equal(reply.ok, true, url);
+    assert.match(lilTab(env, lil).url, NAP_PAGE, url);
+  }
 });
 
 const MANIFEST_PATH = path.resolve(path.dirname(WORKER_PATH), "manifest.json");
@@ -2112,6 +2182,7 @@ test("config-update replaces the cached config but keeps the host identity", asy
   assert.equal(context.ephemeralDefault, 12, "normalized from the wire's 12h");
   assert.equal(context.sleep.afterMinutes, 60);
   assert.equal(context.sleep.audioGuard, false);
+  assert.equal(context.sleep.localGuard, true, "replaces the context's false");
   assert.deepEqual(context.sleep.whitelist, ["example.com", "mail.google.com"]);
   assert.equal(context.searchEngine.name, "Bing");
   assert.equal(context.hoverBar.style, "glass");

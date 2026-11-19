@@ -72,6 +72,7 @@ const DEFAULT_SLEEP = {
   afterMinutes: 30,
   audioGuard: true,
   formGuard: true,
+  localGuard: true,
   tint: "purple",
   whitelist: [],
 };
@@ -143,6 +144,7 @@ function normalizeContext(msg) {
       afterMinutes: typeof sleep.afterMinutes === "number" ? sleep.afterMinutes : DEFAULT_SLEEP.afterMinutes,
       audioGuard: sleep.audioGuard !== false,
       formGuard: sleep.formGuard !== false,
+      localGuard: sleep.localGuard !== false,
       tint: typeof sleep.tint === "string" ? sleep.tint : DEFAULT_SLEEP.tint,
       whitelist: Array.isArray(sleep.whitelist) ? sleep.whitelist.slice() : [],
     },
@@ -1774,6 +1776,26 @@ function hostOf(url) {
   }
 }
 
+// Is this a page on this Mac — a file, or a loopback/localhost host? The URL
+// parser already lowercases hosts and canonicalizes IPv4 (`127.1`) and IPv6
+// (`[0::1]`) spellings; a trailing root dot (`localhost.`) is still the same host.
+function isLocalPage(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch (_) {
+    return false;
+  }
+  if (parsed.protocol === "file:") return true;
+  const host = parsed.hostname.replace(/\.$/, "");
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "[::1]" ||
+    /^127\.\d+\.\d+\.\d+$/.test(host)
+  );
+}
+
 // Does a host match any whitelist domain (exact or subdomain)?
 function hostWhitelisted(host, whitelist) {
   if (!host || !Array.isArray(whitelist)) return false;
@@ -1847,7 +1869,9 @@ async function runSweep() {
       if (!tab) continue;
       if (ctx.sleep.audioGuard && tab.audible) continue; // playing audio
       if (ctx.sleep.formGuard && dirtyTabs.has(tab.id)) continue; // unsubmitted form
-      const host = hostOf(tab.url || entry.url);
+      const url = tab.url || entry.url;
+      if (ctx.sleep.localGuard && isLocalPage(url)) continue; // file or localhost
+      const host = hostOf(url);
       if (hostWhitelisted(host, ctx.sleep.whitelist)) continue; // whitelisted
 
       await sleepLil(windowId);
