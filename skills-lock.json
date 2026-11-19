@@ -1,42 +1,48 @@
 {
-  "version": 1,
+  "version": 2,
   "skills": {
     "SVG Logo Designer": {
       "source": "rknall/claude-skills",
       "ref": "main",
       "sourceType": "github",
       "skillPath": "svg-logo-designer/SKILL.md",
-      "computedHash": "c591208a052cc9f7deb77be1183e4627daf54dbf575ea2653f519f29fe3bd4c8"
+      "computedHash": "e418b0b698948259a10a537a46e81b61ae385dd508889c267c2b3b7acd6680cc",
+      "commit": "ca7fbd0e07f824b119030f323da3409bc779f9bc"
     },
     "chrome-extension": {
       "source": "samber/cc-skills",
       "sourceType": "github",
       "skillPath": "skills/chrome-extension/SKILL.md",
-      "computedHash": "5dd6426a67ee46af74723726bb3fb512791c078836e6d38667240a40f3612840"
+      "computedHash": "106b2e01601e35f723241512635ce5c7af009e64ad37f1903d929d215700e955",
+      "commit": "50a33836b20f690c668af557bd9ef9d07a8c7ef2"
     },
     "logo-designer": {
       "source": "neonwatty/logo-designer-skill",
       "sourceType": "github",
       "skillPath": "skills/logo-designer/SKILL.md",
-      "computedHash": "69456cae88ba57420a639ec3183d38fffc690b1a996ccea9b626a45633d3360e"
+      "computedHash": "438daeab2b9f7936141a5ad0e38ac47133fd6f469dff6700ff2589d19abb1459",
+      "commit": "0feb0538b7520935c92e49d466e99cb75bfaad76"
     },
     "swift-testing-pro": {
       "source": "twostraws/swift-testing-agent-skill",
       "sourceType": "github",
       "skillPath": "swift-testing-pro/SKILL.md",
-      "computedHash": "576d9b4705c76262095e2470e99bb9a89324ac4467e7ee54b7032697a8789b3d"
+      "computedHash": "9b4907e1b8fe535b8626a2bf40e7b2857d76f61cec9b2e112e186f62d4a05e20",
+      "commit": "2d6bba14a3c8bf3694f218b92fffe617c41ae43e"
     },
     "swiftui-expert-skill": {
       "source": "avdlee/swiftui-agent-skill",
       "sourceType": "github",
       "skillPath": "skills/swiftui-expert-skill/SKILL.md",
-      "computedHash": "cb78ed6bbe4dabf53ef93431f8a0ae43e09cf39b8ce6e04dac1cc144f0cf02f4"
+      "computedHash": "187f7d0b9b9103f0935460c1b8060a77131c5ef24fa0d6757f5f5afdd23b7966",
+      "commit": "62bd760f005093d1e2e4de5db156e456a5f96400"
     },
     "swiftui-pro": {
       "source": "twostraws/swiftui-agent-skill",
       "sourceType": "github",
       "skillPath": "swiftui-pro/SKILL.md",
-      "computedHash": "07033426e384295a4b49cf0b2ffdefd4098cae4af53fef16bc1f2d9281118c41"
+      "computedHash": "5ae476da16f2b0af60385b856cdcb121a4f4675ddc06c27e81259f12e987aeb1",
+      "commit": "f2920b63995263f57b3e198674e89a602efba6d2"
     }
   }
 }
