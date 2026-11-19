@@ -19,7 +19,7 @@ Initial reviewed point: `6cfdb52`
 
 ## Remediation 1
 
-- N1 · `isSameDestination` treats `https://example.com:8443/` and `https://example.com/` as the same page: `normalizeURLKey` drops the port and only the query is added back · **fix** · Settled (P3): "same destination" means scheme, host, port, path and query all match; a different port is a different page.
+- N1 · `isSameDestination` treats `https://example.com:8443/` and `https://example.com/` as the same page: `normalizeURLKey` drops the port and only the query is added back · **fix** · Settled (P3): "same destination" keeps the dedupe key's trivial differences (case, scheme, `www.`, trailing slash); a different port or query is a different page.
 - N2 · The fix delta deletes `selectionThatStillShowsTheCompletionChangesNothing`, dropping the check that a selection still covering the completion leaves it pending · **fix**: restore that coverage through the stand-in field.
 
 ## Review status
