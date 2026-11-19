@@ -46,6 +46,10 @@ Initial reviewed point: `3aa5666`
 - P6 · "it runs off the main thread with out-of-date results dropped": a caret move leaves the ranking generation unchanged; type `git`, press ← while ranking is pending, and the completion still rewrites the field and replaces the caret with a selected suffix · **fix** · Settled: a completion applies only to the field state it was ranked for (same text, caret at the end, no selection); any edit, caret move or selection change since drops the completion. The rows still render, since they depend on the text alone.
 - P5 (again) · integration obligation, as above.
 
+### Caller
+
+- C2 · `PaletteModel.setIndex(_:)` is now called only from tests; the app installs through `install(_:from:)` (raised by the implementer; same kind as S9) · **fix**: tests install through the app's path; remove `setIndex`.
+
 ## Review status
 
 - Full review 1: 5 Standards (all fix), 5 Spec (P1, P3, P4 fix; P2 won't-fix; P5 at PR time).
