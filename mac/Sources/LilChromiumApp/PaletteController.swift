@@ -21,11 +21,14 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     private var selectedIndex: Int = 0
     private var currentReturnChord: PaletteReturnChord = .plain
 
-    // Inline autocomplete state.
-    /// The text the user has actually typed (excludes auto-appended completion).
-    /// Enter always opens row 0 (the top hit), so an "is completion active" flag
-    /// is unnecessary — the completion is purely visual.
-    private var committedQuery: String = ""
+    /// Typed text plus any displayed inline completion. Rows and Return derive
+    /// from this, never from the raw field text.
+    private var input = PaletteInput()
+    /// True while the controller itself writes the completion into the field,
+    /// so the selection changes it causes are not read as the user accepting it.
+    /// verified: setting `stringValue` on an editing field posts
+    /// didChangeSelection with the caret at the end — an apparent acceptance.
+    private var isShowingCompletion = false
 
     /// Anchor read fresh at each show() (a cheap file read, always fresh) and
     /// cached for the session so per-keystroke repositioning doesn't re-read the
@@ -62,8 +65,8 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         guard let panel = panel, let inputField = inputField else { return }
 
         // Reset input + autocomplete state each open.
+        input = PaletteInput()
         inputField.stringValue = ""
-        committedQuery = ""
         selectedIndex = 0
         currentReturnChord = .plain
 
@@ -79,7 +82,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         refreshHistory()
 
         // Render initial (empty-query) rows from whatever is cached.
-        reload(query: "")
+        reload()
 
         positionPanel()
         // Become key WITHOUT activating the whole app (accessory stays put).
@@ -149,6 +152,14 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         let field = PaletteSearchField()
         field.configureAsPaletteInput()
         field.delegate = self
+        // NSTextFieldDelegate has no selection callback; the field editor posts
+        // this one. Filtered to our field editor in the handler.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(fieldSelectionDidChange(_:)),
+            name: NSTextView.didChangeSelectionNotification,
+            object: nil
+        )
 
         let settingsButton = NSButton()
         settingsButton.translatesAutoresizingMaskIntoConstraints = false
@@ -291,14 +302,14 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
                 guard let self = self else { return }
                 self.model.setIndex(index)
                 // Re-render with whatever is currently typed.
-                self.reload(query: self.committedQuery)
+                self.reload()
             }
         }
     }
 
-    /// Recompute rows for a query and rebuild the stacked row views.
-    private func reload(query: String) {
-        currentRows = model.rows(for: query)
+    /// Recompute rows for the current input and rebuild the stacked row views.
+    private func reload() {
+        currentRows = model.rows(for: input)
         if currentRows.isEmpty {
             selectedIndex = 0
         } else if selectedIndex >= currentRows.count {
@@ -369,7 +380,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
 
     private func actionHint(for row: PaletteRow) -> String? {
         model.action(
-            for: committedQuery,
+            for: input,
             selectedRow: row,
             chord: currentReturnChord
         )?.hint
@@ -380,7 +391,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     private func activateSelection(chord: PaletteReturnChord = .plain) {
         guard !currentRows.isEmpty, selectedIndex < currentRows.count else { return }
         guard let action = model.action(
-            for: committedQuery,
+            for: input,
             selectedRow: currentRows[selectedIndex],
             chord: chord
         ) else { return }
@@ -470,54 +481,37 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
 
     func controlTextDidChange(_ obj: Notification) {
         guard let field = inputField else { return }
-        let newText = field.stringValue
-
-        // Deletion detection: compare against what the user had typed before.
-        // Autocomplete must NEVER fire after a deletion (per contract), so any
-        // change that isn't a strict forward extension of the committed query
-        // is treated as a deletion/edit.
-        let isInsertion = newText.count > committedQuery.count
-                          && newText.lowercased().hasPrefix(committedQuery.lowercased())
-
-        // The current user-typed text becomes the new committed query. When
-        // autocomplete was active, typing over the selected completion yields
-        // exactly the new typed text here (the selection was replaced).
-        committedQuery = newText
-
+        input = model.editing(input, to: field.stringValue)
         // Reset selection to the top on each edit so Enter opens the best match.
         selectedIndex = 0
-        reload(query: newText)
-
-        // Inline type-ahead: only on insertions, only if the top hit's host
-        // starts with the typed text (case-insensitive, "www." already stripped
-        // in the index).
-        if isInsertion, !newText.isEmpty {
-            applyAutocomplete(typed: newText, field: field)
-        }
+        reload()
+        showCompletion(in: field)
     }
 
-    /// If the current top-hit host begins with `typed`, complete the field to the
-    /// full host and SELECT the appended portion (so the next keystroke replaces
-    /// it — the "git → git[hub.com]" behavior).
-    private func applyAutocomplete(typed: String, field: PaletteSearchField) {
-        guard let host = model.autocompleteHost(for: typed) else { return }
-        let lowerTyped = typed.lowercased()
-        let lowerHost = host.lowercased()
-        // Host must start with the typed text and be strictly longer.
-        guard lowerHost.hasPrefix(lowerTyped), lowerHost.count > lowerTyped.count else { return }
+    /// Write the completed text into the field and SELECT the appended
+    /// remainder, so the next keystroke replaces it ("git" → "git[hub.com]").
+    private func showCompletion(in field: PaletteSearchField) {
+        guard let range = input.completionRange, let editor = field.fieldText else { return }
+        isShowingCompletion = true
+        defer { isShowingCompletion = false }
+        field.stringValue = input.text
+        editor.selectedRange = range
+    }
 
-        // Preserve the user's original casing for the typed prefix; append the
-        // remainder of the host verbatim.
-        let remainderStart = host.index(host.startIndex, offsetBy: typed.count)
-        let completed = typed + String(host[remainderStart...])
-
-        field.stringValue = completed
-        // Select the appended range using UTF-16 offsets (NSRange is UTF-16).
-        guard let editor = field.fieldText else { return }
-        let base = (typed as NSString).length
-        let full = (completed as NSString).length
-        editor.selectedRange = NSRange(location: base, length: full - base)
-        // committedQuery stays as the user-typed text (not the completion), so
-        // the next change's insertion/deletion check is against the real prefix.
+    /// →, ⌘→, End, or a click that drops the selected remainder accepts the
+    /// completion: rows and hint recompute for the full field text. Reads the
+    /// editor's current state, so it is correct whether AppKit posts this
+    /// before or after the text-change callback of an edit.
+    /// verified: typing over or deleting the selection posts this first, with
+    /// the edited text (≠ `input.text`, so a no-op), then controlTextDidChange;
+    /// moveRight: and moveToEndOfLine: post it with the text unchanged.
+    @objc private func fieldSelectionDidChange(_ note: Notification) {
+        guard !isShowingCompletion,
+              let editor = inputField?.fieldText,
+              (note.object as AnyObject?) === editor,
+              input.selectionDidChange(to: editor.selectedRange, in: editor.string)
+        else { return }
+        selectedIndex = 0
+        reload()
     }
 }
