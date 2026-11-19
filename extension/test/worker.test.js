@@ -523,6 +523,25 @@ test("promote to another browser posts open-external and removes the lil", async
   assert.equal(Object.keys(env.registry()).length, 0);
 });
 
+test("promoting a file lil to another browser carries the file URL", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "file:///Users/luke/index.html" });
+  await env.message({ action: "promote" }, sender(lil));
+  const ext = env.outgoing().find((m) => m.type === "open-external");
+  assert.equal(ext.url, "file:///Users/luke/index.html");
+  assert.equal(env.windows().length, 0);
+});
+
+test("promote keeps the lil open when the handoff cannot reach the host", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "file:///Users/luke/index.html" });
+  await env.disconnect();
+  await env.message({ action: "promote" }, sender(lil));
+  assert.equal(env.outgoing().some((m) => m.type === "open-external"), false);
+  assert.equal(env.windows().length, 1);
+  assert.ok(env.registry()[lil.id]);
+});
+
 test("a failed incognito context-menu create explains without opening the URL", async () => {
   const env = await boot({ rejectWindowCreate: (opts) => !!opts.incognito });
   await env.deliver(fixture("message-context"));

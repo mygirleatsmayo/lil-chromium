@@ -1966,6 +1966,9 @@ async function handOffToBrowser(tabId, browserSlug) {
   const tab = await safe(chrome.tabs.get(tabId), "tabs.get handoff");
   if (!tab || !tab.url) return false;
   const posted = postToHost({ type: "open-external", browser: browserSlug, url: tab.url });
+  // Closing is only safe once the page is on its way elsewhere; with the host
+  // unreachable, keep the lil so its page is never lost.
+  if (!posted) return false;
   const wid = tab.windowId;
   if (wid !== undefined) {
     await deregisterWindow(wid);

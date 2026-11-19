@@ -479,4 +479,11 @@ public struct OpenExternalMessage: Codable, Sendable {
         self.browser = (try? c.decode(String.self, forKey: .browser)) ?? ""
         self.url = (try? c.decode(String.self, forKey: .url)) ?? ""
     }
+
+    /// The host launches only web pages and local files (#47); any other
+    /// scheme (browser-internal pages, `javascript:`) is refused.
+    public var isLaunchable: Bool {
+        let lower = url.lowercased()
+        return ["http://", "https://", "file://"].contains { lower.hasPrefix($0) }
+    }
 }
