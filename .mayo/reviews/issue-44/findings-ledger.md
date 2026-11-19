@@ -30,3 +30,4 @@ Initial reviewed point: `fe8fa9e`
 - Full review 1: 3 Standards (S2, S3 fix; S1 integration), 0 Spec.
 - Remediation 1 (`fe8fa9e...1590a93`): S2, S3 resolved, no new defects.
 - Final review 1 (`bf45a2f...2767966`): Standards S4, S5 fix (S1 integration); Spec none.
+- Remediation 2 (`2767966...3be9c1c`): S4, S5 resolved, no new defects. Ledger resolved; ready to integrate (S1 at integration).
