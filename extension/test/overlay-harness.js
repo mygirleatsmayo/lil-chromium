@@ -286,15 +286,19 @@ function createChrome(options = {}) {
 }
 
 /**
- * Chromium's match-pattern test for only the forms the manifest uses: any
- * host and path of one scheme (`http`, `https`), or any local file path
- * (`file:` with an empty host). Any other form throws, so a manifest
- * change cannot silently slip past the harness.
+ * Chromium's match-pattern test for exactly the patterns the manifest uses.
+ * Any other pattern throws, so a manifest change cannot slip past the harness.
  */
-function matchesPattern(pattern, url) {
-  const m = /^([a-z]+):\/\/(\*?)\/\*$/.exec(pattern);
-  if (!m) throw new Error(`overlay harness cannot read match pattern ${pattern}`);
-  return url.protocol === m[1] + ":" && (m[2] === "*" || url.host === "");
+const MATCH_PATTERNS = new Map([
+  ["http://*/*", (url) => url.protocol === "http:"],
+  ["https://*/*", (url) => url.protocol === "https:"],
+  ["file:///*", (url) => url.protocol === "file:"],
+]);
+
+function patternTest(pattern) {
+  const test = MATCH_PATTERNS.get(pattern);
+  if (!test) throw new Error(`overlay harness cannot read match pattern ${pattern}`);
+  return test;
 }
 
 /**
@@ -304,9 +308,12 @@ function matchesPattern(pattern, url) {
  */
 function overlayInjects(url, { fileAccess = true } = {}) {
   if (!fileAccess && url.protocol === "file:") return false;
-  return MANIFEST.content_scripts.some(
-    (cs) => cs.js.includes("overlay.js") && cs.matches.some((p) => matchesPattern(p, url))
-  );
+  // Resolve every pattern before testing any, so an unsupported one throws
+  // even when an earlier pattern already matches.
+  const tests = MANIFEST.content_scripts
+    .filter((cs) => cs.js.includes("overlay.js"))
+    .flatMap((cs) => cs.matches.map(patternTest));
+  return tests.some((test) => test(url));
 }
 
 /**
