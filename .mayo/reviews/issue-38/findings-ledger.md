@@ -22,7 +22,12 @@ Initial reviewed point: `6cfdb52`
 - N1 · `isSameDestination` treats `https://example.com:8443/` and `https://example.com/` as the same page: `normalizeURLKey` drops the port and only the query is added back · **fix** · Settled (P3): "same destination" keeps the dedupe key's trivial differences (case, scheme, `www.`, trailing slash); a different port or query is a different page.
 - N2 · The fix delta deletes `selectionThatStillShowsTheCompletionChangesNothing`, dropping the check that a selection still covering the completion leaves it pending · **fix**: restore that coverage through the stand-in field.
 
+## Remediation 2
+
+- N3 · `ca?.port == cb?.port` treats `https://example.com:443/` and `https://example.com/` as different pages (`443` vs `nil`) · **fix** · Settled (N1): an explicit default port for its own scheme (`:80` for http, `:443` for https) is the same page as no port; any other port difference is a different page. Held to batch with P2 once Lucas decides.
+
 ## Review status
 
 - Full review 1: 4 Standards (all fix), 4 Spec (P1, P3, P4 fix; P2 pending Lucas).
 - Remediation 1 (`766c358...3b0ef21`): S1–S4, P1, P3, P4 resolved; 2 new defects (N1, N2 fix); P2 still pending Lucas.
+- Remediation 2 (`3b0ef21...b589f74`): N1, N2 resolved; N3 adjudicated fix (held for the P2 round); P2 still pending Lucas.
