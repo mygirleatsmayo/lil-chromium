@@ -495,14 +495,14 @@ async function setPriorContext(windowId, prior) {
     incognitoPriorContexts.set(windowId, prior);
     return overwrote;
   }
-  const reg = await getRegistry();
-  const entry = reg[String(windowId)];
-  if (!entry) return undefined;
-  const overwrote = normalizePriorContext(entry.priorContext);
-  entry.priorContext = prior;
-  priorContexts.set(windowId, prior);
-  await setRegistry(reg);
-  return overwrote;
+  return updateRegistry((reg) => {
+    const entry = reg[String(windowId)];
+    if (!entry) return undefined;
+    const overwrote = normalizePriorContext(entry.priorContext);
+    entry.priorContext = prior;
+    priorContexts.set(windowId, prior);
+    return overwrote;
+  });
 }
 
 // ===========================================================================
@@ -663,13 +663,23 @@ async function setRegistry(reg) {
   await safe(chrome.storage.local.set({ [REGISTRY_KEY]: reg }), "set registry");
 }
 
-// Runs registry read-modify-writes one at a time, so a write cannot carry a
-// stale read over another's change. Used by the navigation recorder and a
-// nap's staging and rollback, which race whenever a lil navigates mid-nap.
-let registryChain = Promise.resolve();
-function serializeRegistry(fn) {
-  const next = registryChain.then(fn, fn);
-  registryChain = next.catch(() => undefined);
+// Every registry change goes through here: one serialized read → change →
+// write, so no write carries a stale read over another's change. `change(reg)`
+// is synchronous: it edits `reg` in place, decides only from what it reads
+// there, and returns a result for the caller. Other I/O (captures, tab
+// queries) stays outside, so one lil's stall never holds another's update.
+// An unchanged registry is not rewritten.
+let registryQueue = Promise.resolve();
+function updateRegistry(change) {
+  const run = async () => {
+    const reg = await getRegistry();
+    const before = JSON.stringify(reg);
+    const result = change(reg);
+    if (JSON.stringify(reg) !== before) await setRegistry(reg);
+    return result;
+  };
+  const next = registryQueue.then(run, run);
+  registryQueue = next.catch(() => undefined);
   return next;
 }
 
@@ -691,30 +701,28 @@ function normalizeExpiry(v, fallback) {
 }
 
 async function registerWindow(windowId, url, bounds, extra) {
-  const reg = await getRegistry();
-  const prev = reg[String(windowId)] || {};
-  reg[String(windowId)] = Object.assign(
-    {
-      url,
-      bounds,
-      expiry: prev.expiry !== undefined ? prev.expiry : "never",
-      lastInteraction: Date.now(),
-    },
-    prev,
-    { url, bounds },
-    extra || {}
-  );
-  priorContexts.set(windowId, reg[String(windowId)].priorContext);
-  await setRegistry(reg);
+  await updateRegistry((reg) => {
+    const prev = reg[String(windowId)] || {};
+    reg[String(windowId)] = Object.assign(
+      {
+        url,
+        bounds,
+        expiry: prev.expiry !== undefined ? prev.expiry : "never",
+        lastInteraction: Date.now(),
+      },
+      prev,
+      { url, bounds },
+      extra || {}
+    );
+    priorContexts.set(windowId, reg[String(windowId)].priorContext);
+  });
 }
 
 async function deregisterWindow(windowId) {
   priorContexts.delete(windowId);
-  const reg = await getRegistry();
-  if (reg[String(windowId)] !== undefined) {
+  await updateRegistry((reg) => {
     delete reg[String(windowId)];
-    await setRegistry(reg);
-  }
+  });
 }
 
 // A window is a "lil" if it's in the persistent registry OR the in-memory
@@ -1050,12 +1058,15 @@ async function broadcastToWindow(windowId, message) {
 // ===========================================================================
 
 async function restoreWindows() {
-  const oldReg = await getRegistry();
-  const entries = Object.entries(oldReg);
+  // Take the parked entries and empty the registry in one update.
+  const entries = await updateRegistry((reg) => {
+    const parked = Object.entries(reg);
+    for (const [key] of parked) delete reg[key];
+    return parked;
+  });
   if (!entries.length) return;
 
   priorContexts.clear();
-  await setRegistry({});
 
   // Nap pages are rebuilt with the current configured tint; the normalized
   // context already carries the built-in default when configuration has none.
@@ -1105,17 +1116,15 @@ async function restoreWindows() {
 
   // Restored Chromium window ids are new. Re-key predecessor-lil references
   // after every window exists so chain order in storage cannot matter.
-  const reg = await getRegistry();
-  let remapped = false;
-  for (const [key, entry] of Object.entries(reg)) {
-    const prior = normalizePriorContext(entry && entry.priorContext);
-    if (!prior || prior.kind !== "lil") continue;
-    const newWindowId = restoredWindowIds.get(String(prior.windowId));
-    entry.priorContext = newWindowId === undefined ? null : { kind: "lil", windowId: newWindowId };
-    priorContexts.set(Number(key), entry.priorContext);
-    remapped = true;
-  }
-  if (remapped) await setRegistry(reg);
+  await updateRegistry((reg) => {
+    for (const [key, entry] of Object.entries(reg)) {
+      const prior = normalizePriorContext(entry && entry.priorContext);
+      if (!prior || prior.kind !== "lil") continue;
+      const newWindowId = restoredWindowIds.get(String(prior.windowId));
+      entry.priorContext = newWindowId === undefined ? null : { kind: "lil", windowId: newWindowId };
+      priorContexts.set(Number(key), entry.priorContext);
+    }
+  });
   log("restored", restored, "little window(s)");
 }
 
@@ -1126,46 +1135,41 @@ async function restoreWindows() {
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (!changeInfo.url) return;
   if (!tab || tab.windowId === undefined) return;
-  await serializeRegistry(() => recordNavigation(changeInfo, tab));
-});
-
-async function recordNavigation(changeInfo, tab) {
-  const reg = await getRegistry();
-  const key = String(tab.windowId);
-  if (reg[key]) {
-    // Don't overwrite the "real" url with the sleep-page URL — slept entries
-    // keep their originalUrl and are managed by sleep/wake directly.
-    // If the active, user-visible document has left the nap URL (page fallback
-    // whose own cleanup hung), finish the leftover registry/capture work.
-    // An inactive same-window wake preload reporting the original URL is not
-    // a completed wake and must not clear nap state; neither is the fresh
-    // document of a swap that still has a nap document to fall back to.
-    // A staged nap is not a nap yet (see stagedNaps): only its own release is
-    // skipped; any other navigation records below like an awake lil's.
-    const staged = stagedNaps.has(tab.windowId);
-    if (staged && isSleepPageUrl(changeInfo.url)) return; // the nap's own release
-    if (reg[key].slept && !staged) {
-      if (tab.active && !isSleepPageUrl(changeInfo.url) && !(await napDocumentMayRemain(tab.windowId))) {
-        await clearNapState(
-          tab.windowId,
-          reg[key].originalUrl || changeInfo.url,
-          reg[key].sleepCaptureKey
-        );
-      }
-      return;
+  const windowId = tab.windowId;
+  // Don't overwrite the "real" url with the sleep-page URL — slept entries
+  // keep their originalUrl and are managed by sleep/wake directly. A staged
+  // nap is not a nap yet (see stagedNaps): only its own release is skipped;
+  // any other navigation records like an awake lil's. Returns the capture key
+  // of a nap whose active, user-visible document has left the nap URL.
+  const leftover = await updateRegistry((reg) => {
+    const entry = reg[String(windowId)];
+    if (!entry) return null;
+    const staged = stagedNaps.has(windowId);
+    if (staged && isSleepPageUrl(changeInfo.url)) return null; // the nap's own release
+    if (entry.slept && !staged) {
+      return tab.active && !isSleepPageUrl(changeInfo.url) ? { captureKey: entry.sleepCaptureKey } : null;
     }
-    reg[key].url = changeInfo.url;
-    await setRegistry(reg);
+    entry.url = changeInfo.url;
+    return null;
+  });
+  // A page fallback whose own cleanup hung: finish the leftover registry and
+  // capture work. An inactive same-window wake preload reporting the original
+  // URL is not a completed wake and must not clear nap state; neither is the
+  // fresh document of a swap that still has a nap document to fall back to.
+  if (leftover && !(await napDocumentMayRemain(windowId))) {
+    await clearNapState(windowId, leftover.captureKey);
   }
-}
+});
 
 chrome.windows.onBoundsChanged.addListener(async (win) => {
   if (!win || win.id === undefined) return;
-  const reg = await getRegistry();
-  const key = String(win.id);
-  if (!reg[key]) return;
-  reg[key].bounds = { left: win.left, top: win.top, width: win.width, height: win.height };
-  await setRegistry(reg);
+  const isLil = await updateRegistry((reg) => {
+    const entry = reg[String(win.id)];
+    if (!entry) return false;
+    entry.bounds = { left: win.left, top: win.top, width: win.width, height: win.height };
+    return true;
+  });
+  if (!isLil) return;
   if (typeof win.width === "number" && typeof win.height === "number") {
     await setLastSize(win.width, win.height);
   }
@@ -1614,14 +1618,13 @@ async function sleepLil(windowId, { keepAwake = null } = {}) {
   stagedNaps.set(windowId, captureKey);
   let released = false;
   try {
-    await serializeRegistry(async () => {
-      const reg2 = await getRegistry();
-      if (!reg2[String(windowId)]) return;
-      reg2[String(windowId)].slept = true;
-      reg2[String(windowId)].sleepCaptureKey = captureKey;
-      reg2[String(windowId)].originalUrl = originalUrl;
-      reg2[String(windowId)].originalTitle = originalTitle;
-      await setRegistry(reg2);
+    await updateRegistry((reg) => {
+      const staging = reg[String(windowId)];
+      if (!staging) return;
+      staging.slept = true;
+      staging.sleepCaptureKey = captureKey;
+      staging.originalUrl = originalUrl;
+      staging.originalTitle = originalTitle;
     });
 
     released = await replaceTabDocument(
@@ -1634,15 +1637,13 @@ async function sleepLil(windowId, { keepAwake = null } = {}) {
       // back this entry's nap-only registry fields and the freshly stored
       // capture rather than claim a nap the user cannot see. Navigation fields
       // are the recorder's alone: a navigation mid-staging recorded normally.
-      await serializeRegistry(async () => {
-        const reg3 = await getRegistry();
-        const pending = reg3[String(windowId)];
+      await updateRegistry((reg) => {
+        const pending = reg[String(windowId)];
         if (!pending || pending.sleepCaptureKey !== captureKey) return;
         delete pending.slept;
         delete pending.sleepCaptureKey;
         delete pending.originalUrl;
         delete pending.originalTitle;
-        await setRegistry(reg3);
       });
     }
   } finally {
@@ -1705,21 +1706,21 @@ function waitForWakeSwap(tabId, startedAt) {
   });
 }
 
-// Clear every nap-only registry field while keeping the lil registered, and
-// delete the stored capture. Used after a successful wake replacement, and as
-// the event-driven backstop when the nap document is already gone.
-async function clearNapState(windowId, originalUrl, captureKey) {
-  const reg = await getRegistry();
-  const entry = reg[String(windowId)];
-  if (entry) {
+// Clear every nap-only registry field of the nap `captureKey` names while
+// keeping the lil registered, and delete that capture. Used after a successful
+// wake replacement, and as the event-driven backstop when the nap document is
+// already gone. The entry is cleared only while it is still that nap.
+async function clearNapState(windowId, captureKey) {
+  await updateRegistry((reg) => {
+    const entry = reg[String(windowId)];
+    if (!entry || !entry.slept || entry.sleepCaptureKey !== captureKey) return;
+    entry.url = entry.originalUrl || entry.url;
     delete entry.slept;
     delete entry.sleepCaptureKey;
     delete entry.originalUrl;
     delete entry.originalTitle;
-    entry.url = originalUrl;
     entry.lastInteraction = Date.now();
-    await setRegistry(reg);
-  }
+  });
   if (captureKey) await safe(idbDelete(captureKey), "idbDelete wake");
 }
 
@@ -1782,7 +1783,7 @@ async function wakeLil(windowId) {
       log("wakeLil: no fresh navigation possible for", windowId);
       return false;
     }
-    await clearNapState(windowId, originalUrl, captureKey);
+    await clearNapState(windowId, captureKey);
     log("woke lil", windowId, "(replacement fallback)");
     return true;
   }
@@ -1808,7 +1809,7 @@ async function wakeLil(windowId) {
     await safe(chrome.tabs.remove(freshTab.id), "tabs.remove wake preload");
     return false;
   }
-  await clearNapState(windowId, originalUrl, captureKey);
+  await clearNapState(windowId, captureKey);
   log("woke lil", windowId);
   return true;
 }
@@ -1962,11 +1963,10 @@ const dirtyTabs = new Set(); // tab ids with unsubmitted form input
 
 async function refreshLastInteraction(windowId) {
   if (windowId === undefined) return;
-  const reg = await getRegistry();
-  if (reg[String(windowId)]) {
-    reg[String(windowId)].lastInteraction = Date.now();
-    await setRegistry(reg);
-  }
+  await updateRegistry((reg) => {
+    const entry = reg[String(windowId)];
+    if (entry) entry.lastInteraction = Date.now();
+  });
 }
 
 // ===========================================================================
@@ -2283,14 +2283,13 @@ async function toggleWhitelist(host, add) {
 // ===========================================================================
 
 async function setLilExpiry(windowId, expiry) {
-  const reg = await getRegistry();
-  if (reg[String(windowId)]) {
-    reg[String(windowId)].expiry = normalizeExpiry(expiry, "never");
-    reg[String(windowId)].lastInteraction = Date.now();
-    await setRegistry(reg);
+  return updateRegistry((reg) => {
+    const entry = reg[String(windowId)];
+    if (!entry) return false;
+    entry.expiry = normalizeExpiry(expiry, "never");
+    entry.lastInteraction = Date.now();
     return true;
-  }
-  return false;
+  });
 }
 
 // ===========================================================================
