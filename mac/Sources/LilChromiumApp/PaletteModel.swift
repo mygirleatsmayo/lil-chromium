@@ -77,11 +77,9 @@ final class PaletteModel {
         chord: PaletteReturnChord
     ) -> PaletteAction? {
         if chord == [.shift] || chord == [.command, .shift] {
-            let row = searchRow(query.trimmingCharacters(in: .whitespacesAndNewlines))
             let incognito = chord == [.command, .shift]
-            return PaletteAction(
-                kind: .search,
-                url: row.actionURL,
+            return searchAction(
+                for: query.trimmingCharacters(in: .whitespacesAndNewlines),
                 incognito: incognito,
                 hint: incognito ? "⇧⌘⏎ Search Incognito" : "⇧⏎ Search"
             )
@@ -125,11 +123,17 @@ final class PaletteModel {
     func tabAction(for query: String) -> PaletteAction? {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        return PaletteAction(
+        return searchAction(for: trimmed, incognito: false, hint: "Search ⇥")
+    }
+
+    /// The forced-search action shared by ⇧Return, ⇧⌘Return, and Tab:
+    /// search the configured engine for `query` (already trimmed).
+    private func searchAction(for query: String, incognito: Bool, hint: String) -> PaletteAction {
+        PaletteAction(
             kind: .search,
-            url: searchRow(trimmed).actionURL,
-            incognito: false,
-            hint: "Search ⇥"
+            url: searchRow(query).actionURL,
+            incognito: incognito,
+            hint: hint
         )
     }
 

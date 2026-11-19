@@ -435,8 +435,27 @@ struct PaletteActionTests {
         #expect(action.hint == "⏎ Open")
     }
 
-    @Test("Shift-Return forces search", .bug(id: 14))
-    func shiftReturnForcesSearch() throws {
+    /// A shortcut that searches the typed text whatever row is selected.
+    struct ForcedSearchCase: Sendable, CustomTestStringConvertible {
+        let name: String
+        let hint: String
+        let resolve: @Sendable (PaletteModel, String, PaletteRow) -> PaletteAction?
+        var testDescription: String { name }
+    }
+
+    @Test(
+        "Shift-Return and Tab force search for the typed text",
+        .bug(id: 14), .bug(id: 44),
+        arguments: [
+            ForcedSearchCase(name: "Shift-Return", hint: "⇧⏎ Search") {
+                $0.action(for: $1, selectedRow: $2, chord: [.shift])
+            },
+            ForcedSearchCase(name: "Tab", hint: "Search ⇥") { model, query, _ in
+                model.tabAction(for: query)
+            },
+        ]
+    )
+    func forcedSearchUsesTheTypedText(_ shortcut: ForcedSearchCase) throws {
         let model = PaletteModel()
         model.searchEngine = SearchEngineConfig(
             name: "Kagi",
@@ -445,33 +464,12 @@ struct PaletteActionTests {
         )
         let selectedRow = try #require(model.rows(for: "example.com/pricing").first)
 
-        let action = try #require(model.action(
-            for: "privacy news",
-            selectedRow: selectedRow,
-            chord: [.shift]
-        ))
+        let action = try #require(shortcut.resolve(model, "privacy news", selectedRow))
 
         #expect(action.kind == .search)
         #expect(action.url == "https://kagi.com/search?q=privacy%20news")
         #expect(action.incognito == false)
-        #expect(action.hint == "⇧⏎ Search")
-    }
-
-    @Test("Tab searches the typed text", .bug(id: 44))
-    func tabSearchesTheTypedText() throws {
-        let model = PaletteModel()
-        model.searchEngine = SearchEngineConfig(
-            name: "Kagi",
-            template: "https://kagi.com/search?q=%s",
-            provider: "kagi"
-        )
-
-        let action = try #require(model.tabAction(for: "privacy news"))
-
-        #expect(action.kind == .search)
-        #expect(action.url == "https://kagi.com/search?q=privacy%20news")
-        #expect(action.incognito == false)
-        #expect(action.hint == "Search ⇥")
+        #expect(action.hint == shortcut.hint)
     }
 
     @Test("Tab does nothing for an empty query", .bug(id: 44), arguments: ["", "   "])
