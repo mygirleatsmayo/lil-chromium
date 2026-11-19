@@ -33,8 +33,15 @@ Initial reviewed point: `07ffe5a`
 
 - N1 (still unresolved) and N2 (new) · The rollback now writes `pending.url` from a `tabs.get` snapshot. Racing the navigation handler, it can be overwritten by the old URL (N1), or itself overwrite a newer navigation the handler already saved (N2: registry keeps `/` while the lil shows `/next`). The test holds a live reference to the entry (`const before = env.registry()[…]`), so it can miss changes · **fix** · Settled: root cause first. While a nap is staged, the navigation handler reads any user navigation as a finished wake (`clearNapState` resets `url` to `originalUrl`); that misreading is the defect, and patching the rollback around it races. Requirements: (1) a user navigation while a nap is staged is recorded by the same path, with the same fields, as an awake lil's navigation; (2) the rollback only removes the nap fields and the capture, and never writes navigation fields from a snapshot; (3) the tests compare against deep copies and cover both orders (navigation before and after the rollback). Restart reopens the page the lil shows in every order.
 
+## Remediation 3
+
+- N1 (still unresolved) · A registry writer outside the queue (the bounds handler) reads before the rollback and writes after it, restoring `slept` once the capture is deleted; restart then reopens the nap page with no capture · **fix** · Settled: root cause is the registry's unserialized read-modify-writes; queueing three writers leaves the rest racing. Every registry read-modify-write in the worker goes through one serialized update. This absorbs the implementer's follow-up (other writers overwrite each other).
+- N3 (new) · `serializeRegistry(() => recordNavigation(changeInfo, tab))` holds the queue through `clearNapState`'s capture deletion; a stalled deletion in one lil keeps another lil's navigation from being recorded · **fix** · Settled: the queue covers only the registry's read, change and write. Other I/O (captures, tab queries) runs outside it, and each change decides from the registry it reads inside the queue, not from an earlier read.
+- Tests for both: a bounds change racing the rollback leaves no nap state; a stalled capture deletion in one lil does not delay another lil's navigation record.
+
 ## Review status
 
 - Full review 1: 4 Standards (S1, S2, S4 fix; S3 won't-fix), 4 Spec (P1, P3 fix; P2, P4 won't-fix), 1 caller item (fix).
 - Remediation 1 (`ffa8ec5...111c2b7`): S1, S4, P1, P3, C1 resolved; S2 unresolved (fix); 1 new defect (N1, fix). C2, C3 accepted.
 - Remediation 2 (`111c2b7...d11c5c3`): S2 residual resolved; N1 unresolved and N2 new, merged into one root-cause fix.
+- Remediation 3 (`d11c5c3...518922d`): N2 resolved; earlier items still resolved; N1 unresolved (root cause widened to every registry writer); 1 new defect (N3, fix).
