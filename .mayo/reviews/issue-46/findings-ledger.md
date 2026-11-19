@@ -60,3 +60,4 @@ Initial reviewed point: `07ffe5a`
 - Remediation 4 (`518922d...4b5f231`): N1, N3 resolved; earlier items still resolved; 1 new defect (N4, fix).
 - Remediation 5 (`4b5f231...64e895f`): N4 resolved; earlier items still resolved; 1 new defect (N5, fix).
 - Remediation 6 (`64e895f...1ca91d3`): N5 resolved in production; earlier items still resolved; 1 new test gap (N6, fix).
+- Remediation 7 (`1ca91d3...647e0dc`): N6 resolved; earlier items still resolved; no new defects.
