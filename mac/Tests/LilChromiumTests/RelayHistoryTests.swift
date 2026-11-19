@@ -66,7 +66,8 @@ struct RelayHistoryTests {
     @Test(.bug(id: 41), arguments: [(length: 16, accepted: true), (length: 17, accepted: false)])
     func aReplyLineIsReadUpToTheCapAndNoFurther(length: Int, accepted: Bool) throws {
         var fds: [Int32] = [0, 0]
-        #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
+        // Fail before touching either descriptor: both start at 0 (stdin).
+        try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
         defer { close(fds[0]) }
         let line = Data(repeating: UInt8(ascii: "x"), count: length) + Data([0x0A])
         #expect(line.withUnsafeBytes { write(fds[1], $0.baseAddress, line.count) } == line.count)
