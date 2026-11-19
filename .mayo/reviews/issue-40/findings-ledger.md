@@ -47,3 +47,4 @@ Initial reviewed point: `1e09f76`
 - Remediation 2 (`b5a33fc...27ebd4f`): N1 resolved, no new defects.
 - Final review 1 (`bf45a2f...033ae4a`): Standards S5–S8 fix, S9, S10 won't-fix; Spec P5 fix, P4 settled won't-fix.
 - Remediation 3 (`033ae4a...2b16ff1`): S5–S8, P5 resolved; earlier items still resolved; 1 new defect (N2, fix).
+- Remediation 4 (`2b16ff1...993a073`): N2 resolved, no new defects. Ledger resolved; ready to integrate once Lucas approves the merge flow (K: S8 reverted if he answers no).
