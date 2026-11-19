@@ -58,6 +58,21 @@ struct ConfigMergeTests {
         #expect(probe["someFlag"] as? Bool == true)
     }
 
+    /// A Settings save rewrites every `sleep` field it owns but keeps the
+    /// nested keys it doesn't know — the same guarantee the host's
+    /// whitelist-op gives (issue #46: a newer guard must survive older saves).
+    @Test func savePreservesUnknownNestedSleepFields() throws {
+        let existing = try Fixture.data("config-with-unknown-fields")
+        var cfg = try JSONDecoder().decode(LilConfig.self, from: existing)
+        cfg.sleep.localGuard = false
+
+        let merged = try #require(ConfigMerge.mergedJSONData(existing: existing, applying: cfg))
+        let sleep = try #require(try jsonObject(merged)["sleep"] as? [String: Any])
+
+        #expect(sleep["unknownNestedProbe"] as? String == "chime")
+        #expect(sleep["localGuard"] as? Bool == false)
+    }
+
     /// With no file on disk yet, the merge is just the encoded config.
     @Test func saveFromNoExistingFileWritesTheConfig() throws {
         let merged = try #require(ConfigMerge.mergedJSONData(existing: nil, applying: .defaults))
@@ -115,7 +130,7 @@ struct ConfigMergeTests {
 
     /// The host's `whitelist-op` is a surgical edit: it touches only
     /// `sleep.whitelist` and preserves unknown keys anywhere else — including
-    /// inside `sleep` itself, which a full save would replace.
+    /// inside `sleep` itself.
     @Test func whitelistAddPreservesEverythingElse() throws {
         let existing = try Fixture.data("config-with-unknown-fields")
 

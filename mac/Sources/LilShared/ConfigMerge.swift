@@ -17,9 +17,8 @@ import Darwin
 /// object and overwrite only the keys we own, leaving everything else intact.
 ///
 /// Ownership rule (matches docs/PROTOCOL.md): a writer replaces the TOP-LEVEL
-/// keys it defines; nested objects (e.g. `sleep`) are replaced WHOLE, not
-/// deep-merged. That keeps the model simple and predictable — a component that
-/// owns `sleep` owns all of it.
+/// keys it defines; nested objects are replaced WHOLE, except those in
+/// `fieldMergedKeys`, whose own unknown keys survive (see there).
 public enum ConfigMerge {
 
     /// The set of top-level keys the Swift `LilConfig` model owns. Any other key
@@ -36,6 +35,13 @@ public enum ConfigMerge {
         "hoverBar",
         "knownBrowsers",
     ]
+
+    /// Owned objects merged field by field over what is on disk, so nested keys
+    /// a newer component added (e.g. a new Lil Nap guard) survive an app save,
+    /// matching the host's whitelist-op. Only safe for objects that always
+    /// encode every field they own: `hoverBar` omits an absent `tint`, so a
+    /// merge there would resurrect a tint the user cleared.
+    static let fieldMergedKeys: Set<String> = ["sleep"]
 
     /// Produce the merged JSON bytes for writing: start from `existing` (the raw
     /// bytes currently on disk, or nil), overlay the owned keys computed from
@@ -62,7 +68,12 @@ public enum ConfigMerge {
 
         // Overlay only the keys this model owns; leave every other key intact.
         for key in ownedKeys {
-            if let value = ownedDict[key] {
+            guard let value = ownedDict[key] else { continue }
+            if fieldMergedKeys.contains(key),
+               let onDisk = base[key] as? [String: Any],
+               let owned = value as? [String: Any] {
+                base[key] = onDisk.merging(owned) { _, new in new }
+            } else {
                 base[key] = value
             }
         }
