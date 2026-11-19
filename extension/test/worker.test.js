@@ -613,6 +613,7 @@ test("a normal window stops waiting once a pending creation turns out to be anot
 test("an early page stops waiting once its own lil registers", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));
+  const FILE = "file:///Users/luke/index.html";
   // Another lil stays held before its window id is known throughout.
   let releaseOther;
   const other = new Promise((r) => (releaseOther = r));
@@ -622,13 +623,33 @@ test("an early page stops waiting once its own lil registers", async () => {
     if (++created === 1) return other;
     asked = env.messageLater({ action: "isEphemeral" }, { tab });
   });
+  // Hold the file lil's creation just after it registers: the first storage
+  // read after its registry write is the menu refresh that follows.
+  let releaseTail;
+  const tail = new Promise((r) => (releaseTail = r));
+  let armed = false;
+  const { get, set } = env.chrome.storage.local;
+  env.chrome.storage.local.set = async (items) => {
+    await set.call(env.chrome.storage.local, items);
+    const reg = items.ephemeralWindows;
+    if (reg && Object.values(reg).some((e) => e.url === FILE)) armed = true;
+  };
+  env.chrome.storage.local.get = async (keys) => {
+    if (armed) {
+      armed = false;
+      await tail;
+    }
+    return get.call(env.chrome.storage.local, keys);
+  };
   const openingOther = env.deliver({ type: "open", url: "https://example.org/", left: 20, top: 20 });
   await env.flush();
-  await env.deliver({ type: "open", url: "file:///Users/luke/index.html", left: 10, top: 10 });
+  const opening = env.deliver({ type: "open", url: FILE, left: 10, top: 10 });
+  await env.flush();
   const reply = await settlesNow(env, asked);
+  releaseTail();
   releaseOther();
-  await openingOther;
-  assert.ok(reply, "answered once its own lil registered");
+  await Promise.all([opening, openingOther]);
+  assert.ok(reply, "answered once its own lil registered, before its creation ended");
   assert.equal(reply.ephemeral, true);
 });
 
