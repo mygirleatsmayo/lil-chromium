@@ -317,9 +317,9 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         let ticket = model.beginRanking()
         let worker = model.copy()
         let work = DispatchWorkItem { [weak self] in
-            let results = worker.results(for: query)
+            let ranked = worker.results(for: query)
             DispatchQueue.main.async {
-                guard let self, self.model.isCurrent(ticket) else { return }
+                guard let self, let results = self.model.land(ranked, from: ticket) else { return }
                 self.pendingRank = nil
                 self.render(results.rows)
                 // Rows depend on the text alone; a completion also needs the

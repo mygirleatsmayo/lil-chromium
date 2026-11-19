@@ -661,16 +661,23 @@ struct PaletteOutOfDateTests {
         #expect(model.rows(for: "").map(\.host) == ["newer.example"])
     }
 
+    /// The controller renders only what `land(_:from:)` hands back.
     @Test(.bug(id: 41)) func aRankingForAnOlderQueryIsNotRenderedAfterANewerEdit() {
         let model = PaletteModel()
+        model.install(Ranking.buildIndex(items: [
+            HistoryItem(url: "https://older.example/", title: "", lastVisitTime: 0, visitCount: 1, typedCount: 0),
+            HistoryItem(url: "https://newer.example/", title: "", lastVisitTime: 0, visitCount: 1, typedCount: 0),
+        ], nowMs: 0), from: model.beginRefresh())
         let older = model.beginRanking()
+        let olderResults = model.results(for: "older")
         let newer = model.beginRanking()
+        let newerResults = model.results(for: "newer")
 
-        #expect(!model.isCurrent(older))
-        #expect(model.isCurrent(newer))
+        #expect(model.land(olderResults, from: older) == nil)
+        #expect(model.land(newerResults, from: newer)?.rows.first?.host == "newer.example")
         // Closing the palette, or Return settling the rows, outdates it too.
         model.outdateRankings()
-        #expect(!model.isCurrent(newer))
+        #expect(model.land(newerResults, from: newer) == nil)
     }
 
     /// A completion applies only to the field state it was ranked for: the

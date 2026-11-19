@@ -114,8 +114,10 @@ final class PaletteModel {
         newestRanking += 1
     }
 
-    func isCurrent(_ ticket: RankingTicket) -> Bool {
-        ticket.number == newestRanking
+    /// The results to render for a ranking that landed, or nil when a newer
+    /// ranking began or rankings were outdated since `ticket` was taken.
+    func land(_ results: PaletteResults, from ticket: RankingTicket) -> PaletteResults? {
+        ticket.number == newestRanking ? results : nil
     }
 
     /// Resolve Return at the native palette boundary. Unsupported modifier
