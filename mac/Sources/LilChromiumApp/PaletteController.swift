@@ -14,17 +14,17 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     private var container: NSView?
     private var contentRoot: NSView?
     private var inputField: PaletteSearchField?
-    private var resultsStack: NSStackView?
+    private var resultsStack: PaletteResultsStackView?
     private var hairline: HairlineBorderView?
 
     private var currentRows: [PaletteRow] = []
-    private var selectedIndex: Int = 0
+    private var selection = PaletteSelection()
     private var currentReturnChord: PaletteReturnChord = .plain
 
     // Inline autocomplete state.
     /// The text the user has actually typed (excludes auto-appended completion).
-    /// Enter always opens row 0 (the top hit), so an "is completion active" flag
-    /// is unnecessary — the completion is purely visual.
+    /// Enter opens the selected row (row 0 after every edit), so an "is
+    /// completion active" flag is unnecessary — the completion is purely visual.
     private var committedQuery: String = ""
 
     /// Anchor read fresh at each show() (a cheap file read, always fresh) and
@@ -64,7 +64,6 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         // Reset input + autocomplete state each open.
         inputField.stringValue = ""
         committedQuery = ""
-        selectedIndex = 0
         currentReturnChord = .plain
 
         // Read config fresh at each show() (always current), cache for the
@@ -79,13 +78,15 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         refreshHistory()
 
         // Render initial (empty-query) rows from whatever is cached.
-        reload(query: "")
+        reload(query: "", resetSelection: true)
 
         positionPanel()
         // Become key WITHOUT activating the whole app (accessory stays put).
         panel.orderFrontRegardless()
         panel.makeKey()
         panel.makeFirstResponder(inputField)
+        // Hover reflects only where the pointer is now, never a past session.
+        syncHoverToPointer()
     }
 
     /// Close the palette. The ONLY paths that call this: Esc, ⌘⌥N toggle, the X
@@ -186,7 +187,8 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         inputRow.addSubview(closeButton)
 
         // --- Results stack ---
-        let stack = NSStackView()
+        let stack = PaletteResultsStackView()
+        stack.onPointerChange = { [weak self] in self?.syncHoverToPointer() }
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -290,35 +292,32 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.model.setIndex(index)
-                // Re-render with whatever is currently typed.
-                self.reload(query: self.committedQuery)
+                // Re-render with whatever is currently typed. Clamp rather
+                // than reset: the user may already have arrowed down.
+                self.reload(query: self.committedQuery, resetSelection: false)
             }
         }
     }
 
     /// Recompute rows for a query and rebuild the stacked row views.
-    private func reload(query: String) {
-        currentRows = model.rows(for: query)
-        if currentRows.isEmpty {
-            selectedIndex = 0
-        } else if selectedIndex >= currentRows.count {
-            selectedIndex = currentRows.count - 1
-        }
+    private func reload(query: String, resetSelection: Bool) {
+        currentRows = Array(model.rows(for: query).prefix(maxResultRows))
+        selection.rowsChanged(count: currentRows.count, resetSelection: resetSelection)
         rebuildRowViews()
         positionPanel()
+        // Rows (and the panel) moved under a possibly parked pointer, which
+        // fires no tracking event; hit-test it directly.
+        syncHoverToPointer()
     }
 
     private func rebuildRowViews() {
         guard let stack = resultsStack else { return }
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
-        for (i, row) in currentRows.prefix(maxResultRows).enumerated() {
+        for (i, row) in currentRows.enumerated() {
             let rowView = PaletteRowView()
-            rowView.configure(row, selected: i == selectedIndex,
-                              hint: i == selectedIndex ? actionHint(for: row) : nil,
-                              index: i)
+            rowView.configure(row, index: i)
             rowView.heightAnchor.constraint(equalToConstant: resultRowHeight).isActive = true
-            rowView.onHover = { [weak self] idx in self?.hoverSelect(idx) }
             rowView.onClick = { [weak self] idx in self?.clickRow(idx) }
             stack.addArrangedSubview(rowView)
             // Pin each row to the stack width at REQUIRED priority: rows never
@@ -329,41 +328,44 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
             w.priority = .required
             w.isActive = true
         }
+        refreshHighlights()
     }
 
     private func clickRow(_ idx: Int) {
-        guard idx >= 0 && idx < currentRows.count else { return }
-        selectedIndex = idx
+        selection.click(idx)
+        refreshHighlights()
         activateSelection()
     }
 
-    private func hoverSelect(_ idx: Int) {
-        guard idx >= 0 && idx < currentRows.count, idx != selectedIndex else { return }
-        selectedIndex = idx
-        refreshSelectionHighlight()
+    /// Hover follows the row actually under the pointer, read from the window
+    /// rather than inferred from enter/exit events, so rebuilt rows, a resized
+    /// panel, and a reopened palette all land on the truth. Visual only.
+    private func syncHoverToPointer() {
+        var hovered: Int?
+        if let panel, panel.isVisible, let stack = resultsStack {
+            stack.layoutSubtreeIfNeeded()
+            let point = stack.convert(panel.mouseLocationOutsideOfEventStream, from: nil)
+            hovered = stack.arrangedSubviews.firstIndex { $0.frame.contains(point) }
+        }
+        guard hovered != selection.hovered else { return }
+        selection.hover(hovered)
+        refreshHighlights()
     }
 
     // MARK: - Selection & activation
 
-    private enum Direction { case up, down }
-
-    private func moveSelection(_ direction: Direction) {
-        guard !currentRows.isEmpty else { return }
-        let count = min(currentRows.count, maxResultRows)
-        switch direction {
-        case .up:   selectedIndex = (selectedIndex - 1 + count) % count  // wraparound
-        case .down: selectedIndex = (selectedIndex + 1) % count
-        }
-        refreshSelectionHighlight()
+    private func moveSelection(_ direction: PaletteSelection.Direction) {
+        selection.move(direction)
+        refreshHighlights()
     }
 
-    private func refreshSelectionHighlight() {
+    private func refreshHighlights() {
         guard let stack = resultsStack else { return }
         for (i, view) in stack.arrangedSubviews.enumerated() {
             guard let rowView = view as? PaletteRowView, i < currentRows.count else { continue }
-            rowView.configure(currentRows[i], selected: i == selectedIndex,
-                              hint: i == selectedIndex ? actionHint(for: currentRows[i]) : nil,
-                              index: i)
+            let highlight = selection.highlight(for: i)
+            rowView.setHighlight(highlight,
+                                 hint: highlight == .selected ? actionHint(for: currentRows[i]) : nil)
         }
     }
 
@@ -378,10 +380,10 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// Resolve and open the current Return action. Mouse clicks use the plain
     /// chord; keyboard submission uses the current event's semantic chord.
     private func activateSelection(chord: PaletteReturnChord = .plain) {
-        guard !currentRows.isEmpty, selectedIndex < currentRows.count else { return }
+        guard currentRows.indices.contains(selection.selected) else { return }
         guard let action = model.action(
             for: committedQuery,
-            selectedRow: currentRows[selectedIndex],
+            selectedRow: currentRows[selection.selected],
             chord: chord
         ) else { return }
         if action.kind == .settings {
@@ -420,7 +422,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         let chord = Self.returnChord(from: flags)
         guard chord != currentReturnChord else { return }
         currentReturnChord = chord
-        refreshSelectionHighlight()
+        refreshHighlights()
     }
 
     /// Chrome-space coordinates anchored to the palette's current position.
@@ -485,8 +487,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         committedQuery = newText
 
         // Reset selection to the top on each edit so Enter opens the best match.
-        selectedIndex = 0
-        reload(query: newText)
+        reload(query: newText, resetSelection: true)
 
         // Inline type-ahead: only on insertions, only if the top hit's host
         // starts with the typed text (case-insensitive, "www." already stripped
