@@ -1429,6 +1429,15 @@ test("the local guard leaves look-alike remote hosts subject to automatic Lil Na
   }
 });
 
+test("the whitelist matches a non-special scheme's host whatever its case", async () => {
+  // The URL parser lowercases only special schemes' hosts (http, https, ...).
+  const env = await boot();
+  const lil = await sweepIdleLil(env, "lilapp://Mail.Google.com/inbox", { whitelist: ["mail.google.com"] });
+
+  assert.equal(lilTab(env, lil).url, "lilapp://Mail.Google.com/inbox");
+  assert.equal(env.registry()[String(lil.id)].slept, undefined);
+});
+
 test("automatic Lil Nap independently skips an incognito lil", async () => {
   const env = await boot();
   const lil = await openTitledLil(env, { url: "https://private.example/", title: "Secret", incognito: true });

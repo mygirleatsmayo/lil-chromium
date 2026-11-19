@@ -1800,10 +1800,11 @@ function parseUrl(url) {
 }
 
 // The automatic sweep's page guards (local pages, whitelisted domains) over one
-// parsed URL. Both read the hostname the URL parser already lowercased.
+// parsed URL. The whitelist lowercases as hostOf does: the URL parser leaves
+// the case of non-special schemes' hosts alone.
 function pageKeepsAwake(sleep, parsed) {
   if (sleep.localGuard && isLocalPage(parsed)) return true; // file or localhost
-  return hostWhitelisted(parsed.hostname, sleep.whitelist); // whitelisted
+  return hostWhitelisted(parsed.hostname.toLowerCase(), sleep.whitelist); // whitelisted
 }
 
 // Is this a page on this Mac — a file, or a loopback/localhost host? The URL
