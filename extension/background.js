@@ -880,12 +880,13 @@ const lilCreations = new Set();
 
 // Resolves on the next change to creation state: a window id learned, a lil
 // registered, or a creation ended. Waiters re-check on each change.
-let creationChange = Promise.withResolvers();
+let resolveCreationChange;
+let creationChange = new Promise((resolve) => (resolveCreationChange = resolve));
 
 function signalCreationChange() {
-  const settled = creationChange;
-  creationChange = Promise.withResolvers();
-  settled.resolve();
+  const resolve = resolveCreationChange;
+  creationChange = new Promise((next) => (resolveCreationChange = next));
+  resolve();
 }
 
 // Settles once `windowId` is a known lil, or no pending creation can still be
@@ -894,7 +895,7 @@ function signalCreationChange() {
 async function lilCreationSettled(windowId) {
   for (;;) {
     // Take the signal before checking, so a change during the check still wakes us.
-    const changed = creationChange.promise;
+    const changed = creationChange;
     if (await isEphemeralWindow(windowId)) return;
     const couldBeSender = (c) => c.windowId === undefined || c.windowId === windowId;
     if (![...lilCreations].some(couldBeSender)) return;
