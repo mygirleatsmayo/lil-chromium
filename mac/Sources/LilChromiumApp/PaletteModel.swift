@@ -51,7 +51,8 @@ struct PaletteReturnChord: OptionSet, Equatable, Sendable {
 /// and turns a query string into ordered rows.
 ///
 /// The index is rebuilt only when a new snapshot arrives (once per palette
-/// open), so per-keystroke ranking is cheap even at 3000 items.
+/// open). Ranking a keystroke still scans the whole window, so the controller
+/// runs it off the main thread on a `copy()`.
 final class PaletteModel {
 
     private(set) var index: Ranking.HistoryIndex = .empty
@@ -62,6 +63,15 @@ final class PaletteModel {
     /// per-keystroke row building doesn't re-read config.json. Defaults to
     /// Startpage.
     var searchEngine: SearchEngineConfig = .defaults
+
+    /// An independent copy of the snapshot and engine, so a keystroke can be
+    /// ranked off the main thread while the original keeps changing (issue #41).
+    func copy() -> PaletteModel {
+        let copy = PaletteModel()
+        copy.index = index
+        copy.searchEngine = searchEngine
+        return copy
+    }
 
     /// Replace the cached snapshot and rebuild the index off the main thread's
     /// hot path is the caller's job; this just stores the prebuilt index.
@@ -122,9 +132,15 @@ final class PaletteModel {
     /// Search, that is the host Enter opens — ghost text must name it too.
     /// Otherwise the highest-scoring host-prefix origin, else nil.
     func autocompleteHost(for query: String) -> String? {
+        autocompleteHost(for: query, rows: rows(for: query))
+    }
+
+    /// `autocompleteHost(for:)` reusing the rows already computed for `query`,
+    /// so a keystroke ranks the history once, not twice.
+    func autocompleteHost(for query: String, rows: [PaletteRow]) -> String? {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty, !URLIntent.looksLikeURL(trimmed) {
-            if let top = rows(for: query).first, top.kind == .history {
+            if let top = rows.first, top.kind == .history {
                 return top.host
             }
         }

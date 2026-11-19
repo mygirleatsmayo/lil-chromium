@@ -27,6 +27,15 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// is unnecessary — the completion is purely visual.
     private var committedQuery: String = ""
 
+    /// Typed queries rank off the main thread: across a full history window
+    /// (20,000 items) one keystroke takes ~100 ms in a release build (issue
+    /// #41). Serial, so a newer query never races an older one; each edit
+    /// cancels the queued one and bumps `rankGeneration`, so a result that
+    /// lands after a newer edit is dropped.
+    private let rankQueue = DispatchQueue(label: "com.lilchromium.palette.rank", qos: .userInteractive)
+    private var pendingRank: DispatchWorkItem?
+    private var rankGeneration = 0
+
     /// Anchor read fresh at each show() (a cheap file read, always fresh) and
     /// cached for the session so per-keystroke repositioning doesn't re-read the
     /// config file. Refreshed on the next show().
@@ -78,8 +87,11 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         // Refresh history cache on open (async) then re-render.
         refreshHistory()
 
-        // Render initial (empty-query) rows from whatever is cached.
-        reload(query: "")
+        // Render initial (empty-query) rows from whatever is cached. The empty
+        // query is a frecency listing (~1 ms at 20,000 items), so the palette
+        // appears complete at once.
+        cancelPendingRank()
+        render(model.rows(for: ""))
 
         positionPanel()
         // Become key WITHOUT activating the whole app (accessory stays put).
@@ -92,6 +104,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// button, opening a result, and showing Settings. No resignKey /
     /// deactivation path exists.
     func close() {
+        cancelPendingRank()
         panel?.orderOut(nil)
     }
 
@@ -297,9 +310,48 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         }
     }
 
-    /// Recompute rows for a query and rebuild the stacked row views.
-    private func reload(query: String) {
-        currentRows = model.rows(for: query)
+    /// Recompute rows for a query off the main thread, then render them if no
+    /// newer edit arrived meanwhile. `autocomplete` also offers inline
+    /// type-ahead for the top hit once the rows land.
+    private func reload(query: String, autocomplete: Bool = false) {
+        cancelPendingRank()
+        let generation = rankGeneration
+        let worker = model.copy()
+        let work = DispatchWorkItem { [weak self] in
+            let rows = worker.rows(for: query)
+            let host = autocomplete ? worker.autocompleteHost(for: query, rows: rows) : nil
+            DispatchQueue.main.async {
+                guard let self, generation == self.rankGeneration else { return }
+                self.pendingRank = nil
+                self.render(rows)
+                if let host, let field = self.inputField {
+                    self.applyAutocomplete(typed: query, host: host, field: field)
+                }
+            }
+        }
+        pendingRank = work
+        rankQueue.async(execute: work)
+    }
+
+    /// Drop the queued or in-flight ranking; its result will not render.
+    private func cancelPendingRank() {
+        pendingRank?.cancel()
+        pendingRank = nil
+        rankGeneration += 1
+    }
+
+    /// Keyboard selection and Return act on the rows for what is typed now:
+    /// if they are still being ranked, rank them here instead of acting on the
+    /// previous query's rows. Clicks and hover act on the rows on screen.
+    private func settleRows() {
+        guard pendingRank != nil else { return }
+        cancelPendingRank()
+        render(model.rows(for: committedQuery))
+    }
+
+    /// Show `rows` and rebuild the stacked row views.
+    private func render(_ rows: [PaletteRow]) {
+        currentRows = rows
         if currentRows.isEmpty {
             selectedIndex = 0
         } else if selectedIndex >= currentRows.count {
@@ -453,12 +505,15 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         switch selector {
         case #selector(NSResponder.insertNewline(_:)):
+            settleRows()
             activateSelection(chord: returnChordOnCurrentEvent())
             return true
         case #selector(NSResponder.moveUp(_:)):
+            settleRows()
             moveSelection(.up)
             return true
         case #selector(NSResponder.moveDown(_:)):
+            settleRows()
             moveSelection(.down)
             return true
         case #selector(NSResponder.cancelOperation(_:)):
@@ -487,21 +542,16 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
 
         // Reset selection to the top on each edit so Enter opens the best match.
         selectedIndex = 0
-        reload(query: newText)
-
         // Inline type-ahead: only on insertions, only if the top hit's host
         // starts with the typed text (case-insensitive, "www." already stripped
         // in the index).
-        if isInsertion, !newText.isEmpty {
-            applyAutocomplete(typed: newText, field: field)
-        }
+        reload(query: newText, autocomplete: isInsertion && !newText.isEmpty)
     }
 
-    /// If the current top-hit host begins with `typed`, complete the field to the
+    /// If the top-hit `host` begins with `typed`, complete the field to the
     /// full host and SELECT the appended portion (so the next keystroke replaces
     /// it — the "git → git[hub.com]" behavior).
-    private func applyAutocomplete(typed: String, field: PaletteSearchField) {
-        guard let host = model.autocompleteHost(for: typed) else { return }
+    private func applyAutocomplete(typed: String, host: String, field: PaletteSearchField) {
         let lowerTyped = typed.lowercased()
         let lowerHost = host.lowercased()
         // Host must start with the typed text and be strictly longer.
