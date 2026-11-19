@@ -50,6 +50,12 @@ Initial reviewed point: `3aa5666`
 
 - C2 · `PaletteModel.setIndex(_:)` is now called only from tests; the app installs through `install(_:from:)` (raised by the implementer; same kind as S9) · **fix**: tests install through the app's path; remove `setIndex`.
 
+## Remediation 4
+
+- P6 residual · `completionApplies(… selection: editor.selectedRange)` checks only the final field state; type `git`, press ← then → before ranking lands, and the completion still applies · **won't-fix** · Settled (amends P6): the test is the field state, not its history. The rule exists so a completion never overrides a caret or selection the user set; a caret back at the end with nothing selected is the state the completion was ranked for, so applying it overrides nothing. P6 is resolved on this basis.
+- S8 residual · The ranking test asserts only `#expect(!model.isCurrent(older))`; it still passes if the controller renders a stale ranking · **fix** (S8 not yet met): the gate that decides whether a ranking's rows render lives where the test exercises it (as `install(_:from:)` does for refreshes), so the test fails if a stale ranking renders.
+- S11 residual · `ping` still throws `.noReplyLine` when a line arrives but `decodeLine(PongMessage.self, …)` fails · **fix** (S11 not yet met): a line that arrives but does not decode throws `.decodeFailed` on `ping`, as on history; `.noReplyLine` means no usable line was read.
+
 ## Review status
 
 - Full review 1: 5 Standards (all fix), 5 Spec (P1, P3, P4 fix; P2 won't-fix; P5 at PR time).
@@ -57,3 +63,4 @@ Initial reviewed point: `3aa5666`
 - Remediation 2 (`a6d1d34...4149555`): S4 residual, N1, C1 resolved; 1 new defect (N2, fix).
 - Remediation 3 (`4149555...52e16bb`): N2 resolved, no new defects. Ledger resolved; final full review next.
 - Final review 1 (`bf45a2f...103b92e`): Standards S8–S11 fix; S6, S7 won't-fix. Spec P6 fix; P1 (again) settled won't-fix; P5 at PR time.
+- Remediation 4 (`bb01d2c...d73fb10`): S9, S10, C2 resolved; P6 residual adjudicated won't-fix (P6 resolved); S8, S11 unresolved (fix); no new defects.
