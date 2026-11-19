@@ -130,7 +130,7 @@ function sandbox({ chrome, indexedDB, clock }) {
  */
 export async function boot(options = {}) {
   const chrome = createChrome(options);
-  const indexedDB = createIndexedDB();
+  const indexedDB = createIndexedDB({ deleteGate: options.idbDeleteGate });
   const clock = options.clock === true ? createClock() : null;
   const context = vm.createContext(sandbox({ chrome, indexedDB, clock }));
 
