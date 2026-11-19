@@ -36,9 +36,14 @@ Initial reviewed point: `438f7db`
 - P1 · still **needs adjudication (Lucas)**.
 - P3 · still Lucas's live check.
 
+## Remediation 3
+
+- N2 · `await Promise.allSettled(lilCreations)` makes every `isEphemeral` answer wait on every in-flight creation; a registered lil cannot mount its hoverbar until an unrelated lil finishes opening · **fix** · Settled (P4): the answer waits only while the sender's window could still be a lil being created: its own creation, or a creation whose window is not yet known. A registered lil, and any window no pending creation can be, answers at once.
+
 ## Review status
 
 - Full review 1: 4 Standards (all fix), 3 Spec (P2 fix, P1 pending Lucas, P3 live check).
 - Remediation 1 (`e85a1d5...2c9a7a9`): S1, S3, S4 resolved; P2 resolved under the amended interpretation; S2 unresolved (fix); 1 new defect (N1, fix).
 - Remediation 2 (`2c9a7a9...32e9d79`): S2 residual and N1 resolved, no new defects. P1 pending Lucas; P3 live check.
 - Final review 1 (`bf45a2f...c846091`): Standards N1 residual, S5, S6 fix; S7 won't-fix. Spec P4 fix; P1 pending Lucas; P3 live check.
+- Remediation 3 (`c846091...796ff02`): N1 residual, S5, S6, P4 resolved; 1 new defect (N2, fix). P1 pending Lucas; P3 live check.
