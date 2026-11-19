@@ -19,6 +19,13 @@ Initial reviewed point: `3aa5666`
 - P4 · The `pong` reply cap rose from 8 MiB to 64 MiB with the shared reader (scope creep) · **fix**: the larger cap applies to history replies only (pairs with S5).
 - P5 · "The PR states the measured time" · **integration obligation, not code**: the PR to `main` states ~91 ms mean / 137 ms worst per keystroke at 20,000 items (release, M4 Pro), run off the main thread.
 
+## Remediation 1
+
+- S4 residual · The cap check runs `chunk.firstIndex(of: 0x0A)` over the same bytes `lineBuffer.append(chunk)` scans · **fix** (S4 not yet met): one delimiter scan per chunk; the cap check uses what the shared scan reports. Amends S2: buffering at most one read chunk past the cap before rejecting is fine; a reply line over the cap is never accepted.
+- N1 · Inserting `PaletteResults` moved the doc lines "The only modifier keys that participate in a palette Return chord" onto the wrong type · **fix**: put them back above `PaletteReturnChord`.
+- C1 · No test covers the reply cap boundary (the implementer noted a real-size test needs a reply over 64 MiB) · **fix**: one focused test at a small cap: a line exactly at the cap is accepted, one byte over is rejected.
+
 ## Review status
 
 - Full review 1: 5 Standards (all fix), 5 Spec (P1, P3, P4 fix; P2 won't-fix; P5 at PR time).
+- Remediation 1 (`3aa5666...a6d1d34`): S1/P1, S2, S3, S5, P3, P4 resolved; S4 unresolved (fix); 1 new defect (N1, fix); caller item C1 (fix).
