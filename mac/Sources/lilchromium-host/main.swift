@@ -122,19 +122,28 @@ final class Relay {
 
         case MessageType.historyQuery.rawValue:
             let id = env.id ?? UUID().uuidString
-            if !extensionUp {
-                // Reply immediately with empty items (PROTOCOL.md).
+            // No extension to ask is a failure, not an empty history
+            // (PROTOCOL.md history-query): the app keeps its snapshot.
+            let replyDisconnected = {
                 if let reply = try? LilCodec.encodeLine(
-                    HistoryResultMessage(id: id, items: [])
+                    HistoryResultMessage.failed(id: id, .extensionDisconnected)
                 ) {
                     conn.writeLine(reply)
                 }
+            }
+            if !extensionUp {
+                replyDisconnected()
                 return
             }
             pendingLock.lock()
             pendingHistory[id] = conn
             pendingLock.unlock()
-            forwardToExtension(line, kind: "history-query")
+            if !forwardToExtension(line, kind: "history-query") {
+                pendingLock.lock()
+                let waiting = pendingHistory.removeValue(forKey: id)
+                pendingLock.unlock()
+                if waiting != nil { replyDisconnected() }
+            }
 
         case MessageType.open.rawValue:
             FocusTrace.logOpen(line)

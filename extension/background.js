@@ -630,6 +630,8 @@ async function broadcastContextToLils() {
 }
 
 async function answerHistoryQuery(msg) {
+  // A rejected search is a failure, never an empty history (PROTOCOL.md
+  // history-query): the palette keeps the snapshot it has.
   const results = await safe(
     chrome.history.search({
       text: typeof msg.text === "string" ? msg.text : "",
@@ -642,7 +644,11 @@ async function answerHistoryQuery(msg) {
     }),
     "history.search"
   );
-  const items = (results || []).map((h) => ({
+  if (!results) {
+    postToHost({ type: "history-result", id: msg.id, items: [], error: "history-search-failed" });
+    return;
+  }
+  const items = results.map((h) => ({
     url: h.url,
     title: h.title || "",
     lastVisitTime: h.lastVisitTime || 0,

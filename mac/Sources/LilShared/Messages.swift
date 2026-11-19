@@ -215,16 +215,38 @@ public struct HistoryItem: Codable, Sendable, Equatable {
     }
 }
 
-/// extension -> app: reply to a history-query, matched by `id`.
+/// Why a history-query got no history (issue #41). Present only on failure.
+public enum HistoryResultError: String, Codable, Sendable {
+    /// The host had no extension port to ask.
+    case extensionDisconnected = "extension-disconnected"
+    /// The browser's history search rejected.
+    case historySearchFailed = "history-search-failed"
+}
+
+/// extension -> app: reply to a history-query, matched by `id`. A reply with
+/// `error` is a failure, never an empty history: its `items` are empty.
 public struct HistoryResultMessage: Codable, Sendable {
     public let type: String
     public let id: String
     public let items: [HistoryItem]
+    public let error: HistoryResultError?
 
     public init(id: String, items: [HistoryItem]) {
         self.type = MessageType.historyResult.rawValue
         self.id = id
         self.items = items
+        self.error = nil
+    }
+
+    private init(id: String, error: HistoryResultError) {
+        self.type = MessageType.historyResult.rawValue
+        self.id = id
+        self.items = []
+        self.error = error
+    }
+
+    public static func failed(id: String, _ error: HistoryResultError) -> HistoryResultMessage {
+        HistoryResultMessage(id: id, error: error)
     }
 }
 

@@ -72,6 +72,8 @@ export function createChrome(options = {}) {
   let incognitoAllowed = options.incognitoAllowed !== false;
   // Fault injection: predicate over windows.create options; true ⇒ the call rejects.
   const rejectWindowCreate = options.rejectWindowCreate || (() => false);
+  // Fault injection: `rejectHistorySearch: true` ⇒ history.search rejects.
+  const rejectHistorySearch = options.rejectHistorySearch === true;
   // Fault injection: `scripting: false` omits chrome.scripting (permission absent);
   // rejectScripting predicate over tabId; true ⇒ executeScript rejects.
   const scriptingAvailable = options.scripting !== false;
@@ -628,6 +630,7 @@ export function createChrome(options = {}) {
     },
     history: {
       async search({ text = "", maxResults, startTime } = {}) {
+        if (rejectHistorySearch) throw new Error("history.search rejected");
         const q = String(text).toLowerCase();
         let items = history.filter((h) => {
           if (typeof startTime === "number" && typeof h.lastVisitTime === "number" && h.lastVisitTime < startTime) {

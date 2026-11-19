@@ -51,14 +51,18 @@ public final class LineBuffer {
 
     /// Append newly read bytes and return every complete line contained so far.
     /// The trailing partial line (no newline yet) stays buffered.
+    /// Only the incoming bytes are scanned: the buffered partial line already
+    /// holds no newline, so a multi-MB line reassembles in linear time.
     public func append(_ data: Data) -> [Data] {
+        var searchFrom = buffer.endIndex
         buffer.append(data)
         var lines: [Data] = []
-        while let nl = buffer.firstIndex(of: 0x0A) {
+        while let nl = buffer[searchFrom...].firstIndex(of: 0x0A) {
             let line = buffer.subdata(in: buffer.startIndex..<nl)
             lines.append(line)
-            // Advance past the newline.
+            // Advance past the newline; what remains is unscanned.
             buffer.removeSubrange(buffer.startIndex...nl)
+            searchFrom = buffer.startIndex
         }
         return lines
     }

@@ -21,6 +21,8 @@ enum RelayClient {
         case writeFailed
         case readTimeout
         case decodeFailed
+        /// The relay answered with a failure (`history-result.error`).
+        case reportedFailure
     }
 
     /// The routing order for sockets, per PROTOCOL.md "App routing order":
@@ -47,9 +49,7 @@ enum RelayClient {
 
     /// Connect to the relay socket at `path` with a millisecond connect timeout.
     /// Returns a connected fd on success. Caller must close it.
-    /// `ioTimeoutSec` bounds each read and write, so a wedged relay never
-    /// hangs the caller.
-    private static func connect(path: String, timeoutMs: Int, ioTimeoutSec: Int = 2) throws -> Int32 {
+    private static func connect(path: String, timeoutMs: Int) throws -> Int32 {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         if fd < 0 { throw RelayError.socketCreateFailed }
 
@@ -95,9 +95,11 @@ enum RelayClient {
 
         // Restore blocking mode for straightforward read/write with SO_*TIMEO.
         _ = fcntl(fd, F_SETFL, flags)
-        var tv = timeval(tv_sec: ioTimeoutSec, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        // Apply read/write timeouts so a wedged relay never hangs the caller.
+        var rtv = timeval(tv_sec: 2, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rtv, socklen_t(MemoryLayout<timeval>.size))
+        var stv = timeval(tv_sec: 2, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &stv, socklen_t(MemoryLayout<timeval>.size))
         return fd
     }
 
@@ -118,27 +120,25 @@ enum RelayClient {
         }
     }
 
-    /// Read the one newline-terminated reply line (up to the relay's message
-    /// cap). Returns nil on EOF or timeout without a complete line. Each chunk
-    /// is scanned once, so a multi-MB reply reads in linear time.
-    private static func readLine(_ fd: Int32) -> Data? {
-        var line = Data()
+    /// Read one newline-delimited line of at most `maxBytes` (newline
+    /// excluded). Returns nil on EOF, on timeout without a complete line, or
+    /// once the line would pass the cap.
+    private static func readLine(_ fd: Int32, maxBytes: Int = 8 * 1024 * 1024) -> Data? {
+        let lineBuffer = LineBuffer()
         var buf = [UInt8](repeating: 0, count: 65536)
-        while line.count <= LilCodec.maxMessageBytes {
+        while true {
             let n = read(fd, &buf, buf.count)
             if n == 0 { return nil }
             if n < 0 {
                 if errno == EINTR { continue }
                 return nil // includes EAGAIN on RCVTIMEO expiry
             }
-            let chunk = buf[0..<n]
-            if let nl = chunk.firstIndex(of: 0x0A) {
-                line.append(contentsOf: chunk[..<nl])
-                return line
-            }
-            line.append(contentsOf: chunk)
+            let chunk = Data(buf[0..<n])
+            // Check the line's length before buffering more of it.
+            let lineBytesInChunk = chunk.firstIndex(of: 0x0A) ?? n
+            if lineBuffer.pending.count + lineBytesInChunk > maxBytes { return nil }
+            if let line = lineBuffer.append(chunk).first { return line }
         }
-        return nil
     }
 
     // MARK: - Public operations
@@ -274,20 +274,19 @@ enum RelayClient {
 
     /// One history-query on one relay socket. The reply waits on the browser
     /// gathering the whole window (~0.4 s for 12,400 items on Helium) and then
-    /// streams several MB, so reads get a far longer bound than other requests.
-    static func historyQuery(
-        _ message: HistoryQueryMessage,
-        socketPath: String,
-        connectTimeoutMs: Int = 500,
-        readTimeoutSec: Int = 15
-    ) throws -> [HistoryItem] {
-        let fd = try connect(path: socketPath, timeoutMs: connectTimeoutMs, ioTimeoutSec: readTimeoutSec)
+    /// streams several MB, so its reads get a longer bound and the relay's full
+    /// message cap (PROTOCOL.md history-query). A reported failure throws.
+    static func historyQuery(_ message: HistoryQueryMessage, socketPath: String) throws -> [HistoryItem] {
+        let fd = try connect(path: socketPath, timeoutMs: 500)
         defer { Darwin.close(fd) }
+        var tv = timeval(tv_sec: 15, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         if !writeAll(fd, try LilCodec.encodeLine(message)) { throw RelayError.writeFailed }
-        guard let reply = readLine(fd) else { throw RelayError.readTimeout }
+        guard let reply = readLine(fd, maxBytes: LilCodec.maxMessageBytes) else { throw RelayError.readTimeout }
         guard let result = try? LilCodec.decodeLine(HistoryResultMessage.self, from: reply) else {
             throw RelayError.decodeFailed
         }
+        if result.error != nil { throw RelayError.reportedFailure }
         return result.items
     }
 }

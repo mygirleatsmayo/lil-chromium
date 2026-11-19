@@ -531,6 +531,14 @@ test("the palette's history-window query returns every item in the window, not a
   assert.ok(!reply.items.some((i) => i.url === "https://ancient.example/"));
 });
 
+test("a rejected history search replies as a failure, not an empty history (#41)", async () => {
+  const expected = fixture("message-history-result-failed");
+  const env = await boot({ history: [{ url: "https://a.example/", lastVisitTime: Date.now() }], rejectHistorySearch: true });
+  await env.deliver({ ...fixture("message-history-query-window"), id: expected.id });
+  const reply = env.outgoing().filter((m) => m.type === "history-result").at(-1);
+  assert.deepEqual(reply, expected);
+});
+
 test("promote to another browser posts open-external and removes the lil", async () => {
   const env = await boot();
   await env.deliver(fixture("message-context"));

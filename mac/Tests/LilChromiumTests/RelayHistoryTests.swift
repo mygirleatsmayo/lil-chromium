@@ -40,4 +40,24 @@ struct RelayHistoryTests {
         #expect(received.count == count)
         #expect(received.last == items.last)
     }
+
+    /// A relay that reports a failure (no extension connected, or a failed
+    /// search) is a failure to the app, so the palette keeps its snapshot.
+    @Test(.bug(id: 41)) func aReportedFailureIsNotAnEmptyHistory() throws {
+        let path = "/tmp/lil-test-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
+        let server = SocketServer(path: path)
+        #expect(server.bindAndListen().ok)
+        defer { server.stop() }
+        server.onLine = { line, conn in
+            guard let query = try? LilCodec.decodeLine(HistoryQueryMessage.self, from: line),
+                  let reply = try? LilCodec.encodeLine(HistoryResultMessage.failed(id: query.id, .extensionDisconnected))
+            else { return }
+            conn.writeLine(reply)
+        }
+        server.start()
+
+        #expect(throws: (any Error).self) {
+            try RelayClient.historyQuery(.historyWindow(id: "q-2"), socketPath: path)
+        }
+    }
 }
