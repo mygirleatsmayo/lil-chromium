@@ -668,6 +668,7 @@ struct PaletteSelectionTests {
         selection.hover(1)
         let second = try #require(model.returnAction(
             for: "settings", rows: rows, selection: selection, chord: .plain))
+        try #require(rows.count > 1)
         #expect(rows[1].kind == .search)
         #expect(second.kind == .settings)
         #expect(second.hint == "⏎ Settings")
