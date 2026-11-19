@@ -34,3 +34,4 @@ Initial reviewed point: `3aa5666`
 - Full review 1: 5 Standards (all fix), 5 Spec (P1, P3, P4 fix; P2 won't-fix; P5 at PR time).
 - Remediation 1 (`3aa5666...a6d1d34`): S1/P1, S2, S3, S5, P3, P4 resolved; S4 unresolved (fix); 1 new defect (N1, fix); caller item C1 (fix).
 - Remediation 2 (`a6d1d34...4149555`): S4 residual, N1, C1 resolved; 1 new defect (N2, fix).
+- Remediation 3 (`4149555...52e16bb`): N2 resolved, no new defects. Ledger resolved; final full review next.
