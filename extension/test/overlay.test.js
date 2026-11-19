@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { mountOverlay, OVERLAY_PATH, flush } from "./overlay-harness.js";
+import { mountOverlay, OVERLAY_PATH } from "./overlay-harness.js";
 
 test("boots the production overlay, not a copy", async () => {
   const page = await mountOverlay();
@@ -216,7 +216,7 @@ test("a lil on a local dev server gets the hoverbar", async () => {
 });
 
 test("a lil showing a local file gets the hoverbar and reports activity", async () => {
-  const page = await mountOverlay({ url: "file:///Users/luke/Notes/index.html" });
+  const page = await mountOverlay({ url: "file:///Users/luke/Notes/index.html", clock: true });
   assert.ok(page.bar, "file pages carry the hoverbar");
   assert.ok(page.chrome.messages.some((m) => m.action === "interaction"));
 
@@ -224,8 +224,7 @@ test("a lil showing a local file gets the hoverbar and reports activity", async 
   page.document.body.appendChild(field);
   field.value = "draft";
   field.dispatchEvent(new page.window.Event("input", { bubbles: true }));
-  await new Promise((resolve) => setTimeout(resolve, 600));
-  await flush();
+  await page.clock.advance(500);
   assert.ok(page.chrome.messages.some((m) => m.action === "formDirty" && m.dirty === true));
 });
 

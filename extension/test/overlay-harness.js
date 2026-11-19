@@ -307,12 +307,12 @@ function patternTest(pattern) {
  * browser skips file:// pages even if the manifest matches them.
  */
 function overlayInjects(url, { fileAccess = true } = {}) {
-  if (!fileAccess && url.protocol === "file:") return false;
   // Resolve every pattern before testing any, so an unsupported one throws
-  // even when an earlier pattern already matches.
+  // even when an earlier pattern matches or file access is off.
   const tests = MANIFEST.content_scripts
     .filter((cs) => cs.js.includes("overlay.js"))
     .flatMap((cs) => cs.matches.map(patternTest));
+  if (!fileAccess && url.protocol === "file:") return false;
   return tests.some((test) => test(url));
 }
 
