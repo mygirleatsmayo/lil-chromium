@@ -872,11 +872,20 @@ async function restorePriorContext(priorContext, at) {
   await focusWindow(prior.windowId);
 }
 
-// Lils still being created. A lil's page can load and ask `isEphemeral`
-// before its window is registered (a local file loads that fast; the window id
-// is not even known until windows.create resolves), so that answer waits for
-// in-flight creations instead of reporting a premature false.
+// Lils still being created, each `{windowId, done}`; `windowId` is filled in
+// once windows.create returns. A lil's page can load and ask `isEphemeral`
+// before its window is registered (a local file loads that fast), so that
+// answer waits on the creations the sender's window could still belong to.
 const lilCreations = new Set();
+
+// Settles once no pending creation can still make `windowId` a lil: its own
+// creation, or one whose window is not yet known.
+async function lilCreationSettled(windowId) {
+  const pending = [...lilCreations]
+    .filter((c) => c.windowId === undefined || c.windowId === windowId)
+    .map((c) => c.done);
+  await Promise.allSettled(pending);
+}
 
 /**
  * Open one lil and bring it into the lifecycle. Returns the created window, or
@@ -899,16 +908,17 @@ const lilCreations = new Set();
  *                the host's ephemeralDefault, lastInteraction stamped now).
  */
 async function openLil(spec) {
-  const creation = createLil(spec);
+  const creation = { windowId: undefined };
+  creation.done = createLil(spec, creation);
   lilCreations.add(creation);
   try {
-    return await creation;
+    return await creation.done;
   } finally {
     lilCreations.delete(creation);
   }
 }
 
-async function createLil(spec) {
+async function createLil(spec, creation) {
   const adopting = spec.tabId !== undefined;
   if (!adopting && (typeof spec.url !== "string" || !spec.url)) {
     log("openLil: missing url");
@@ -944,6 +954,7 @@ async function createLil(spec) {
     focusTrace("lil-create-failed", { url: spec.url });
     return null;
   }
+  creation.windowId = win.id;
 
   // The creation focus event is the worker's doing whichever side of this
   // line it lands on; if it is still to come, mark it so it keeps the
@@ -2252,9 +2263,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       switch (msg.action) {
         case "isEphemeral": {
-          // Only this answer waits: isEphemeralWindow also runs inside
-          // createLil, where waiting on creations would deadlock.
-          await Promise.allSettled(lilCreations);
+          // A known lil answers at once; any other sender may be a lil still
+          // being created. Only this answer waits: isEphemeralWindow also
+          // runs inside createLil, where waiting would deadlock.
+          if (senderWindowId !== undefined && !(await isEphemeralWindow(senderWindowId))) {
+            await lilCreationSettled(senderWindowId);
+          }
           sendResponse({
             ephemeral: await isEphemeralWindow(senderWindowId),
             incognito: incognitoLils.has(senderWindowId),

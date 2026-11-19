@@ -538,6 +538,52 @@ test("a page that loads before its lil is registered still learns it is a lil", 
   assert.equal((await asked).ephemeral, true);
 });
 
+// Resolve `promise` within a few event-loop turns, or report that it is still pending.
+async function settlesNow(env, promise) {
+  let done = false;
+  const out = promise.then((v) => ((done = true), v));
+  await env.flush();
+  return done ? out : null;
+}
+
+test("a registered lil learns it is a lil while another lil is still opening", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env);
+  // Hold the other lil's creation before its window id is known.
+  let release;
+  const held = new Promise((r) => (release = r));
+  env.chrome.tabs.onCreated.addListener(() => held);
+  const opening = env.deliver({ type: "open", url: "https://example.org/", left: 20, top: 20 });
+  await env.flush();
+  const reply = await settlesNow(env, env.messageLater({ action: "isEphemeral" }, sender(lil)));
+  release();
+  await opening;
+  assert.ok(reply, "answered without waiting on the other lil");
+  assert.equal(reply.ephemeral, true);
+});
+
+test("a window no pending creation can be answers at once", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://mail.example/", type: "normal" });
+  await env.flush();
+  // Hold a creation after its window id is known: its explicit refocus waits.
+  let release;
+  const held = new Promise((r) => (release = r));
+  const update = env.chrome.windows.update;
+  env.chrome.windows.update = async (...args) => {
+    await held;
+    return update(...args);
+  };
+  const opening = env.deliver({ type: "open", url: "https://example.org/", left: 20, top: 20 });
+  await env.flush();
+  const reply = await settlesNow(env, env.messageLater({ action: "isEphemeral" }, sender(normal)));
+  release();
+  await opening;
+  assert.ok(reply, "answered without waiting on a lil it cannot be");
+  assert.equal(reply.ephemeral, false);
+});
+
 test("promoting a file lil to another browser carries the file URL", async () => {
   const env = await boot();
   const lil = await openTitledLil(env, { url: "file:///Users/luke/index.html" });
