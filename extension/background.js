@@ -1604,14 +1604,18 @@ async function sleepLil(windowId, { keepAwake = null } = {}) {
   if (!released) {
     // The live document was never released, so the nap never happened: roll
     // back this entry's nap-only registry fields and the freshly stored
-    // capture rather than claim a nap the user cannot see.
+    // capture rather than claim a nap the user cannot see. A navigation during
+    // staging was taken by onUpdated for a nap leftover (cleared, URL reset to
+    // originalUrl) instead of recorded, so record the page the lil shows now.
+    const live = await safe(chrome.tabs.get(tab.id), "tabs.get nap rollback");
     const reg3 = await getRegistry();
     const pending = reg3[String(windowId)];
-    if (pending && pending.sleepCaptureKey === captureKey) {
+    if (pending && (pending.sleepCaptureKey === captureKey || !pending.slept)) {
       delete pending.slept;
       delete pending.sleepCaptureKey;
       delete pending.originalUrl;
       delete pending.originalTitle;
+      pending.url = (live && live.url) || pending.url;
       await setRegistry(reg3);
     }
     await safe(idbDelete(captureKey), "idbDelete nap rollback");
