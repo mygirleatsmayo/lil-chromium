@@ -82,6 +82,7 @@ test("context fixture lands as host identity plus config objects, with no bundle
   assert.equal(context.linkBehavior, "new-lil");
   assert.equal(context.sleep.afterMinutes, 45);
   assert.equal(context.sleep.formGuard, false);
+  assert.equal(context.sleep.localGuard, false);
   assert.equal(context.sleep.tint, "#3311aa");
   assert.deepEqual(context.sleep.whitelist, ["mail.google.com"]);
   assert.equal(context.searchEngine.name, "Kagi");
@@ -133,6 +134,7 @@ test("v1 config fixture yields the same additive defaults as the native suite", 
   assert.equal(context.sleep.afterMinutes, 30);
   assert.equal(context.sleep.audioGuard, true);
   assert.equal(context.sleep.formGuard, true);
+  assert.equal(context.sleep.localGuard, true);
   assert.equal(context.sleep.tint, "purple");
   assert.equal(context.sleep.whitelist.length, 0);
   assert.equal(context.searchEngine.name, "Startpage");
@@ -1341,6 +1343,320 @@ test("automatic Lil Nap independently skips a whitelisted domain", async () => {
   assert.equal(env.registry()[String(lil.id)].slept, undefined);
 });
 
+// Every form of "local page" in PROTOCOL.md's localGuard definition.
+const LOCAL_PAGE_URLS = [
+  "file:///Users/me/notes/index.html",
+  "http://localhost:3000/",
+  "http://app.localhost/",
+  "http://127.0.0.1:8080/",
+  "http://127.42.0.9/",
+  "http://[::1]:5173/",
+];
+
+async function sweepIdleLil(env, url, sleepPatch) {
+  const lil = await openTitledLil(env, { url, title: "Local" });
+  await applySleepConfig(env, {
+    enabled: true,
+    afterMinutes: 45,
+    audioGuard: false,
+    formGuard: false,
+    whitelist: [],
+    ...sleepPatch,
+  });
+  await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await parkIdle(env, lil, 46);
+  await env.alarm();
+  return lil;
+}
+
+test("automatic Lil Nap independently skips every form of local page when the local guard is on", async () => {
+  for (const url of LOCAL_PAGE_URLS) {
+    const env = await boot();
+    const lil = await sweepIdleLil(env, url, { localGuard: true });
+
+    assert.equal(lilTab(env, lil).url, url, url);
+    assert.equal(env.registry()[String(lil.id)].slept, undefined, url);
+  }
+});
+
+test("the local guard skips a quiet local lil whichever other guard is on", async () => {
+  // Each other guard is on but its own condition is absent (no audio, no dirty
+  // form, host not listed), so only the local guard can keep the lil awake.
+  for (const others of [{ audioGuard: true }, { formGuard: true }, { whitelist: ["mail.google.com"] }]) {
+    const env = await boot();
+    const lil = await sweepIdleLil(env, "http://localhost:3000/", { localGuard: true, ...others });
+
+    assert.equal(lilTab(env, lil).url, "http://localhost:3000/", JSON.stringify(others));
+    assert.equal(env.registry()[String(lil.id)].slept, undefined, JSON.stringify(others));
+  }
+});
+
+test("automatic Lil Nap naps local pages like any other page when the local guard is off", async () => {
+  for (const url of ["file:///Users/me/notes/index.html", "http://localhost:3000/"]) {
+    const env = await boot();
+    const lil = await sweepIdleLil(env, url, { localGuard: false });
+
+    assert.match(lilTab(env, lil).url, NAP_PAGE, url);
+    assert.equal(env.registry()[String(lil.id)].slept, true, url);
+  }
+});
+
+test("automatic Lil Nap never naps a local page the lil navigated to mid-nap", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "https://remote.example/", title: "Remote" });
+  await applySleepConfig(env, { enabled: true, afterMinutes: 45, audioGuard: false, formGuard: false, whitelist: [], localGuard: true });
+  await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await parkIdle(env, lil, 46);
+  // The user navigates the lil to a local page after the sweep read the tab,
+  // while the nap capture is in flight.
+  const capture = env.chrome.tabs.captureVisibleTab;
+  env.chrome.tabs.captureVisibleTab = async (...args) => {
+    await env.chrome.tabs.update(lil.tabs[0].id, { url: "http://localhost:3000/" });
+    return capture(...args);
+  };
+
+  await env.alarm();
+
+  assert.equal(lilTab(env, lil).url, "http://localhost:3000/");
+  assert.equal(env.registry()[String(lil.id)].slept, undefined);
+  assert.equal(env.captures().size, 0, "the rolled-back nap leaves no capture");
+});
+
+// Stages an automatic nap that the local guard then aborts: the user
+// navigates the lil to a local page just before the in-document release runs.
+// `deferEvent` holds that navigation's tabs.onUpdated until the caller flushes
+// it, modelling an event that reaches the worker only after the rollback.
+async function abortStagedNap({ deferEvent = false } = {}) {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "https://remote.example/", title: "Remote" });
+  await applySleepConfig(env, { enabled: true, afterMinutes: 45, audioGuard: false, formGuard: false, whitelist: [], localGuard: true });
+  await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await parkIdle(env, lil, 46);
+  const before = structuredClone(env.registry()[String(lil.id)]);
+  const onUpdated = env.chrome.tabs.onUpdated;
+  const fire = onUpdated.fire;
+  const deferred = [];
+  let duringStaging = null;
+  const execute = env.chrome.scripting.executeScript;
+  env.chrome.scripting.executeScript = async (...args) => {
+    env.chrome.scripting.executeScript = execute;
+    if (deferEvent) onUpdated.fire = async (...event) => void deferred.push(event);
+    await env.chrome.tabs.update(lil.tabs[0].id, { url: "http://localhost:3000/" });
+    onUpdated.fire = fire;
+    duringStaging = structuredClone(env.registry()[String(lil.id)]);
+    return execute.apply(env.chrome.scripting, args);
+  };
+
+  await env.alarm();
+  const flush = async () => {
+    for (const event of deferred.splice(0)) await fire.apply(onUpdated, event);
+  };
+  return { env, lil, before, duringStaging, flush };
+}
+
+// Spread into this realm: the registry is cloned in the worker's context.
+const registryEntry = (env, lil) => ({ ...structuredClone(env.registry()[String(lil.id)]) });
+
+test("a navigation while a nap is staged is recorded like an awake lil's", async () => {
+  const { env, lil, before, duringStaging } = await abortStagedNap();
+
+  assert.equal(duringStaging.url, "http://localhost:3000/", "recorded at once, not reset to the napped page");
+  assert.equal(lilTab(env, lil).url, "http://localhost:3000/");
+  assert.deepEqual(registryEntry(env, lil), { ...before, url: "http://localhost:3000/" });
+  assert.equal(env.captures().size, 0);
+
+  await env.chrome.tabs.update(lil.tabs[0].id, { url: "http://localhost:3000/next" });
+  assert.equal(registryEntry(env, lil).url, "http://localhost:3000/next", "later navigation records");
+});
+
+test("a navigation whose event lands after a nap's rollback is recorded like an awake lil's", async () => {
+  const { env, lil, before, duringStaging, flush } = await abortStagedNap({ deferEvent: true });
+  assert.equal(duringStaging.url, before.url, "no event yet, nothing recorded");
+  assert.deepEqual(registryEntry(env, lil), before, "the rollback restores the pre-nap entry");
+
+  await flush();
+
+  assert.deepEqual(registryEntry(env, lil), { ...before, url: "http://localhost:3000/" });
+  assert.equal(env.captures().size, 0);
+});
+
+test("a bounds change racing an aborted nap's rollback leaves no nap state", async () => {
+  // The bounds handler's registry read is held until the rollback has run.
+  let gateNextRead = null;
+  const env = await boot({
+    storageGate: () => {
+      const gate = gateNextRead;
+      gateNextRead = null;
+      return gate;
+    },
+  });
+  const lil = await openTitledLil(env, { url: "https://remote.example/", title: "Remote" });
+  await applySleepConfig(env, { enabled: true, afterMinutes: 45, audioGuard: false, formGuard: false, whitelist: [], localGuard: true });
+  await env.chrome.windows.create({ url: "https://host.example/", type: "normal" });
+  await parkIdle(env, lil, 46);
+  let release;
+  let resized;
+  const execute = env.chrome.scripting.executeScript;
+  env.chrome.scripting.executeScript = async (...args) => {
+    env.chrome.scripting.executeScript = execute;
+    await env.chrome.tabs.update(lil.tabs[0].id, { url: "http://localhost:3000/" });
+    gateNextRead = new Promise((resolve) => (release = resolve));
+    resized = env.chrome.windows.update(lil.id, { left: 50 });
+    return execute.apply(env.chrome.scripting, args);
+  };
+
+  const sweep = env.alarm();
+  await env.flush();
+  release();
+  await Promise.all([sweep, resized]);
+  await env.flush();
+
+  const entry = registryEntry(env, lil);
+  assert.equal(entry.slept, undefined);
+  assert.equal(entry.sleepCaptureKey, undefined);
+  assert.equal(entry.originalUrl, undefined);
+  assert.equal(entry.bounds.left, 50, "the bounds change is kept too");
+  assert.equal(entry.url, "http://localhost:3000/");
+  assert.equal(env.captures().size, 0);
+});
+
+test("a stalled capture deletion in one lil does not delay another lil's navigation record", async () => {
+  let deleteGate = null;
+  const env = await boot({ idbDeleteGate: () => deleteGate });
+  const napping = await openTitledLil(env, { url: "https://napping.example/", title: "Napping" });
+  await env.deliver({ type: "open", url: "https://other.example/", left: 10, top: 10 });
+  const other = env.windows().find((w) => w.type === "popup" && w.id !== napping.id);
+  assert.equal((await env.message({ action: "sleepThisLil" }, sender(napping))).ok, true);
+
+  // The napping lil's page leaves the nap URL on its own, so the worker
+  // clears its leftover nap state; that capture deletion hangs.
+  let release;
+  deleteGate = new Promise((resolve) => (release = resolve));
+  const leaving = env.chrome.tabs.update(napping.tabs[0].id, { url: "https://napping.example/" });
+  await env.flush();
+  const navigating = env.chrome.tabs.update(other.tabs[0].id, { url: "https://other.example/next" });
+  await env.flush();
+
+  assert.equal(registryEntry(env, other).url, "https://other.example/next", "recorded while the deletion hangs");
+
+  release();
+  await Promise.all([leaving, navigating]);
+  await env.flush();
+  assert.equal(registryEntry(env, napping).slept, undefined);
+  assert.equal(env.captures().size, 0);
+});
+
+test("a lil's navigation during its own pending nap-document check is recorded after it", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "https://napping.example/", title: "Napping" });
+  assert.equal((await env.message({ action: "sleepThisLil" }, sender(lil))).ok, true);
+
+  // The nap page leaves on its own; the worker's whole-window tab query (does
+  // a nap document remain?) hangs until released.
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  const query = env.chrome.tabs.query;
+  env.chrome.tabs.query = async (filter) => {
+    if (filter && filter.windowId === lil.id && filter.active === undefined) {
+      env.chrome.tabs.query = query;
+      await held;
+    }
+    return query(filter);
+  };
+  const leaving = env.chrome.tabs.update(lil.tabs[0].id, { url: "https://napping.example/" });
+  await env.flush();
+  const next = env.chrome.tabs.update(lil.tabs[0].id, { url: "https://napping.example/next" });
+  await env.flush();
+  release();
+  await Promise.all([leaving, next]);
+  await env.flush();
+
+  const entry = registryEntry(env, lil);
+  assert.equal(entry.url, "https://napping.example/next", "the last URL the lil reported");
+  assert.equal(entry.slept, undefined);
+
+  const restarted = await boot({ storage: { ephemeralWindows: { [lil.id]: entry } } });
+  await restarted.startup();
+  assert.equal(restarted.windows()[0].tabs[0].url, "https://napping.example/next", "a restart reopens it");
+});
+
+test("a stalled capture deletion never lets a later nap page become the lil's url", { timeout: 5000 }, async () => {
+  let deleteGate = null;
+  const env = await boot({ clock: true, idbDeleteGate: () => deleteGate });
+  const lil = await openTitledLil(env, { url: "https://napping.example/", title: "Napping" });
+  assert.equal((await env.message({ action: "sleepThisLil" }, sender(lil))).ok, true);
+
+  // As in Chromium, the browser does not wait for the worker's onUpdated
+  // listeners: a nap's release returns while its event is still queued. The
+  // second nap's release event is held until after its wake — the late event
+  // the worker must never record as the lil's url.
+  const pending = [];
+  const heldNapEvents = [];
+  const onUpdated = env.chrome.tabs.onUpdated;
+  const fire = onUpdated.fire;
+  onUpdated.fire = async (...event) => {
+    if (NAP_PAGE.test((event[1] && event[1].url) || "")) heldNapEvents.push(event);
+    else pending.push(fire.apply(onUpdated, event));
+  };
+
+  // The first nap's page leaves on its own; clearing it deletes its capture,
+  // and every capture deletion hangs from here until released.
+  let release;
+  deleteGate = new Promise((resolve) => (release = resolve));
+  pending.push(env.chrome.tabs.update(lil.tabs[0].id, { url: "https://napping.example/" }));
+  await env.flush();
+  pending.push(env.chrome.tabs.update(lil.tabs[0].id, { url: "https://napping.example/next" }));
+  await env.flush();
+  assert.equal(registryEntry(env, lil).url, "https://napping.example/next", "the deletion does not hold the lil's queue");
+
+  // Nap and wake again while that deletion is still out.
+  pending.push(env.messageLater({ action: "sleepThisLil" }, sender(lil)));
+  await env.flush();
+  await env.clock.advance(1000); // past the capture throttle
+  await env.flush();
+  assert.match(lilTab(env, lil).url, NAP_PAGE, "the second nap took");
+  pending.push(env.messageLater({ action: "wakeLil" }, sender(lil)));
+  await env.flush();
+  await env.clock.advance(500);
+  await env.flush();
+
+  release();
+  deleteGate = null;
+  await env.flush();
+  await env.clock.advance(500); // a wake held behind the deletion runs its timers now
+  while (pending.length) await Promise.all(pending.splice(0));
+  await env.flush();
+  assert.equal(registryEntry(env, lil).slept, undefined, "the second nap has woken");
+  assert.equal(heldNapEvents.length, 1, "its release event is still held");
+  for (const event of heldNapEvents.splice(0)) await fire.apply(onUpdated, event);
+  await env.flush();
+
+  const entry = registryEntry(env, lil);
+  assert.equal(entry.url, "https://napping.example/next", "never a nap page");
+  assert.equal(entry.slept, undefined);
+  const restarted = await boot({ storage: { ephemeralWindows: { [lil.id]: entry } } });
+  await restarted.startup();
+  assert.equal(restarted.windows()[0].tabs[0].url, "https://napping.example/next", "a restart reopens it");
+});
+
+test("the local guard leaves look-alike remote hosts subject to automatic Lil Nap", async () => {
+  for (const url of ["https://localhost.example.com/", "http://128.0.0.1/", "https://notlocalhost/"]) {
+    const env = await boot();
+    const lil = await sweepIdleLil(env, url, { localGuard: true });
+
+    assert.match(lilTab(env, lil).url, NAP_PAGE, url);
+  }
+});
+
+test("the whitelist matches a non-special scheme's host whatever its case", async () => {
+  // The URL parser lowercases only special schemes' hosts (http, https, ...).
+  const env = await boot();
+  const lil = await sweepIdleLil(env, "lilapp://Mail.Google.com/inbox", { whitelist: ["mail.google.com"] });
+
+  assert.equal(lilTab(env, lil).url, "lilapp://Mail.Google.com/inbox");
+  assert.equal(env.registry()[String(lil.id)].slept, undefined);
+});
+
 test("automatic Lil Nap independently skips an incognito lil", async () => {
   const env = await boot();
   const lil = await openTitledLil(env, { url: "https://private.example/", title: "Secret", incognito: true });
@@ -1387,6 +1703,19 @@ test("manual Let This Lil Nap ignores automatic-only guards but still refuses in
   const privateReply = await env.message({ action: "sleepThisLil" }, sender(privateLil));
   assert.equal(privateReply.ok, false);
   assert.equal(lilTab(env, privateLil).url, "https://private.example/");
+});
+
+test("manual Let This Lil Nap works on local pages while the local guard is on", async () => {
+  for (const url of ["file:///Users/me/notes/index.html", "http://localhost:3000/"]) {
+    const env = await boot();
+    const lil = await openTitledLil(env, { url, title: "Local" });
+    await applySleepConfig(env, { enabled: true, localGuard: true });
+
+    const reply = await env.message({ action: "sleepThisLil" }, sender(lil));
+
+    assert.equal(reply.ok, true, url);
+    assert.match(lilTab(env, lil).url, NAP_PAGE, url);
+  }
 });
 
 const MANIFEST_PATH = path.resolve(path.dirname(WORKER_PATH), "manifest.json");
@@ -2142,6 +2471,7 @@ test("config-update replaces the cached config but keeps the host identity", asy
   assert.equal(context.ephemeralDefault, 12, "normalized from the wire's 12h");
   assert.equal(context.sleep.afterMinutes, 60);
   assert.equal(context.sleep.audioGuard, false);
+  assert.equal(context.sleep.localGuard, true, "replaces the context's false");
   assert.deepEqual(context.sleep.whitelist, ["example.com", "mail.google.com"]);
   assert.equal(context.searchEngine.name, "Bing");
   assert.equal(context.hoverBar.style, "glass");

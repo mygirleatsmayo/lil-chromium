@@ -94,8 +94,8 @@ export function createChrome(options = {}) {
   const rejectTabRemove = options.rejectTabRemove || (() => false);
   // Fault injection: predicate over the tabs.query filter; true ⇒ the call rejects.
   const rejectTabQuery = options.rejectTabQuery || (() => false);
-  // Stall injection: when it returns a promise, storage.local.get waits for it
-  // before answering — a storage round trip that has not come back yet.
+  // Stall injection: when it returns a promise, storage.local.get snapshots,
+  // then waits for it before answering — a round trip that has not come back.
   const storageGate = options.storageGate || (() => null);
   // Stall injection: when it returns a promise, windows.getAll takes its
   // snapshot first and waits for it before answering — an answer in flight
@@ -111,6 +111,22 @@ export function createChrome(options = {}) {
   // Document identity: every navigation assigns a fresh id, so tests can tell a
   // newly loaded document apart from a resumed one.
   let nextDocumentId = 1;
+
+  // Plain chrome.storage.local.get key selection over the live store.
+  function readStorage(keys) {
+    if (keys == null) return { ...storage };
+    if (typeof keys === "string") {
+      return keys in storage ? { [keys]: storage[keys] } : {};
+    }
+    if (Array.isArray(keys)) {
+      const out = {};
+      for (const k of keys) if (k in storage) out[k] = storage[k];
+      return out;
+    }
+    const out = { ...keys };
+    for (const k of Object.keys(keys)) if (k in storage) out[k] = storage[k];
+    return out;
+  }
 
   const events = {
     runtime: { onMessage: makeEvent(), onStartup: makeEvent(), onInstalled: makeEvent() },
@@ -607,24 +623,18 @@ export function createChrome(options = {}) {
     },
     storage: {
       local: {
+        // Like chrome.storage, values are copies: no reader shares an object
+        // with storage or with another reader, so a stale read stays stale.
+        // A gated read takes its snapshot first, then waits: an answer in
+        // flight that later writes can outrun.
         async get(keys) {
+          const snapshot = structuredClone(readStorage(keys));
           const gate = storageGate();
           if (gate) await gate;
-          if (keys == null) return { ...storage };
-          if (typeof keys === "string") {
-            return keys in storage ? { [keys]: storage[keys] } : {};
-          }
-          if (Array.isArray(keys)) {
-            const out = {};
-            for (const k of keys) if (k in storage) out[k] = storage[k];
-            return out;
-          }
-          const out = { ...keys };
-          for (const k of Object.keys(keys)) if (k in storage) out[k] = storage[k];
-          return out;
+          return snapshot;
         },
         async set(obj) {
-          Object.assign(storage, obj);
+          Object.assign(storage, structuredClone(obj));
         },
       },
     },
@@ -716,13 +726,19 @@ export function createChrome(options = {}) {
               get href() {
                 return tab.url;
               },
+              get protocol() {
+                return new URL(tab.url).protocol;
+              },
+              get hostname() {
+                return new URL(tab.url).hostname;
+              },
               replace(nextUrl) {
                 navigateTab(tab, nextUrl, { replace: true });
                 changeInfo.url = nextUrl;
                 if (tab.title) changeInfo.title = tab.title;
               },
             };
-            vm.runInNewContext(`(${func.toString()})(...__args)`, {
+            const result = vm.runInNewContext(`(${func.toString()})(...__args)`, {
               location,
               document: {
                 get title() {
@@ -738,7 +754,7 @@ export function createChrome(options = {}) {
             if (Object.keys(changeInfo).length) {
               await events.tabs.onUpdated.fire(tabId, changeInfo, snapshotTab(tab));
             }
-            return [{ result: undefined }];
+            return [{ result }];
           },
         }
       : undefined,

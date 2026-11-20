@@ -324,6 +324,7 @@ struct SettingsRoot: View {
             }
             Toggle("Don’t nap lils playing audio", isOn: audioGuardBinding)
             Toggle("Don’t nap lils with unsaved form input", isOn: formGuardBinding)
+            Toggle("Don’t nap files on this Mac or localhost pages", isOn: localGuardBinding)
 
             TintEditor(
                 committed: sleepTintBinding,
@@ -460,6 +461,10 @@ struct SettingsRoot: View {
     private var formGuardBinding: Binding<Bool> {
         Binding(get: { store.config.sleep.formGuard },
                 set: { store.config.sleep.formGuard = $0 })
+    }
+    private var localGuardBinding: Binding<Bool> {
+        Binding(get: { store.config.sleep.localGuard },
+                set: { store.config.sleep.localGuard = $0 })
     }
 
     /// Hex for the shared editor. Named PROTOCOL tokens display as chips; a

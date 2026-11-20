@@ -55,6 +55,7 @@ public struct SleepConfig: Codable, Sendable {
     public var afterMinutes: Int
     public var audioGuard: Bool
     public var formGuard: Bool
+    public var localGuard: Bool   // skip file: and localhost/loopback pages
     public var tint: String        // "gray" | "purple" | "#rrggbb"
     public var whitelist: [String] // domains never auto-slept (lowercased hosts)
 
@@ -63,6 +64,7 @@ public struct SleepConfig: Codable, Sendable {
         afterMinutes: Int = 30,
         audioGuard: Bool = true,
         formGuard: Bool = true,
+        localGuard: Bool = true,
         tint: String = "purple",
         whitelist: [String] = []
     ) {
@@ -70,6 +72,7 @@ public struct SleepConfig: Codable, Sendable {
         self.afterMinutes = afterMinutes
         self.audioGuard = audioGuard
         self.formGuard = formGuard
+        self.localGuard = localGuard
         self.tint = tint
         self.whitelist = whitelist
     }
@@ -84,6 +87,7 @@ public struct SleepConfig: Codable, Sendable {
         self.afterMinutes = (try? c.decode(Int.self, forKey: .afterMinutes)) ?? d.afterMinutes
         self.audioGuard = (try? c.decode(Bool.self, forKey: .audioGuard)) ?? d.audioGuard
         self.formGuard = (try? c.decode(Bool.self, forKey: .formGuard)) ?? d.formGuard
+        self.localGuard = (try? c.decode(Bool.self, forKey: .localGuard)) ?? d.localGuard
         self.tint = (try? c.decode(String.self, forKey: .tint)) ?? d.tint
         self.whitelist = (try? c.decode([String].self, forKey: .whitelist)) ?? d.whitelist
     }

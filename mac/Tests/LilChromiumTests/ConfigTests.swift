@@ -35,6 +35,7 @@ struct ConfigDecodingTests {
         #expect(cfg.sleep.afterMinutes == 30)
         #expect(cfg.sleep.audioGuard)
         #expect(cfg.sleep.formGuard)
+        #expect(cfg.sleep.localGuard)
         #expect(cfg.sleep.tint == "purple")
         #expect(cfg.sleep.whitelist == [])
         #expect(cfg.searchEngine.name == "Startpage")
@@ -75,8 +76,26 @@ struct ConfigDecodingTests {
         #expect(cfg.primaryBrowser == "helium")
         #expect(cfg.fallbackBrowser == "chrome")
         #expect(cfg.searchEngine.provider == "kagi")
+        #expect(cfg.sleep.localGuard == false)
         #expect(cfg.hoverBar.revealHeight == 24)
         #expect(cfg.knownBrowsers.map(\.slug) == ["helium", "chrome", "vivaldi"])
+    }
+}
+
+/// The Lil Nap local guard (issue #46): an additive field that defaults ON
+/// and survives every write.
+struct LocalGuardTests {
+
+    /// An off guard is a real user setting: it must survive encode/decode, so
+    /// a Settings save never silently turns it back on.
+    @Test func offLocalGuardRoundTrips() throws {
+        var sleep = SleepConfig()
+        #expect(sleep.localGuard)
+
+        sleep.localGuard = false
+        let decoded = try LilCodec.decode(SleepConfig.self, from: LilCodec.encode(sleep))
+
+        #expect(decoded.localGuard == false)
     }
 }
 
