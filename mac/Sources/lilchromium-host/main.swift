@@ -303,7 +303,7 @@ final class Relay {
     }
 
     /// Launch a URL in another browser via `/usr/bin/open -b <bundleId> <url>`.
-    /// Validates the URL scheme (http/https only) and resolves the bundle id
+    /// Validates the URL scheme (http/https/file only) and resolves the bundle id
     /// from the slug table. Fire-and-forget; failures are logged.
     private func handleOpenExternal(_ data: Data) {
         guard let msg = try? LilCodec.decode(OpenExternalMessage.self, from: data) else {
@@ -311,9 +311,8 @@ final class Relay {
             return
         }
 
-        let lower = msg.url.lowercased()
-        guard lower.hasPrefix("http://") || lower.hasPrefix("https://") else {
-            hlog("host: open-external refused non-http(s) url")
+        guard msg.isLaunchable else {
+            hlog("host: open-external refused non-http(s)/file url")
             return
         }
         guard let bundleId = BrowserTable.bundleId(forSlug: msg.browser) else {

@@ -555,6 +555,155 @@ test("promote to another browser posts open-external and removes the lil", async
   assert.equal(Object.keys(env.registry()).length, 0);
 });
 
+test("a page that loads before its lil is registered still learns it is a lil", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  // The page asks the moment its tab exists, before openLil has registered
+  // the window (a local file can load that fast).
+  let asked;
+  env.chrome.tabs.onCreated.addListener((tab) => {
+    if (asked) return;
+    assert.equal(env.registry()[tab.windowId], undefined, "asked before registration");
+    asked = env.messageLater({ action: "isEphemeral" }, { tab });
+  });
+  await env.deliver({ type: "open", url: "file:///Users/luke/index.html", left: 10, top: 10 });
+  assert.equal((await asked).ephemeral, true);
+});
+
+// Resolve `promise` within a few event-loop turns, or report that it is still pending.
+async function settlesNow(env, promise) {
+  let done = false;
+  const out = promise.then((v) => ((done = true), v));
+  await env.flush();
+  return done ? out : null;
+}
+
+test("a registered lil learns it is a lil while another lil is still opening", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env);
+  // Hold the other lil's creation before its window id is known.
+  let release;
+  const held = new Promise((r) => (release = r));
+  env.chrome.tabs.onCreated.addListener(() => held);
+  const opening = env.deliver({ type: "open", url: "https://example.org/", left: 20, top: 20 });
+  await env.flush();
+  const reply = await settlesNow(env, env.messageLater({ action: "isEphemeral" }, sender(lil)));
+  release();
+  await opening;
+  assert.ok(reply, "answered without waiting on the other lil");
+  assert.equal(reply.ephemeral, true);
+});
+
+test("a window no pending creation can be answers at once", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://mail.example/", type: "normal" });
+  await env.flush();
+  // Hold a creation after its window id is known: its explicit refocus waits.
+  let release;
+  const held = new Promise((r) => (release = r));
+  const update = env.chrome.windows.update;
+  env.chrome.windows.update = async (...args) => {
+    await held;
+    return update(...args);
+  };
+  const opening = env.deliver({ type: "open", url: "https://example.org/", left: 20, top: 20 });
+  await env.flush();
+  const reply = await settlesNow(env, env.messageLater({ action: "isEphemeral" }, sender(normal)));
+  release();
+  await opening;
+  assert.ok(reply, "answered without waiting on a lil it cannot be");
+  assert.equal(reply.ephemeral, false);
+});
+
+test("a normal window stops waiting once a pending creation turns out to be another window", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const normal = await env.chrome.windows.create({ url: "https://mail.example/", type: "normal" });
+  await env.flush();
+  // Hold the lil before its window id is known, then again after.
+  let releaseCreate, releaseFocus;
+  const beforeId = new Promise((r) => (releaseCreate = r));
+  const afterId = new Promise((r) => (releaseFocus = r));
+  env.chrome.tabs.onCreated.addListener(() => beforeId);
+  const update = env.chrome.windows.update;
+  env.chrome.windows.update = async (...args) => {
+    await afterId;
+    return update(...args);
+  };
+  const opening = env.deliver({ type: "open", url: "https://example.org/", left: 20, top: 20 });
+  await env.flush();
+  const asked = env.messageLater({ action: "isEphemeral" }, sender(normal));
+  releaseCreate();
+  const reply = await settlesNow(env, asked);
+  releaseFocus();
+  await opening;
+  assert.ok(reply, "answered once the pending lil's window was known");
+  assert.equal(reply.ephemeral, false);
+});
+
+test("an early page stops waiting once its own lil registers", async () => {
+  const env = await boot();
+  await env.deliver(fixture("message-context"));
+  const FILE = "file:///Users/luke/index.html";
+  // Another lil stays held before its window id is known throughout.
+  let releaseOther;
+  const other = new Promise((r) => (releaseOther = r));
+  let created = 0;
+  let asked;
+  env.chrome.tabs.onCreated.addListener((tab) => {
+    if (++created === 1) return other;
+    asked = env.messageLater({ action: "isEphemeral" }, { tab });
+  });
+  // Hold the file lil's creation just after it registers: the first storage
+  // read after its registry write is the menu refresh that follows.
+  let releaseTail;
+  const tail = new Promise((r) => (releaseTail = r));
+  let armed = false;
+  const { get, set } = env.chrome.storage.local;
+  env.chrome.storage.local.set = async (items) => {
+    await set.call(env.chrome.storage.local, items);
+    const reg = items.ephemeralWindows;
+    if (reg && Object.values(reg).some((e) => e.url === FILE)) armed = true;
+  };
+  env.chrome.storage.local.get = async (keys) => {
+    if (armed) {
+      armed = false;
+      await tail;
+    }
+    return get.call(env.chrome.storage.local, keys);
+  };
+  const openingOther = env.deliver({ type: "open", url: "https://example.org/", left: 20, top: 20 });
+  await env.flush();
+  const opening = env.deliver({ type: "open", url: FILE, left: 10, top: 10 });
+  await env.flush();
+  const reply = await settlesNow(env, asked);
+  releaseTail();
+  releaseOther();
+  await Promise.all([opening, openingOther]);
+  assert.ok(reply, "answered once its own lil registered, before its creation ended");
+  assert.equal(reply.ephemeral, true);
+});
+
+test("promoting a file lil to another browser carries the file URL", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "file:///Users/luke/index.html" });
+  await env.message({ action: "promote" }, sender(lil));
+  const ext = env.outgoing().find((m) => m.type === "open-external");
+  assert.equal(ext.url, "file:///Users/luke/index.html");
+  assert.equal(env.windows().length, 0);
+});
+
+test("promote keeps the lil open when the handoff cannot reach the host", async () => {
+  const env = await boot();
+  const lil = await openTitledLil(env, { url: "file:///Users/luke/index.html" });
+  await env.disconnect();
+  await env.message({ action: "promote" }, sender(lil));
+  assert.equal(env.outgoing().some((m) => m.type === "open-external"), false);
+  assert.equal(env.windows().length, 1);
+  assert.ok(env.registry()[lil.id]);
+});
+
 test("a failed incognito context-menu create explains without opening the URL", async () => {
   const env = await boot({ rejectWindowCreate: (opts) => !!opts.incognito });
   await env.deliver(fixture("message-context"));
@@ -3737,4 +3886,15 @@ test("suite runs without a live profile or the repo as cwd", async () => {
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
   }
+});
+
+test("a lil on a page with no host offers no per-site nap item", async () => {
+  const env = await boot();
+  await env.installed();
+  const lil = await openTitledLil(env, { url: "file:///Users/luke/index.html" });
+  await env.chrome.windows.update(lil.id, { focused: true });
+  await env.flush();
+  const item = env.menus().find((m) => m.id === "toggle-whitelist");
+  assert.equal(item.visible, false);
+  assert.equal(env.menus().find((m) => m.id === "sleep-this-lil").visible, true);
 });

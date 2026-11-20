@@ -11,7 +11,9 @@ import { fileURLToPath } from "node:url";
 import { parseHTML, Event as DOMEvent } from "linkedom";
 
 export const OVERLAY_PATH = path.resolve(fileURLToPath(new URL("../overlay.js", import.meta.url)));
-const MANIFEST_PATH = path.resolve(fileURLToPath(new URL("../manifest.json", import.meta.url)));
+const MANIFEST = JSON.parse(
+  fs.readFileSync(path.resolve(fileURLToPath(new URL("../manifest.json", import.meta.url))), "utf8")
+);
 
 const quietConsole = {
   log() {},
@@ -256,7 +258,7 @@ function createChrome(options = {}) {
     runtime: {
       lastError: undefined,
       getManifest() {
-        return JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
+        return MANIFEST;
       },
       sendMessage(msg, cb) {
         messages.push(msg);
@@ -284,6 +286,37 @@ function createChrome(options = {}) {
 }
 
 /**
+ * Chromium's match-pattern test for exactly the patterns the manifest uses.
+ * Any other pattern throws, so a manifest change cannot slip past the harness.
+ */
+const MATCH_PATTERNS = new Map([
+  ["http://*/*", (url) => url.protocol === "http:"],
+  ["https://*/*", (url) => url.protocol === "https:"],
+  ["file:///*", (url) => url.protocol === "file:"],
+]);
+
+function patternTest(pattern) {
+  const test = MATCH_PATTERNS.get(pattern);
+  if (!test) throw new Error(`overlay harness cannot read match pattern ${pattern}`);
+  return test;
+}
+
+/**
+ * Would the browser inject overlay.js into this page? Models the
+ * per-extension "Allow access to file URLs" toggle too: when it is off, the
+ * browser skips file:// pages even if the manifest matches them.
+ */
+function overlayInjects(url, { fileAccess = true } = {}) {
+  // Resolve every pattern before testing any, so an unsupported one throws
+  // even when an earlier pattern matches or file access is off.
+  const tests = MANIFEST.content_scripts
+    .filter((cs) => cs.js.includes("overlay.js"))
+    .flatMap((cs) => cs.matches.map(patternTest));
+  if (!fileAccess && url.protocol === "file:") return false;
+  return tests.some((test) => test(url));
+}
+
+/**
  * Mount the production overlay in a fresh page. Returns the closed shadow
  * via a harness-only attachShadow stash — overlay.js still requests closed.
  */
@@ -293,9 +326,10 @@ export async function mountOverlay(options = {}) {
   const window = parseHTML("<!DOCTYPE html><html><head></head><body></body></html>");
   const document = window.document;
   const href = options.url || "https://example.com/docs";
+  const u = new URL(href);
   Object.defineProperty(window, "location", {
     configurable: true,
-    value: { href, protocol: "https:", host: "example.com", pathname: "/docs", search: "", hash: "" },
+    value: { href, protocol: u.protocol, host: u.host, pathname: u.pathname, search: u.search, hash: u.hash },
   });
   window.matchMedia = () => ({ matches: false, addEventListener() {}, media: "" });
   window.KeyboardEvent = KeyboardEvent;
@@ -361,7 +395,8 @@ export async function mountOverlay(options = {}) {
   };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
-  vm.runInContext(fs.readFileSync(OVERLAY_PATH, "utf8"), sandbox, { filename: OVERLAY_PATH });
+  // The browser decides injection from the manifest; a page it skips gets no overlay at all.
+  if (overlayInjects(u, options)) vm.runInContext(fs.readFileSync(OVERLAY_PATH, "utf8"), sandbox, { filename: OVERLAY_PATH });
   await flush();
 
   const host = [...document.documentElement.children].find((el) => shadows.has(el)) || null;

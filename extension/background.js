@@ -907,6 +907,37 @@ async function restorePriorContext(priorContext, at) {
   await focusWindow(prior.windowId);
 }
 
+// Lils still being created, each `{windowId, done}`; `windowId` is filled in
+// once windows.create returns. A lil's page can load and ask `isEphemeral`
+// before its window is registered (a local file loads that fast), so that
+// answer waits while the sender's window could still be a lil being created.
+const lilCreations = new Set();
+
+// Resolves on the next change to creation state: a window id learned, a lil
+// registered, or a creation ended. Waiters re-check on each change.
+let resolveCreationChange;
+let creationChange = new Promise((resolve) => (resolveCreationChange = resolve));
+
+function signalCreationChange() {
+  const resolve = resolveCreationChange;
+  creationChange = new Promise((next) => (resolveCreationChange = next));
+  resolve();
+}
+
+// Settles once `windowId` is a known lil, or no pending creation can still be
+// its own: its own creation, or one whose window is not yet known. Re-checked
+// on every creation change, not fixed when the wait starts.
+async function lilCreationSettled(windowId) {
+  for (;;) {
+    // Take the signal before checking, so a change during the check still wakes us.
+    const changed = creationChange;
+    if (await isEphemeralWindow(windowId)) return;
+    const couldBeSender = (c) => c.windowId === undefined || c.windowId === windowId;
+    if (![...lilCreations].some(couldBeSender)) return;
+    await changed;
+  }
+}
+
 /**
  * Open one lil and bring it into the lifecycle. Returns the created window, or
  * null if creation failed.
@@ -928,6 +959,18 @@ async function restorePriorContext(priorContext, at) {
  *                the host's ephemeralDefault, lastInteraction stamped now).
  */
 async function openLil(spec) {
+  const creation = { windowId: undefined };
+  creation.done = createLil(spec, creation);
+  lilCreations.add(creation);
+  try {
+    return await creation.done;
+  } finally {
+    lilCreations.delete(creation);
+    signalCreationChange();
+  }
+}
+
+async function createLil(spec, creation) {
   const adopting = spec.tabId !== undefined;
   if (!adopting && (typeof spec.url !== "string" || !spec.url)) {
     log("openLil: missing url");
@@ -963,6 +1006,8 @@ async function openLil(spec) {
     focusTrace("lil-create-failed", { url: spec.url });
     return null;
   }
+  creation.windowId = win.id;
+  signalCreationChange();
 
   // The creation focus event is the worker's doing whichever side of this
   // line it lands on; if it is still to come, mark it so it keeps the
@@ -985,6 +1030,7 @@ async function openLil(spec) {
   // Incognito lils live in memory only: never persisted, never restored.
   if (spec.incognito) {
     incognitoLils.add(win.id);
+    signalCreationChange();
     if (priorContext) incognitoPriorContexts.set(win.id, priorContext);
     if (focus) await refreshMenusForWindow(win);
     return win;
@@ -1000,6 +1046,7 @@ async function openLil(spec) {
       spec.registration
     )
   );
+  signalCreationChange();
   if (focus) await refreshMenusForWindow(win);
   return win;
 }
@@ -2082,6 +2129,9 @@ async function handOffToBrowser(tabId, browserSlug) {
   const tab = await safe(chrome.tabs.get(tabId), "tabs.get handoff");
   if (!tab || !tab.url) return false;
   const posted = postToHost({ type: "open-external", browser: browserSlug, url: tab.url });
+  // Close only once the hand-off is posted; when posting fails (no host
+  // port), the lil stays open. A launch failure after posting is not seen.
+  if (!posted) return false;
   const wid = tab.windowId;
   if (wid !== undefined) {
     await deregisterWindow(wid);
@@ -2348,6 +2398,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       switch (msg.action) {
         case "isEphemeral": {
+          // A known lil answers at once; any other sender may be a lil still
+          // being created. Only this answer waits: isEphemeralWindow also
+          // runs inside createLil, where waiting would deadlock.
+          if (senderWindowId !== undefined) await lilCreationSettled(senderWindowId);
           sendResponse({
             ephemeral: await isEphemeralWindow(senderWindowId),
             incognito: incognitoLils.has(senderWindowId),

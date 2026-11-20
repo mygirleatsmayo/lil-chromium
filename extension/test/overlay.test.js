@@ -208,3 +208,38 @@ test("omnibox and menu rows use the same icon system as the bar", async () => {
   assertIconContract(checked.querySelector("svg.check"), "check");
   assert.doesNotMatch(menu.textContent, /[✓▾]/);
 });
+
+test("a lil on a local dev server gets the hoverbar", async () => {
+  const page = await mountOverlay({ url: "http://localhost:5173/app" });
+  assert.ok(page.bar, "localhost pages carry the hoverbar");
+  assert.equal(page.urlDisplay.textContent, "localhost:5173/app");
+});
+
+test("a lil showing a local file gets the hoverbar and reports activity", async () => {
+  const page = await mountOverlay({ url: "file:///Users/luke/Notes/index.html", clock: true });
+  assert.ok(page.bar, "file pages carry the hoverbar");
+  assert.ok(page.chrome.messages.some((m) => m.action === "interaction"));
+
+  const field = page.document.createElement("textarea");
+  page.document.body.appendChild(field);
+  field.value = "draft";
+  field.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+  await page.clock.advance(500);
+  assert.ok(page.chrome.messages.some((m) => m.action === "formDirty" && m.dirty === true));
+});
+
+test("a local file shows its decoded path, and the full URL when focused", async () => {
+  const href = "file:///Users/luke/My%20Notes/index.html";
+  const page = await mountOverlay({ url: href });
+  assert.equal(page.urlDisplay.textContent, "/Users/luke/My Notes/index.html");
+  assert.equal(page.urlDisplay.querySelector(".strong").textContent, "index.html");
+
+  page.key(page.window, "l", { metaKey: true });
+  assert.equal(page.addr.value, href);
+});
+
+test("a local file lil gets no hoverbar when the browser denies file access", async () => {
+  const page = await mountOverlay({ url: "file:///Users/luke/index.html", fileAccess: false });
+  assert.equal(page.host, null);
+  assert.deepEqual(page.chrome.messages, []);
+});

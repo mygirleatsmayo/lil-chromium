@@ -300,6 +300,20 @@ struct MessageTests {
         #expect(msg.url == "")
     }
 
+    /// Issue #47: the relay hands web pages and local files to another browser,
+    /// and nothing else.
+    @Test(arguments: [
+        ("https://example.com/docs", true),
+        ("HTTP://localhost:5173/", true),
+        ("file:///Users/luke/index.html", true),
+        ("chrome://settings/", false),
+        ("javascript:alert(1)", false),
+        ("", false),
+    ])
+    func openExternalLaunchesOnlyWebAndFileURLs(url: String, launchable: Bool) {
+        #expect(OpenExternalMessage(browser: "helium", url: url).isLaunchable == launchable)
+    }
+
     /// Issue #9: extension → host, no extra fields. The host launches Lil
     /// Chromium's dedicated Settings action; it never forwards this to a browser.
     @Test func openSettingsIsTypeOnly() throws {
