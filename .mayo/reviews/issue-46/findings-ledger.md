@@ -51,6 +51,24 @@ Initial reviewed point: `07ffe5a`
 
 - N6 (new) · The N5 regression test dispatches the second nap's navigation event at once (`pending.push(fire.apply(onUpdated, event))`), so it passes with the old guard restored; held until after the wake, that event makes the old guard record the nap URL · **fix**: hold the second nap's event and replay it after the wake, so the test fails without the N5 guard and passes with it.
 
+## Final review 1
+
+Severity bar (Lucas, for #46 only): a fix round runs only for a spec miss, a bug a user could plausibly hit, or a hard breach of a repo rule. Rare races, test gaps and smells do not get a fix round.
+
+### Standards
+
+- S5 · Leaving a nap by a navigation other than the wake records the pre-nap page (`clearNapRegistry` restores `originalUrl`); a restart before the next navigation reopens it · **won't-fix** under the bar: predates #46 (`bf45a2f` already restored `originalUrl` on this path). Follow-up candidate, pending Lucas.
+- S6 · The release check in `replaceTabDocument` compares only protocol and hostname, so a path or port change during capture still naps and wakes to the earlier page · **won't-fix** under the bar: predates #46, which narrows it. Same as P7. Follow-up candidate, pending Lucas.
+- S7 · Smells: nap-field removal written twice; `hostOf` could reuse `parseUrl`; one-member `fieldMergedKeys` · **won't-fix**: judgment calls; the set's doc comment says why only `sleep` merges field by field.
+
+### Spec
+
+- N1 residual · `sleep.js`'s fallback (`reconcileNapState`) writes the whole registry outside the worker queue and can undo another lil's rollback · **won't-fix** under the bar: predates #46, runs only when the worker fails or does not answer. Follow-up candidate, pending Lucas.
+- P5 · A guard switched on mid-sweep misses the rest of that sweep · **won't-fix** · Settled: every guard reads the config the sweep started with, so this guard "hot-applies like the other guards".
+- P6 · App saves drop unknown keys nested in `hoverBar` and `searchEngine` · **won't-fix** · Settled: PROTOCOL.md:99 asks for nested-key preservation inside `sleep` only; merging `hoverBar` field by field would bring back a cleared tint.
+- P7 · Same as S6.
+- P8 · A host change during capture cancels the nap even with every guard off · **accepted** · Settled (follows P3/C2): guards apply to the page actually napped; napping would keep a stale screenshot and wake to the wrong page.
+
 ## Review status
 
 - Full review 1: 4 Standards (S1, S2, S4 fix; S3 won't-fix), 4 Spec (P1, P3 fix; P2, P4 won't-fix), 1 caller item (fix).
@@ -61,3 +79,4 @@ Initial reviewed point: `07ffe5a`
 - Remediation 5 (`4b5f231...64e895f`): N4 resolved; earlier items still resolved; 1 new defect (N5, fix).
 - Remediation 6 (`64e895f...1ca91d3`): N5 resolved in production; earlier items still resolved; 1 new test gap (N6, fix).
 - Remediation 7 (`1ca91d3...647e0dc`): N6 resolved; earlier items still resolved; no new defects.
+- Final review 1 (`bf45a2f...0199379`): no finding meets the #46 severity bar; S5, S6/P7, N1 residual are follow-up candidates; P5, P6 settled won't-fix; P8 accepted; S7 won't-fix. Ready to integrate.
