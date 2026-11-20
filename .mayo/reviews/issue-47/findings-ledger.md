@@ -61,3 +61,4 @@ Initial reviewed point: `438f7db`
 - Remediation 5 (`e12cd54...95d223e`): N2, C1 resolved; 1 new test gap (N3, fix). P1 pending Lucas; P3 live check.
 - Remediation 6 (`95d223e...b9a2e41`): N3 resolved; earlier items still resolved; no new defects. Ready to integrate. P1 pending Lucas; P3 live check.
 - Lucas adjudicated P1 (won't-fix, criterion amended). Ready to integrate; P3 live check.
+- C1 superseded (Lucas): Node 20 is end of life; the floor is now `>=22` and `Promise.withResolvers` is restored (`f15af41`, AGENTS.md).
