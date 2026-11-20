@@ -173,7 +173,7 @@ One contract for typed text in the palette and the hoverbar address field: does 
 | 1 | Empty | No destination |
 | 2 | Starts with `scheme://` (`[A-Za-z][A-Za-z0-9+.-]*://`) | Open as typed. Spaces allowed |
 | 3 | Starts with `about:` (any case) | Open as typed |
-| 4 | Starts with `/` | Open the `file://` URL for that absolute path. Spaces allowed |
+| 4 | Starts with `/` | Open the `file://` URL for the file at exactly that absolute path. Spaces allowed. `%`, `;`, `#` and `?` are escaped as well, so `/tmp/report#1.txt` → `file:///tmp/report%231.txt` and `/tmp/a%20b` names a file called `a%20b` (Chrome's `FilePathToFileURL`) |
 | 5 | `~` or starts with `~/` | Palette: expand `~` to the user's home directory, then rule 4. Hoverbar: Search (an extension cannot know the home directory) |
 | 6 | Contains whitespace | Search |
 | 7 | Host (text before the first `/`, `?`, or `#`, less a `:port`) is `localhost`, ends in `.localhost`, is a dotted IPv4 address, or is a single label (`[A-Za-z0-9-]+`) with a numeric port (`devbox:8080`). A port, path, and query may follow. A non-numeric port never matches | Open with `http://` |

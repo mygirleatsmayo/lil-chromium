@@ -2357,7 +2357,7 @@ function urlIntent(input) {
   const text = typeof input === "string" ? input.trim() : "";
   if (!text) return null;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text) || /^about:/i.test(text)) return { url: percentEncoded(text) };
-  if (text.startsWith("/")) return { url: percentEncoded("file://" + text) };
+  if (text.startsWith("/")) return { url: fileURL(text) };
   if (text === "~" || text.startsWith("~/") || /\s/.test(text)) return { query: text };
   if (namesLocalHost(text)) return { url: percentEncoded("http://" + text) };
   if (text.slice(1, -1).includes(".")) return { url: percentEncoded("https://" + text) };
@@ -2381,6 +2381,14 @@ function namesLocalHost(text) {
 // `URLIntent.percentEncoded` in the app.
 function percentEncoded(url) {
   return url.toWellFormed().replace(/[^A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]/gu, (c) => encodeURIComponent(c));
+}
+
+// Rule 4: the `file://` URL for the file at exactly `path`, as Chrome's
+// `FilePathToFileURL` builds it (`net/base/filename_util.cc`): `%`, `;`, `#`
+// and `?` are escaped too, so they stay part of the file name. Mirrors
+// `URLIntent.fileURL(path:)` in the app.
+function fileURL(path) {
+  return "file://" + percentEncoded(path.replace(/[%;#?]/g, (c) => encodeURIComponent(c)));
 }
 
 // Resolves address-field input, or an explicit search from the Search row, to

@@ -41,10 +41,8 @@ enum URLIntent {
         if namesScheme(text) || text.lowercased().hasPrefix("about:") {
             return .open(percentEncoded(text))
         }
-        if text.hasPrefix("/") { return .open(percentEncoded("file://" + text)) }
-        if text == "~" || text.hasPrefix("~/") {
-            return .open(percentEncoded("file://" + home + text.dropFirst()))
-        }
+        if text.hasPrefix("/") { return .open(fileURL(path: text)) }
+        if text == "~" || text.hasPrefix("~/") { return .open(fileURL(path: home + text.dropFirst())) }
         if text.contains(where: \.isWhitespace) { return .search }
         if namesLocalHost(text) { return .open(percentEncoded("http://" + text)) }
         if text.dropFirst().dropLast().contains(".") { return .open(percentEncoded("https://" + text)) }
@@ -84,6 +82,16 @@ enum URLIntent {
     private static func percentEncoded(_ url: String) -> String {
         url.addingPercentEncoding(withAllowedCharacters: uriCharacters) ?? url
     }
+
+    /// Rules 4 and 5: the `file://` URL for the file at exactly `path`, as
+    /// Chrome's `FilePathToFileURL` builds it (`net/base/filename_util.cc`):
+    /// `%`, `;`, `#` and `?` are escaped too, so they stay part of the file
+    /// name. Mirrors `fileURL` in `background.js`.
+    private static func fileURL(path: String) -> String {
+        "file://" + (path.addingPercentEncoding(withAllowedCharacters: filePathCharacters) ?? path)
+    }
+
+    private static let filePathCharacters = uriCharacters.subtracting(CharacterSet(charactersIn: "%;#?"))
 
     /// The field text for a history URL, as Chrome's omnibox shows it on
     /// that row (`fill_into_edit`, `HistoryQuickProvider`): `FormatUrl` with

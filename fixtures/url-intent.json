@@ -7,10 +7,15 @@
     { "input": "https://example.com/a b", "open": "https://example.com/a%20b" },
     { "input": "https://example.com/a%20b", "open": "https://example.com/a%20b" },
     { "input": "file:///Users/me/My Report.html", "open": "file:///Users/me/My%20Report.html" },
+    { "input": "file:///tmp/report#1.txt", "open": "file:///tmp/report#1.txt" },
     { "input": "about:blank", "open": "about:blank" },
 
     { "input": "/Users/me/report.html", "open": "file:///Users/me/report.html" },
     { "input": "/Users/me/My Report.html", "open": "file:///Users/me/My%20Report.html" },
+    { "input": "/tmp/report#1.txt", "open": "file:///tmp/report%231.txt" },
+    { "input": "/tmp/a%20b", "open": "file:///tmp/a%2520b" },
+    { "input": "/tmp/why?;not\\here", "open": "file:///tmp/why%3F%3Bnot%5Chere" },
+    { "input": "/tmp/a\u0001b", "open": "file:///tmp/a%01b" },
 
     { "input": "localhost", "open": "http://localhost" },
     { "input": "localhost:3000", "open": "http://localhost:3000" },
@@ -38,7 +43,8 @@
     "cases": [
       { "input": "~", "open": "file:///Users/me" },
       { "input": "~/report.html", "open": "file:///Users/me/report.html" },
-      { "input": "~/My Report.html", "open": "file:///Users/me/My%20Report.html" }
+      { "input": "~/My Report.html", "open": "file:///Users/me/My%20Report.html" },
+      { "input": "~/report#1.txt", "open": "file:///Users/me/report%231.txt" }
     ]
   }
 }
