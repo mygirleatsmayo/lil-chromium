@@ -248,6 +248,14 @@ struct MessageTests {
 
     // MARK: - history-result
 
+    /// The palette's snapshot asks for the whole history window, not a count
+    /// (issue #41): `maxResults: 0` is the protocol's "no cap".
+    @Test(.bug(id: 41)) func historyWindowQueryAsksForEveryItem() throws {
+        let encoded = try LilCodec.encode(HistoryQueryMessage.historyWindow(id: "q-1"))
+
+        #expect(try jsonObject(encoded) as NSDictionary == jsonObject(Fixture.data("message-history-query-window")) as NSDictionary)
+    }
+
     /// Chrome omits fields on some rows; one odd row must never fail the batch.
     @Test func historyResultToleratesSparseRows() throws {
         let result = try Fixture.decode(HistoryResultMessage.self, from: "message-history-result")
@@ -258,6 +266,18 @@ struct MessageTests {
         #expect(sparse.visitCount == 0)
         #expect(sparse.typedCount == 0)
         #expect(sparse.lastVisitTime == 0)
+    }
+
+    /// A failed history search is a failure on the wire, never an empty
+    /// success the palette would install (issue #41).
+    @Test(.bug(id: 41)) func failedHistoryResultCarriesItsFailure() throws {
+        let failed = try Fixture.decode(HistoryResultMessage.self, from: "message-history-result-failed")
+        let ok = try Fixture.decode(HistoryResultMessage.self, from: "message-history-result")
+
+        #expect(failed.error == .historySearchFailed)
+        #expect(ok.error == nil)
+        let encoded = try LilCodec.encode(HistoryResultMessage.failed(id: "h-2", .historySearchFailed))
+        #expect(try jsonObject(encoded) as NSDictionary == jsonObject(Fixture.data("message-history-result-failed")) as NSDictionary)
     }
 
     // MARK: - host-only messages

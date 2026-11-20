@@ -35,6 +35,12 @@ struct PaletteAction: Equatable {
     let hint: String
 }
 
+/// One query's rows and inline type-ahead host, from a single ranking pass.
+struct PaletteResults {
+    let rows: [PaletteRow]
+    let autocompleteHost: String?
+}
+
 /// The only modifier keys that participate in a palette Return chord.
 /// AppKit lock state and key-origin metadata never cross this boundary.
 struct PaletteReturnChord: OptionSet, Equatable, Sendable {
@@ -51,7 +57,8 @@ struct PaletteReturnChord: OptionSet, Equatable, Sendable {
 /// and turns a query string into ordered rows.
 ///
 /// The index is rebuilt only when a new snapshot arrives (once per palette
-/// open), so per-keystroke ranking is cheap even at 3000 items.
+/// open). Ranking a keystroke still scans the whole window, so the controller
+/// runs it off the main thread on a `copy()`.
 final class PaletteModel {
 
     private(set) var index: Ranking.HistoryIndex = .empty
@@ -63,10 +70,54 @@ final class PaletteModel {
     /// Startpage.
     var searchEngine: SearchEngineConfig = .defaults
 
-    /// Replace the cached snapshot and rebuild the index off the main thread's
-    /// hot path is the caller's job; this just stores the prebuilt index.
-    func setIndex(_ index: Ranking.HistoryIndex) {
+    /// An independent copy of the snapshot and engine, so a keystroke can be
+    /// ranked off the main thread while the original keeps changing (issue #41).
+    func copy() -> PaletteModel {
+        let copy = PaletteModel()
+        copy.index = index
+        copy.searchEngine = searchEngine
+        return copy
+    }
+
+    // MARK: - Out-of-date results (issue #41)
+
+    /// A history refresh in flight. Only the newest may install its snapshot.
+    struct RefreshTicket: Equatable { fileprivate let number: Int }
+    /// A keystroke ranking in flight. Only the newest may render.
+    struct RankingTicket: Equatable { fileprivate let number: Int }
+
+    private var newestRefresh = 0
+    private var newestRanking = 0
+
+    func beginRefresh() -> RefreshTicket {
+        newestRefresh += 1
+        return RefreshTicket(number: newestRefresh)
+    }
+
+    /// Install `index` unless a newer refresh began after `ticket`'s, so an
+    /// older refresh that lands last never replaces a newer snapshot.
+    @discardableResult
+    func install(_ index: Ranking.HistoryIndex, from ticket: RefreshTicket) -> Bool {
+        guard ticket.number == newestRefresh else { return false }
         self.index = index
+        return true
+    }
+
+    /// Begin a ranking; every earlier ranking is now out of date.
+    func beginRanking() -> RankingTicket {
+        newestRanking += 1
+        return RankingTicket(number: newestRanking)
+    }
+
+    /// Put every ranking in flight out of date (close, or Return settling).
+    func outdateRankings() {
+        newestRanking += 1
+    }
+
+    /// The results to render for a ranking that landed, or nil when a newer
+    /// ranking began or rankings were outdated since `ticket` was taken.
+    func land(_ results: PaletteResults, from ticket: RankingTicket) -> PaletteResults? {
+        ticket.number == newestRanking ? results : nil
     }
 
     /// Resolve Return at the native palette boundary. Unsupported modifier
@@ -118,20 +169,9 @@ final class PaletteModel {
         )
     }
 
-    /// The host offered for inline type-ahead. When a history row sits above
-    /// Search, that is the host Enter opens — ghost text must name it too.
-    /// Otherwise the highest-scoring host-prefix origin, else nil.
-    func autocompleteHost(for query: String) -> String? {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty, !URLIntent.looksLikeURL(trimmed) {
-            if let top = rows(for: query).first, top.kind == .history {
-                return top.host
-            }
-        }
-        let ranked = Ranking.rank(query: query, index: index, limit: 1)
-        guard let first = ranked.first,
-              let host = first.autocompleteHostValue else { return nil }
-        return host
+    /// The rows to display for `query` (see `results(for:)`).
+    func rows(for query: String) -> [PaletteRow] {
+        results(for: query).rows
     }
 
     /// Compute the rows to display for `query`.
@@ -147,12 +187,19 @@ final class PaletteModel {
     /// URL-like input instead leads with "Open <url>" and puts Search directly
     /// after it, so navigation is never mistaken for search.
     /// Empty query: top-8 by frecency, no search row.
-    func rows(for query: String) -> [PaletteRow] {
+    ///
+    /// The autocomplete host comes from the same ranking pass: when a history
+    /// row sits above Search, that is the host Enter opens — ghost text must
+    /// name it too. Otherwise the best history match's host, else nil.
+    func results(for query: String) -> PaletteResults {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if trimmed.isEmpty {
             let matches = Ranking.rank(query: "", index: index, limit: maxRows)
-            return matches.map { historyRow($0) }
+            return PaletteResults(
+                rows: matches.map { historyRow($0) },
+                autocompleteHost: matches.first?.autocompleteHostValue
+            )
         }
 
         var rows: [PaletteRow] = []
@@ -166,6 +213,7 @@ final class PaletteModel {
             index: index,
             limit: max(maxRows, index.pages.count + index.origins.count)
         )
+        let bestMatchHost = matches.first?.autocompleteHostValue
 
         if SettingsAction.matchesQuery(trimmed) {
             rows.append(settingsRow())
@@ -188,8 +236,10 @@ final class PaletteModel {
 
         rows.append(searchRow(trimmed))
         rows.append(contentsOf: matches.map(historyRow))
+        rows = Array(rows.prefix(maxRows))
 
-        return Array(rows.prefix(maxRows))
+        let topHistoryHost = rows.first.flatMap { !looksURL && $0.kind == .history ? $0.host : nil }
+        return PaletteResults(rows: rows, autocompleteHost: topHistoryHost ?? bestMatchHost)
     }
 
     /// Among eligible registrable-label matches, frecency is the tie-breaker

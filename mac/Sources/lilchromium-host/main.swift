@@ -122,19 +122,25 @@ final class Relay {
 
         case MessageType.historyQuery.rawValue:
             let id = env.id ?? UUID().uuidString
-            if !extensionUp {
-                // Reply immediately with empty items (PROTOCOL.md).
+            // No extension to ask is a failure, not an empty history
+            // (PROTOCOL.md history-query): the app keeps its snapshot.
+            let replyDisconnected = {
                 if let reply = try? LilCodec.encodeLine(
-                    HistoryResultMessage(id: id, items: [])
+                    HistoryResultMessage.failed(id: id, .extensionDisconnected)
                 ) {
                     conn.writeLine(reply)
                 }
+            }
+            if !extensionUp {
+                replyDisconnected()
                 return
             }
             pendingLock.lock()
             pendingHistory[id] = conn
             pendingLock.unlock()
-            forwardToExtension(line, kind: "history-query")
+            if !forwardToExtension(line, kind: "history-query"), takePendingHistory(id) != nil {
+                replyDisconnected()
+            }
 
         case MessageType.open.rawValue:
             FocusTrace.logOpen(line)
@@ -192,6 +198,14 @@ final class Relay {
         return ok
     }
 
+    /// Atomically claim the connection awaiting history-query `id`, so only
+    /// one path (its reply, or a failed forward) answers it.
+    private func takePendingHistory(_ id: String) -> SocketConnection? {
+        pendingLock.lock()
+        defer { pendingLock.unlock() }
+        return pendingHistory.removeValue(forKey: id)
+    }
+
     // MARK: - Extension -> relay
 
     private func handleExtensionMessage(_ data: Data) {
@@ -206,11 +220,7 @@ final class Relay {
                 hlog("extension: history-result without id dropped")
                 return
             }
-            pendingLock.lock()
-            let conn = pendingHistory.removeValue(forKey: id)
-            pendingLock.unlock()
-
-            guard let conn = conn else {
+            guard let conn = takePendingHistory(id) else {
                 hlog("extension: history-result for unknown id \(id) dropped")
                 return
             }

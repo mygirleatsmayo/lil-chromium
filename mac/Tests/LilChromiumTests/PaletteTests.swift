@@ -16,7 +16,7 @@ struct PaletteRowsTests {
     private func makeModel() throws -> PaletteModel {
         let history = try Fixture.decode(HistoryResultMessage.self, from: "message-history-result")
         let model = PaletteModel()
-        model.setIndex(Ranking.buildIndex(items: history.items, nowMs: nowMs))
+        model.install(Ranking.buildIndex(items: history.items, nowMs: nowMs), from: model.beginRefresh())
         model.searchEngine = try Fixture.decode(LilConfig.self, from: "config-v2-complete").searchEngine
         return model
     }
@@ -96,8 +96,8 @@ struct PaletteRowsTests {
     @Test func autocompleteOffersOnlyAPrefixedHost() throws {
         let model = try makeModel()
 
-        #expect(model.autocompleteHost(for: "git") == "github.com")
-        #expect(model.autocompleteHost(for: "quarterly budget review") == nil)
+        #expect(model.results(for: "git").autocompleteHost == "github.com")
+        #expect(model.results(for: "quarterly budget review").autocompleteHost == nil)
     }
 }
 
@@ -184,7 +184,7 @@ struct PaletteOrderingTests {
 
     private func model(_ items: [HistoryItem]) -> PaletteModel {
         let model = PaletteModel()
-        model.setIndex(Ranking.buildIndex(items: items, nowMs: nowMs))
+        model.install(Ranking.buildIndex(items: items, nowMs: nowMs), from: model.beginRefresh())
         model.searchEngine = .defaults
         return model
     }
@@ -323,7 +323,7 @@ struct PaletteOrderingTests {
         #expect(rows[0].actionURL == "https://github.com")
         #expect(rows[2].actionURL == "https://hubspot.com")
         #expect(rows[0].host == "github.com")
-        #expect(palette.autocompleteHost(for: "hub") == rows[0].host)
+        #expect(palette.results(for: "hub").autocompleteHost == rows[0].host)
     }
 
     /// SP2: seven ineligible host-prefix rows would fill the old rank budget
@@ -639,5 +639,57 @@ struct PaletteActionTests {
 
         #expect(chord == translation.chord)
         #expect(model.action(for: "private search", selectedRow: selectedRow, chord: chord) == nil)
+    }
+}
+
+/// Results that land late (issue #41): history refreshes and keystroke
+/// rankings run off the main thread, and only the newest of each may land.
+struct PaletteOutOfDateTests {
+
+    private func snapshot(_ url: String) -> Ranking.HistoryIndex {
+        Ranking.buildIndex(items: [HistoryItem(url: url, title: "", lastVisitTime: 0, visitCount: 1, typedCount: 0)], nowMs: 0)
+    }
+
+    @Test(.bug(id: 41)) func anOlderRefreshLandingLastLeavesTheNewerSnapshot() {
+        let model = PaletteModel()
+        let older = model.beginRefresh()
+        let newer = model.beginRefresh()
+
+        #expect(model.install(snapshot("https://newer.example/"), from: newer))
+        #expect(!model.install(snapshot("https://older.example/"), from: older))
+
+        #expect(model.rows(for: "").map(\.host) == ["newer.example"])
+    }
+
+    /// The controller renders only what `land(_:from:)` hands back.
+    @Test(.bug(id: 41)) func aRankingForAnOlderQueryIsNotRenderedAfterANewerEdit() {
+        let model = PaletteModel()
+        model.install(Ranking.buildIndex(items: [
+            HistoryItem(url: "https://older.example/", title: "", lastVisitTime: 0, visitCount: 1, typedCount: 0),
+            HistoryItem(url: "https://newer.example/", title: "", lastVisitTime: 0, visitCount: 1, typedCount: 0),
+        ], nowMs: 0), from: model.beginRefresh())
+        let older = model.beginRanking()
+        let olderResults = model.results(for: "older")
+        let newer = model.beginRanking()
+        let newerResults = model.results(for: "newer")
+
+        #expect(model.land(olderResults, from: older) == nil)
+        #expect(model.land(newerResults, from: newer)?.rows.first?.host == "newer.example")
+        // Closing the palette, or Return settling the rows, outdates it too.
+        model.outdateRankings()
+        #expect(model.land(newerResults, from: newer) == nil)
+    }
+
+    /// A completion applies only to the field state it was ranked for: the
+    /// same text, caret at the end, nothing selected.
+    @MainActor
+    @Test(.bug(id: 41), arguments: [
+        (text: "git", selection: NSRange(location: 3, length: 0), applies: true),
+        (text: "git", selection: NSRange(location: 2, length: 0), applies: false), // caret moved
+        (text: "git", selection: NSRange(location: 0, length: 3), applies: false), // text selected
+        (text: "gi", selection: NSRange(location: 2, length: 0), applies: false),  // edited
+    ])
+    func aCompletionAppliesOnlyToTheFieldStateItWasRankedFor(text: String, selection: NSRange, applies: Bool) {
+        #expect(PaletteController.completionApplies(rankedFor: "git", text: text, selection: selection) == applies)
     }
 }

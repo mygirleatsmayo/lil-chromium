@@ -630,15 +630,25 @@ async function broadcastContextToLils() {
 }
 
 async function answerHistoryQuery(msg) {
+  // A rejected search is a failure, never an empty history (PROTOCOL.md
+  // history-query): the palette keeps the snapshot it has.
   const results = await safe(
     chrome.history.search({
       text: typeof msg.text === "string" ? msg.text : "",
+      // maxResults 0 = no cap: every item in the window (the palette's
+      // snapshot, issue #41). verified: Helium (Chromium) 2026-11-19 —
+      // maxResults 0 and 100000 both returned the same 12,403 items reaching
+      // back 90 days; 3000 reached 19 days.
       maxResults: typeof msg.maxResults === "number" ? msg.maxResults : 100,
       startTime: Date.now() - HISTORY_WINDOW_MS,
     }),
     "history.search"
   );
-  const items = (results || []).map((h) => ({
+  if (!results) {
+    postToHost({ type: "history-result", id: msg.id, items: [], error: "history-search-failed" });
+    return;
+  }
+  const items = results.map((h) => ({
     url: h.url,
     title: h.title || "",
     lastVisitTime: h.lastVisitTime || 0,
