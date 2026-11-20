@@ -124,6 +124,19 @@ for (const [label, emptied] of [
   });
 }
 
+// N5: a quadratic trim took 1.4 s on 60,000 spaces; linear takes well under 1 ms.
+test("a long whitespace run in typed text trims in linear time", async () => {
+  const page = await mountOverlay();
+  page.key(page.window, "l", { metaKey: true });
+  const typed = "a" + " ".repeat(100_000) + "b";
+  page.addr.value = " " + typed + "\u3000";
+  const start = performance.now();
+  page.addr.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+  assert.ok(performance.now() - start < 100, "the input handler answers at once");
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(page.chrome.messages.at(-1).query, typed, "the query is the typed text, trimmed");
+});
+
 test("Escape drops a suggestions reply still pending", async () => {
   const page = await mountOverlay({ holdOmnibox: true });
   page.key(page.window, "l", { metaKey: true });

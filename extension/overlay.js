@@ -899,9 +899,16 @@
       return { type: "search", title: `Search ${name} for “${query}”`, query };
     }
 
-    // Trimmed as the service worker trims typed text (`trimWhitespace`).
+    // Trimmed as the service worker trims typed text (`trimWhitespace`), in
+    // linear time: a `\p{White_Space}+$` regex is quadratic on a long run.
     function typedQuery() {
-      return addr.value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+      const text = addr.value;
+      const space = /\p{White_Space}/u;
+      let start = 0;
+      let end = text.length;
+      while (start < end && space.test(text[start])) start++;
+      while (end > start && space.test(text[end - 1])) end--;
+      return text.slice(start, end);
     }
 
     async function queryOmni() {

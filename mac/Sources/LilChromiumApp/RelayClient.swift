@@ -10,8 +10,9 @@ import Darwin
 /// Blocking unix-socket CLIENT for the app side. One short-lived connection per
 /// request: connect, write a line, optionally read one reply line, close.
 ///
-/// All methods are synchronous and intended to be called off the main thread.
-/// A connect timeout keeps the UI responsive when the relay is down.
+/// Most methods block the calling thread, so call them off the main thread.
+/// `historyWindow()` suspends instead, and `broadcastConfigAsync` returns at
+/// once. A connect timeout keeps the UI responsive when the relay is down.
 enum RelayClient {
 
     enum RelayError: Error {
@@ -276,9 +277,10 @@ enum RelayClient {
     }
 
     /// `blockingHistoryWindow()` for async callers, which suspend instead of blocking.
-    /// The read can block for 15 s per routed socket (`SO_RCVTIMEO`), so it
-    /// runs on a GCD thread: blocking work stays off Swift concurrency's
-    /// pool, which has one thread per core (WWDC22 110350, "Visualize and
+    /// Each read waits up to 15 s for data (`SO_RCVTIMEO`), and that timer
+    /// restarts whenever data arrives, so one call has no fixed bound. It runs
+    /// on a GCD thread: blocking work stays off Swift concurrency's pool,
+    /// which has one thread per core (WWDC22 110350, "Visualize and
     /// optimize Swift concurrency").
     static func historyWindow() async throws -> [HistoryItem] {
         try await withCheckedThrowingContinuation { continuation in

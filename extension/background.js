@@ -2357,7 +2357,7 @@ function urlIntent(input) {
   if (!text) return null;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text) || /^about:/i.test(text)) return { url: percentEncoded(text) };
   if (text.startsWith("/")) return { url: fileURL(text) };
-  if (text === "~" || text.startsWith("~/") || /\p{White_Space}/u.test(text)) return { query: text };
+  if (text === "~" || text.startsWith("~/") || WHITE_SPACE.test(text)) return { query: text };
   if (namesLocalHost(text)) return { url: percentEncoded("http://" + text) };
   if (text.slice(1, -1).includes(".")) return { url: percentEncoded("https://" + text) };
   return { query: text };
@@ -2365,9 +2365,19 @@ function urlIntent(input) {
 
 // Whitespace as Chrome counts it (`base/strings/whitespace_constants.h`):
 // Unicode's White_Space property. JavaScript's `trim()` and `\s` differ: they
-// count U+FEFF and miss U+0085. Mirrors `String.trimmingWhitespace()` in the app.
+// count U+FEFF and miss U+0085.
+const WHITE_SPACE = /\p{White_Space}/u;
+
+// Mirrors `String.trimmingWhitespace()` in the app. Scans in from each end, so
+// time stays linear: a `\p{White_Space}+$` regex retries at every position of
+// a whitespace run and is quadratic. Every whitespace character is in the BMP,
+// so a code-unit scan is exact.
 function trimWhitespace(text) {
-  return text.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+  let start = 0;
+  let end = text.length;
+  while (start < end && WHITE_SPACE.test(text[start])) start++;
+  while (end > start && WHITE_SPACE.test(text[end - 1])) end--;
+  return text.slice(start, end);
 }
 
 // Rule 7: the host is `localhost`, a `.localhost` name, a dotted IPv4 address,
