@@ -36,3 +36,9 @@ Initial reviewed point: `0db3180`
 - N3 · `RelayHistoryTests.swift`: the new `#require` on `write` can throw before `close(fds[1])`, leaking a descriptor · **fix**.
 - N4 · `docs/PROTOCOL.md` URL intent: "Every resolved URL … except `%`" contradicts rules 4–5, which now escape `%` · **fix**: the doc states the rule the code follows.
 - Lucas approved the other two fix-round-1 skill departures: the P2 test that passed before the fix, and no new test for the S7 refactor.
+
+## Fix round 2
+
+- Built on `fix/remediation-1-review-findings` (`cb3f82c...ad68ab9`): N1, N2, N3, N4. Not yet reviewed. N1 also closes suggestions at once when the field is emptied, not after the 120 ms debounce.
+- Skill departures the fixer reported: N2's GCD for the one blocking read (Lucas approved in advance); no new test for N2 (it would depend on filling the pool and on real timeouts).
+- Raised by the fixer, pending Lucas: Escape while a suggestions reply is pending lets that reply reopen suggestions (same cause as N1); the blocking and async history reads share the name `historyWindow()`, and only the async one calls the blocking one.
