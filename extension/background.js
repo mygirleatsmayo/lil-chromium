@@ -2354,14 +2354,21 @@ async function omniboxSuggest(rawQuery) {
 // empty input, { url } to open, or { query } to search. A `~` path searches:
 // an extension cannot know the home directory.
 function urlIntent(input) {
-  const text = typeof input === "string" ? input.trim() : "";
+  const text = typeof input === "string" ? trimWhitespace(input) : "";
   if (!text) return null;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text) || /^about:/i.test(text)) return { url: percentEncoded(text) };
   if (text.startsWith("/")) return { url: fileURL(text) };
-  if (text === "~" || text.startsWith("~/") || /\s/.test(text)) return { query: text };
+  if (text === "~" || text.startsWith("~/") || /\p{White_Space}/u.test(text)) return { query: text };
   if (namesLocalHost(text)) return { url: percentEncoded("http://" + text) };
   if (text.slice(1, -1).includes(".")) return { url: percentEncoded("https://" + text) };
   return { query: text };
+}
+
+// Whitespace as Chrome counts it (`base/strings/whitespace_constants.h`):
+// Unicode's White_Space property. JavaScript's `trim()` and `\s` differ: they
+// count U+FEFF and miss U+0085. Mirrors `String.trimmingWhitespace()` in the app.
+function trimWhitespace(text) {
+  return text.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
 }
 
 // Rule 7: the host is `localhost`, a `.localhost` name, a dotted IPv4 address,
@@ -2394,7 +2401,7 @@ function fileURL(path) {
 // Resolves address-field input, or an explicit search from the Search row, to
 // the URL to navigate; null when there is nowhere to go.
 async function resolveNavigation({ input, search }) {
-  const intent = typeof search === "string" ? { query: search.trim() } : urlIntent(input);
+  const intent = typeof search === "string" ? { query: trimWhitespace(search) } : urlIntent(input);
   if (!intent || intent.query === "") return null;
   if (intent.url) return intent.url;
   const ctx = await getContext();

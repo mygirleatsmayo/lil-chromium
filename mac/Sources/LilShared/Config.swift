@@ -142,7 +142,7 @@ public struct SearchEngineConfig: Codable, Equatable, Sendable {
     /// template if this one has no `%s`. Used by the palette and (mirrored)
     /// the extension.
     public func searchURL(for query: String) -> String {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = query.trimmingWhitespace()
         let encoded = trimmed.addingPercentEncoding(
             withAllowedCharacters: .urlQueryAllowed
         ) ?? trimmed

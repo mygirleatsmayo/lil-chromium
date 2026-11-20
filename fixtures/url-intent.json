@@ -36,7 +36,13 @@
     { "input": "swift", "search": true },
     { "input": "foo:bar", "search": true },
     { "input": ".com", "search": true },
-    { "input": "example.", "search": true }
+    { "input": "example.", "search": true },
+
+    { "input": "\u0085example.com\u3000", "open": "https://example.com" },
+    { "input": "a\u0085b.com", "search": true },
+    { "input": "\uFEFF", "search": true },
+    { "input": "a\uFEFFb.com", "open": "https://a%EF%BB%BFb.com" },
+    { "input": "\u200Bexample.com", "open": "https://%E2%80%8Bexample.com" }
   ],
   "home": {
     "directory": "/Users/me",

@@ -16,10 +16,11 @@ async function lilWithKagi() {
   return { env, lil, navigate };
 }
 
+// Fixture search inputs carry no surrounding whitespace, so each is its query.
 function assertSearched(reply, query) {
   const url = new URL(reply.url);
   assert.equal(url.origin + url.pathname, "https://kagi.com/search", `${query} searches`);
-  assert.equal(url.searchParams.get("q"), query.trim());
+  assert.equal(url.searchParams.get("q"), query);
 }
 
 test("Return in the address field opens what the shared fixture resolves, else searches", async () => {

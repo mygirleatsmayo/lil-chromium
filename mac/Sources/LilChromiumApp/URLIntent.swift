@@ -36,14 +36,14 @@ enum URLIntent {
         of raw: String,
         home: String = FileManager.default.homeDirectoryForCurrentUser.path
     ) -> Intent {
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = raw.trimmingWhitespace()
         if text.isEmpty { return .empty }
         if namesScheme(text) || text.lowercased().hasPrefix("about:") {
             return .open(percentEncoded(text))
         }
         if text.hasPrefix("/") { return .open(fileURL(path: text)) }
         if text == "~" || text.hasPrefix("~/") { return .open(fileURL(path: home + text.dropFirst())) }
-        if text.contains(where: \.isWhitespace) { return .search }
+        if text.unicodeScalars.contains(where: \.properties.isWhitespace) { return .search }
         if namesLocalHost(text) { return .open(percentEncoded("http://" + text)) }
         if text.dropFirst().dropLast().contains(".") { return .open(percentEncoded("https://" + text)) }
         return .search
@@ -112,7 +112,7 @@ enum URLIntent {
     /// scheme (`AutocompleteProvider::TrimSchemePrefix`). Editing it resolves
     /// to the same URL again. `file://` stays, as Chrome trims only HTTP(S).
     static func fieldText(forOpenURL url: String, typed: String) -> String {
-        let typedScheme = namesScheme(typed.trimmingCharacters(in: .whitespacesAndNewlines))
+        let typedScheme = namesScheme(typed.trimmingWhitespace())
         return fieldText(for: url, typed: typed, trimmingAddedScheme: !typedScheme)
     }
 

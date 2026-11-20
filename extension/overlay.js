@@ -896,7 +896,8 @@
     }
 
     async function queryOmni() {
-      const q = addr.value.trim();
+      // Trimmed as the service worker trims typed text (`trimWhitespace`).
+      const q = addr.value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
       if (!q) {
         closeOmni();
         return;

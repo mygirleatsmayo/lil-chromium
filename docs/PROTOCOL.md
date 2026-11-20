@@ -166,7 +166,7 @@ As v1: host queues `open` (max 20 FIFO) while the port is down; `history-query` 
 
 ## URL intent (issue #39)
 
-One contract for typed text in the palette and the hoverbar address field: does it name a destination to open, or a query to search for? Trim the input, then take the first rule that matches.
+One contract for typed text in the palette and the hoverbar address field: does it name a destination to open, or a query to search for? Trim whitespace from the input, then take the first rule that matches. Whitespace, for trimming and for rule 6, is Chrome's set (`base/strings/whitespace_constants.h`; Unicode's White_Space property): ASCII whitespace plus U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F, U+3000. U+FEFF and U+200B are not whitespace.
 
 | # | Input | Result |
 |---|---|---|

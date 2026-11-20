@@ -239,7 +239,7 @@ final class PaletteModel {
         if chord == [.shift] || chord == [.command, .shift] {
             let incognito = chord == [.command, .shift]
             return searchAction(
-                for: query.trimmingCharacters(in: .whitespacesAndNewlines),
+                for: query.trimmingWhitespace(),
                 incognito: incognito,
                 hint: incognito ? "⇧⌘⏎ Search Incognito" : "⇧⏎ Search"
             )
@@ -294,7 +294,7 @@ final class PaletteModel {
     /// the input row's trailing `Search ⇥` label; nil (no action, no hint)
     /// for an empty query.
     func tabAction(for query: String) -> PaletteAction? {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = query.trimmingWhitespace()
         guard !trimmed.isEmpty else { return nil }
         return searchAction(for: trimmed, incognito: false, hint: "Search ⇥")
     }
@@ -361,7 +361,7 @@ final class PaletteModel {
     /// row sits above Search, that is the host Enter opens — ghost text must
     /// name it too. Otherwise the best history match's host, else nil.
     func results(for query: String) -> PaletteResults {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = query.trimmingWhitespace()
 
         if trimmed.isEmpty {
             let matches = Ranking.rank(query: "", index: index, limit: maxRows)
