@@ -17,39 +17,68 @@ enum URLIntent {
         return .open(urlString)
     }
 
-    /// Does this text look like a URL the user meant to open directly?
-    /// Rules (from PROTOCOL.md palette contract):
-    ///   - has an explicit scheme (http://, https://, file://, etc.), OR
-    ///   - has a dot and no spaces (e.g. "example.com", "sub.domain.co/path").
-    static func looksLikeURL(_ raw: String) -> Bool {
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.isEmpty { return false }
-        if text.contains(" ") { return false }
+    /// What typed text names: nothing, a query to search for, or a URL to open.
+    enum Intent: Equatable {
+        case empty
+        case search
+        case open(String)
 
-        // Explicit scheme?
-        if let schemeRange = text.range(of: "://"), schemeRange.lowerBound != text.startIndex {
-            return true
+        var url: String? {
+            if case .open(let url) = self { return url }
+            return nil
         }
-        // Common single-word schemes without "//" (e.g. mailto:) are not our
-        // job (we do not declare mailto), so ignore those.
-
-        // Dot with no spaces, and at least one char on each side of a dot.
-        if let dot = text.firstIndex(of: "."),
-           dot != text.startIndex,
-           text.index(after: dot) != text.endIndex {
-            return true
-        }
-        return false
     }
 
-    /// Normalize typed URL-ish text into an absolute URL string.
-    /// Adds https:// when no scheme is present.
-    static func normalizedURL(_ raw: String) -> String {
+    /// Reads typed text by the URL-intent contract (PROTOCOL.md *URL intent*);
+    /// the first rule that matches wins. The hoverbar runs the same rules in
+    /// `background.js`, except that `~` searches there.
+    static func intent(
+        of raw: String,
+        home: String = FileManager.default.homeDirectoryForCurrentUser.path
+    ) -> Intent {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.range(of: "://") != nil {
-            return text
+        if text.isEmpty { return .empty }
+        if text.prefixMatch(of: #/[A-Za-z][A-Za-z0-9+.\-]*:\/\//#) != nil
+            || text.lowercased().hasPrefix("about:") {
+            return .open(percentEncoded(text))
         }
-        return "https://\(text)"
+        if text.hasPrefix("/") { return .open(percentEncoded("file://" + text)) }
+        if text == "~" || text.hasPrefix("~/") {
+            return .open(percentEncoded("file://" + home + text.dropFirst()))
+        }
+        if text.contains(where: \.isWhitespace) { return .search }
+        if namesLocalHost(text) { return .open(percentEncoded("http://" + text)) }
+        if text.dropFirst().dropLast().contains(".") { return .open(percentEncoded("https://" + text)) }
+        return .search
+    }
+
+    /// Rule 7: the host is `localhost`, a `.localhost` name, a dotted IPv4
+    /// address, or a single label with a numeric port (`devbox:8080`).
+    private static func namesLocalHost(_ text: String) -> Bool {
+        let authority = text.prefix { !"/?#".contains($0) }
+        let parts = authority.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        let host = parts[0].lowercased()
+        let port = parts.count > 1 ? parts[1] : nil
+        let isDigits = { (s: Substring) in !s.isEmpty && s.allSatisfy { ("0"..."9").contains($0) } }
+        if let port, !isDigits(port) { return false }
+        if host == "localhost" || host.hasSuffix(".localhost") { return true }
+        let octets = host.split(separator: ".", omittingEmptySubsequences: false)
+        if octets.count == 4, octets.allSatisfy({ isDigits($0) && $0.count <= 3 && UInt8($0) != nil }) {
+            return true
+        }
+        return port != nil && host.wholeMatch(of: #/[a-z0-9-]+/#) != nil
+    }
+
+    /// RFC 3986 unreserved and reserved characters, plus `%` so text that is
+    /// already encoded stays as typed.
+    private static let uriCharacters = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%"
+    )
+
+    /// Percent-encodes every other character (as UTF-8) so each consumer can
+    /// parse the URL. Mirrors `percentEncoded` in `background.js`.
+    private static func percentEncoded(_ url: String) -> String {
+        url.addingPercentEncoding(withAllowedCharacters: uriCharacters) ?? url
     }
 
     /// The field text for a history URL, as Chrome's omnibox shows it on
@@ -76,7 +105,7 @@ enum URLIntent {
         if parts.scheme?.lowercased() == "http", !host.lowercased().hasPrefix("ftp."), !matchesInScheme {
             text.removeFirst("http://".count)
         }
-        if isBareHost, looksLikeURL(text) != looksLikeURL(text + "/") { text += "/" }
+        if isBareHost, (intent(of: text).url == nil) != (intent(of: text + "/").url == nil) { text += "/" }
         return text.replacingOccurrences(of: "%20", with: " ")
     }
 

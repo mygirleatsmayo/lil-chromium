@@ -6,29 +6,21 @@ import Testing
 /// Shared by the palette and (mirrored) the lil hover-bar omnibox.
 struct URLIntentTests {
 
-    @Test func textWithASchemeOrADotIsADestination() {
-        #expect(URLIntent.looksLikeURL("https://example.com/docs"))
-        #expect(URLIntent.looksLikeURL("file:///Users/me/page.html"))
-        #expect(URLIntent.looksLikeURL("example.com"))
-        #expect(URLIntent.looksLikeURL("sub.domain.co/path?q=1"))
-        #expect(URLIntent.looksLikeURL("  example.com  "), "surrounding whitespace is not input")
+    /// One contract for the palette and the hoverbar (PROTOCOL.md *URL
+    /// intent*); the extension suite runs the same fixture.
+    @Test(.bug(id: 39)) func typedTextFollowsTheSharedContract() throws {
+        let fixture = try Fixture.decode(URLIntentFixture.self, from: "url-intent")
+        for c in fixture.cases {
+            #expect(URLIntent.intent(of: c.input, home: "/nowhere") == c.expected, "\(c.input)")
+        }
     }
 
-    @Test func everythingElseIsAQuery() {
-        #expect(URLIntent.looksLikeURL("hacker news") == false, "a space always means search")
-        #expect(URLIntent.looksLikeURL("what is 2.5 in binary") == false, "a dot inside a phrase is still a phrase")
-        #expect(URLIntent.looksLikeURL("swift") == false)
-        #expect(URLIntent.looksLikeURL(".com") == false, "a leading dot is not a host")
-        #expect(URLIntent.looksLikeURL("example.") == false, "a trailing dot is not a host")
-        #expect(URLIntent.looksLikeURL("") == false)
-        #expect(URLIntent.looksLikeURL("   ") == false)
-    }
-
-    @Test func normalizationAddsHTTPSOnlyWhenNoSchemeIsGiven() {
-        #expect(URLIntent.normalizedURL("example.com") == "https://example.com")
-        #expect(URLIntent.normalizedURL("  example.com/a b  ") == "https://example.com/a b")
-        #expect(URLIntent.normalizedURL("http://example.com") == "http://example.com")
-        #expect(URLIntent.normalizedURL("file:///tmp/x.html") == "file:///tmp/x.html")
+    /// `~` names the user's home directory, which only the app can know.
+    @Test(.bug(id: 39)) func homeDirectoryPathsOpenTheFileUnderHome() throws {
+        let home = try Fixture.decode(URLIntentFixture.self, from: "url-intent").home
+        for c in home.cases {
+            #expect(URLIntent.intent(of: c.input, home: home.directory) == c.expected, "\(c.input)")
+        }
     }
 
     @Test func displayHostDropsWWWAndFailsClosed() {
@@ -92,5 +84,31 @@ struct URLIntentTests {
 
         #expect(broken.searchURL(for: "swift") == "https://www.startpage.com/sp/search?query=swift")
         #expect(broken.provider == "custom")
+    }
+}
+
+/// `fixtures/url-intent.json`: each case names its input and either the URL it
+/// opens, `search`, or `none`.
+private struct URLIntentFixture: Decodable {
+    struct Case: Decodable {
+        let input: String
+        let open: String?
+        let search: Bool?
+        let none: Bool?
+
+        /// Nil for a malformed case, which then matches no intent and fails.
+        var expected: URLIntent.Intent? {
+            if let open { return .open(open) }
+            if search == true { return .search }
+            return none == true ? .empty : nil
+        }
+    }
+
+    let cases: [Case]
+    let home: Home
+
+    struct Home: Decodable {
+        let directory: String
+        let cases: [Case]
     }
 }

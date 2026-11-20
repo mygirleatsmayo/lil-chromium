@@ -2349,24 +2349,49 @@ async function omniboxSuggest(rawQuery) {
 // ADDRESS NAVIGATION — resolve URL vs. search (search template from context).
 // ===========================================================================
 
-function looksLikeUrl(raw) {
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) || /^[a-z][a-z0-9+.-]*:/i.test(raw)) return "scheme";
-  if (/^[^\s]+\.[^\s]+$/.test(raw)) return "domain";
-  return false;
+// The URL-intent contract (PROTOCOL.md *URL intent*), shared with the palette
+// (`URLIntent.intent(of:)`): the first rule that matches wins. Returns null for
+// empty input, { url } to open, or { query } to search. A `~` path searches:
+// an extension cannot know the home directory.
+function urlIntent(input) {
+  const text = typeof input === "string" ? input.trim() : "";
+  if (!text) return null;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text) || /^about:/i.test(text)) return { url: percentEncoded(text) };
+  if (text.startsWith("/")) return { url: percentEncoded("file://" + text) };
+  if (text === "~" || text.startsWith("~/") || /\s/.test(text)) return { query: text };
+  if (namesLocalHost(text)) return { url: percentEncoded("http://" + text) };
+  if (text.slice(1, -1).includes(".")) return { url: percentEncoded("https://" + text) };
+  return { query: text };
 }
 
-async function resolveNavigation(input) {
-  const raw = typeof input === "string" ? input.trim() : "";
+// Rule 7: the host is `localhost`, a `.localhost` name, a dotted IPv4 address,
+// or a single label with a numeric port (`devbox:8080`).
+function namesLocalHost(text) {
+  const [, host, port] = /^([^/?#:]*)(?::([^/?#]*))?/.exec(text);
+  if (port !== undefined && !/^\d+$/.test(port)) return false;
+  const name = host.toLowerCase();
+  if (name === "localhost" || name.endsWith(".localhost")) return true;
+  const octets = name.split(".");
+  if (octets.length === 4 && octets.every((o) => /^\d{1,3}$/.test(o) && Number(o) <= 255)) return true;
+  return port !== undefined && /^[a-z0-9-]+$/.test(name);
+}
+
+// Percent-encodes (as UTF-8) every character outside RFC 3986's unreserved and
+// reserved sets, keeping `%` so encoded text stays as typed. Mirrors
+// `URLIntent.percentEncoded` in the app.
+function percentEncoded(url) {
+  return url.toWellFormed().replace(/[^A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]/gu, (c) => encodeURIComponent(c));
+}
+
+// Resolves address-field input, or an explicit search from the Search row, to
+// the URL to navigate; null when there is nowhere to go.
+async function resolveNavigation({ input, search }) {
+  const intent = typeof search === "string" ? { query: search.trim() } : urlIntent(input);
+  if (!intent || intent.query === "") return null;
+  if (intent.url) return intent.url;
   const ctx = await getContext();
-  const template =
-    (ctx.searchEngine && ctx.searchEngine.template) || DEFAULT_SEARCH.template;
-
-  if (!raw) return template.replace("%s", "");
-
-  const kind = looksLikeUrl(raw);
-  if (kind === "scheme") return raw;
-  if (kind === "domain") return "https://" + raw;
-  return template.replace("%s", encodeURIComponent(raw));
+  const template = (ctx.searchEngine && ctx.searchEngine.template) || DEFAULT_SEARCH.template;
+  return template.replace("%s", encodeURIComponent(intent.query));
 }
 
 // ===========================================================================
@@ -2465,8 +2490,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             sendResponse({ ok: false });
             return;
           }
-          // Accept either raw user input or a chosen suggestion URL.
-          const url = typeof msg.url === "string" && msg.url ? msg.url : await resolveNavigation(msg.input);
+          // Accept a chosen suggestion URL, a Search-row query, or raw user input.
+          const url = typeof msg.url === "string" && msg.url ? msg.url : await resolveNavigation(msg);
+          if (!url) {
+            sendResponse({ ok: false });
+            return;
+          }
           const res = await safe(chrome.tabs.update(senderTabId, { url }), "tabs.update navigate");
           await refreshLastInteraction(senderWindowId);
           sendResponse({ ok: res !== null, url });

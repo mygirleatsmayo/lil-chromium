@@ -371,7 +371,7 @@ final class PaletteModel {
         }
 
         var rows: [PaletteRow] = []
-        let looksURL = URLIntent.looksLikeURL(trimmed)
+        let openURL = URLIntent.intent(of: trimmed).url
 
         // Rank the full candidate set before spending the display budget, so an
         // eligible registrable-label match cannot be evicted by ineligible
@@ -388,15 +388,14 @@ final class PaletteModel {
             rows.append(settingsRow())
         }
 
-        if looksURL {
+        if let openURL {
             // Position 1 is the explicit "Open <url>" row (per contract).
-            let normalized = URLIntent.normalizedURL(trimmed)
             rows.append(PaletteRow(
                 kind: .openURL,
                 title: "Open \(trimmed)",
-                subtitle: normalized,
-                actionURL: normalized,
-                host: Ranking.hostAndPath(normalized)?.host,
+                subtitle: openURL,
+                actionURL: openURL,
+                host: Ranking.hostAndPath(openURL)?.host,
                 autocompleteHost: nil
             ))
         } else if let promoted = bestEligibleIndex(in: matches) {
@@ -407,7 +406,7 @@ final class PaletteModel {
         rows.append(contentsOf: matches.map(historyRow))
         rows = Array(rows.prefix(maxRows))
 
-        let topHistoryHost = rows.first.flatMap { !looksURL && $0.kind == .history ? $0.host : nil }
+        let topHistoryHost = rows.first.flatMap { openURL == nil && $0.kind == .history ? $0.host : nil }
         return PaletteResults(rows: rows, autocompleteHost: topHistoryHost ?? bestMatchHost)
     }
 

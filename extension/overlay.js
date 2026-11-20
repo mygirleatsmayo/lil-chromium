@@ -919,7 +919,7 @@
       addr.blur();
       blurAddress();
       if (s.type === "search") {
-        send({ action: "navigate", input: s.query });
+        send({ action: "navigate", search: s.query });
       } else {
         send({ action: "navigate", url: s.url, input: s.url });
       }
@@ -959,7 +959,7 @@
         if (selIndex >= 0 && suggestions[selIndex]) {
           chooseSuggestion(selIndex);
         } else {
-          // No selection: current behavior — URL-ish navigate else search.
+          // No selection: the worker resolves the text by URL intent.
           const input = addr.value;
           closeOmni();
           addr.blur();
