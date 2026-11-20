@@ -32,3 +32,8 @@ Initial reviewed point: `6cfdb52`
 - Remediation 1 (`766c358...3b0ef21`): S1–S4, P1, P3, P4 resolved; 2 new defects (N1, N2 fix); P2 still pending Lucas.
 - Remediation 2 (`3b0ef21...b589f74`): N1, N2 resolved; N3 adjudicated fix (held for the P2 round); P2 still pending Lucas.
 - Lucas settled P2 (fix, browser behavior). Next: one fix round for P2 and N3.
+- Fix round for P2 and N3 built (`a698914...2638d6a`); not reviewed per ticket. Lucas moved the remaining tickets to mayo-implement-spec: one whole-branch review after #39.
+
+## After the P2 fix round
+
+- P2 amended (Lucas: match Chrome) · **fix** · Settled: a previewed row's field text is Chrome's `fill_into_edit` for a history URL, not the raw URL. Chromium `HistoryQuickProvider` formats it with `url_formatter::FormatUrl` and `kFormatUrlOmitDefaults`: drop the username and password, drop `http://` (kept when the typed text matched inside the scheme), drop the `/` of a bare host. `AutocompleteInput::FormattedStringWithEquivalentMeaning` keeps that `/` when dropping it changes how the text parses. Spaces are unescaped. `https://` and `www.` stay. Sources (chromium.googlesource.com, `main`): `components/omnibox/browser/history_quick_provider.cc`, `components/url_formatter/url_formatter.cc`, `components/omnibox/browser/autocomplete_input.cc`.
