@@ -80,3 +80,4 @@ Severity bar (Lucas, for #46 only): a fix round runs only for a spec miss, a bug
 - Remediation 6 (`64e895f...1ca91d3`): N5 resolved in production; earlier items still resolved; 1 new test gap (N6, fix).
 - Remediation 7 (`1ca91d3...647e0dc`): N6 resolved; earlier items still resolved; no new defects.
 - Final review 1 (`bf45a2f...0199379`): no finding meets the #46 severity bar; S5, S6/P7, N1 residual are follow-up candidates; P5, P6 settled won't-fix; P8 accepted; S7 won't-fix. Ready to integrate.
+- Lucas dropped the follow-up candidates (no tickets): S5, S6/P7, N1 residual, and two rare items found during #46 (the old-capture cleanup can delete a capture saved at the same moment; the test harness waits for tab-update handlers, real Chromium doesn't).

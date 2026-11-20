@@ -62,3 +62,5 @@ Initial reviewed point: `438f7db`
 - Remediation 6 (`95d223e...b9a2e41`): N3 resolved; earlier items still resolved; no new defects. Ready to integrate. P1 pending Lucas; P3 live check.
 - Lucas adjudicated P1 (won't-fix, criterion amended). Ready to integrate; P3 live check.
 - C1 superseded (Lucas): Node 20 is end of life; the floor is now `>=22` and `Promise.withResolvers` is restored (`f15af41`, AGENTS.md).
+- Lucas dropped the P2 follow-up candidate (no ticket): confirming the target browser opened the page before the lil closes.
+- Telling the user when file access is off is a separate ticket under #29.

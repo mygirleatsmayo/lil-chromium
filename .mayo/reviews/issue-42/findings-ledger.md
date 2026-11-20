@@ -40,3 +40,4 @@ Initial reviewed point: `1b572dd`
 - Final review 1 (`bf45a2f...ad49f35`): 3 Standards (S7 fix; S6 won't-fix; S8 integration), 3 Spec (P8 fix; P6, P7 settled won't-fix).
 - Remediation 2 (`ad49f35...5897e86`): S7, P8 resolved, no new defects. Ledger resolved; ready to integrate once Lucas answers D, E (P1, P2, P6) and approves the merge flow.
 - Lucas settled P1, P2, P6 as recorded. Ready to integrate.
+- Lucas dropped one test-coverage note (no ticket): the two duplicate-removal steps share one test.
