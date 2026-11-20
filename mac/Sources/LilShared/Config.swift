@@ -137,18 +137,23 @@ public struct SearchEngineConfig: Codable, Equatable, Sendable {
         }
     }
 
-    /// Build a search URL for `query`, percent-encoding the query and
-    /// substituting it for the first `%s`. Falls back to the default (Startpage)
-    /// template if this one has no `%s`. Used by the palette and (mirrored)
-    /// the extension.
+    /// Build a search URL for `query` (PROTOCOL.md *URL intent*): the trimmed
+    /// query, encoded as one query value, replaces every `%s`. Falls back to
+    /// the default (Startpage) template if this one has no `%s`. Used by the
+    /// palette and (mirrored) the extension.
     public func searchURL(for query: String) -> String {
         let trimmed = query.trimmingWhitespace()
-        let encoded = trimmed.addingPercentEncoding(
-            withAllowedCharacters: .urlQueryAllowed
-        ) ?? trimmed
+        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: Self.queryValueCharacters) ?? trimmed
         let tmpl = template.contains("%s") ? template : SearchEngineConfig.defaults.template
         return tmpl.replacingOccurrences(of: "%s", with: encoded)
     }
+
+    /// The characters a query value keeps as typed: JavaScript's
+    /// `encodeURIComponent` set, which the hoverbar encodes with, so `&`, `+`
+    /// and `=` stay inside the value (`R&D` → `R%26D`).
+    private static let queryValueCharacters = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()"
+    )
 }
 
 /// Hover-bar appearance. See PROTOCOL.md `hoverBar`.

@@ -93,16 +93,15 @@ struct URLIntentTests {
 
     // MARK: - Search templates
 
-    /// `%s` is where the query goes, percent-encoded.
-    @Test func searchTemplateSubstitutesTheEncodedQuery() {
-        #expect(
-            SearchEngineConfig.defaults.searchURL(for: "lil chromium")
-                == "https://www.startpage.com/sp/search?query=lil%20chromium"
-        )
-        #expect(
-            SearchEngineConfig(name: "Kagi", template: "https://kagi.com/search?q=%s").searchURL(for: "café")
-                == "https://kagi.com/search?q=caf%C3%A9"
-        )
+    /// One search URL for the palette and the hoverbar (PROTOCOL.md *URL
+    /// intent*): the typed text is one query value. The extension suite runs
+    /// the same cases.
+    @Test(.bug(id: 44)) func searchURLsFollowTheSharedContract() throws {
+        let search = try Fixture.decode(URLIntentFixture.self, from: "url-intent").search
+        for c in search.cases {
+            let engine = SearchEngineConfig(name: "Engine", template: c.template ?? search.template)
+            #expect(engine.searchURL(for: c.input) == c.url, "\(c.input)")
+        }
     }
 
     /// A custom template the user set from a config fixture works the same way.
@@ -111,14 +110,6 @@ struct URLIntentTests {
 
         #expect(cfg.searchEngine.name == "Kagi")
         #expect(cfg.searchEngine.searchURL(for: "swift 6") == "https://kagi.com/search?q=swift%206")
-    }
-
-    /// Whitespace around the query never reaches the search engine.
-    @Test func searchTemplateTrimsTheQuery() {
-        #expect(
-            SearchEngineConfig.defaults.searchURL(for: "  swift  ")
-                == "https://www.startpage.com/sp/search?query=swift"
-        )
     }
 
     /// A template with no placeholder cannot carry a query — fall back to the
@@ -132,7 +123,8 @@ struct URLIntentTests {
 }
 
 /// `fixtures/url-intent.json`: each case names its input and either the URL it
-/// opens, `search`, or `none`.
+/// opens, `search`, or `none`. Each `search` case names the URL its input
+/// searches, with `search.template` unless it names its own.
 private struct URLIntentFixture: Decodable {
     struct Case: Decodable {
         let input: String
@@ -149,7 +141,19 @@ private struct URLIntentFixture: Decodable {
     }
 
     let cases: [Case]
+    let search: Search
     let home: Home
+
+    struct Search: Decodable {
+        struct Case: Decodable {
+            let input: String
+            let template: String?
+            let url: String
+        }
+
+        let template: String
+        let cases: [Case]
+    }
 
     struct Home: Decodable {
         let directory: String

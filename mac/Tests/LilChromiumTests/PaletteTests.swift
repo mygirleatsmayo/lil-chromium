@@ -758,7 +758,7 @@ struct PaletteActionTests {
         ))
 
         #expect(action.kind == .search)
-        #expect(action.url == "https://www.startpage.com/sp/search?query=example.com/pricing")
+        #expect(action.url == "https://www.startpage.com/sp/search?query=example.com%2Fpricing")
         #expect(action.incognito == false)
         #expect(action.hint == "⏎ Search")
     }

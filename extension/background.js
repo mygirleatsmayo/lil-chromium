@@ -2404,9 +2404,12 @@ async function resolveNavigation({ input, search }) {
   const intent = typeof search === "string" ? { query: trimWhitespace(search) } : urlIntent(input);
   if (!intent || intent.query === "") return null;
   if (intent.url) return intent.url;
+  // The query, as one query value, replaces every `%s`; a template without
+  // one falls back to the default. Mirrors `SearchEngineConfig.searchURL(for:)`.
   const ctx = await getContext();
-  const template = (ctx.searchEngine && ctx.searchEngine.template) || DEFAULT_SEARCH.template;
-  return template.replace("%s", encodeURIComponent(intent.query));
+  const template = ctx.searchEngine && ctx.searchEngine.template;
+  const usable = typeof template === "string" && template.includes("%s") ? template : DEFAULT_SEARCH.template;
+  return usable.replaceAll("%s", encodeURIComponent(intent.query.toWellFormed()));
 }
 
 // ===========================================================================

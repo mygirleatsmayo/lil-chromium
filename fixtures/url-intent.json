@@ -44,6 +44,20 @@
     { "input": "a\uFEFFb.com", "open": "https://a%EF%BB%BFb.com" },
     { "input": "\u200Bexample.com", "open": "https://%E2%80%8Bexample.com" }
   ],
+  "search": {
+    "template": "https://kagi.com/search?q=%s",
+    "cases": [
+      { "input": "lil chromium", "url": "https://kagi.com/search?q=lil%20chromium" },
+      { "input": "R&D", "url": "https://kagi.com/search?q=R%26D" },
+      { "input": "C++", "url": "https://kagi.com/search?q=C%2B%2B" },
+      { "input": "a=b;c/d?e#f@g:h,i$j", "url": "https://kagi.com/search?q=a%3Db%3Bc%2Fd%3Fe%23f%40g%3Ah%2Ci%24j" },
+      { "input": "100% café", "url": "https://kagi.com/search?q=100%25%20caf%C3%A9" },
+      { "input": "it's (fine)!*~-_.", "url": "https://kagi.com/search?q=it's%20(fine)!*~-_." },
+      { "input": "\u0085 swift \u3000", "url": "https://kagi.com/search?q=swift" },
+      { "input": "R&D", "template": "https://x.example/?q=%s&echo=%s", "url": "https://x.example/?q=R%26D&echo=R%26D" },
+      { "input": "swift", "template": "https://x.example/search", "url": "https://www.startpage.com/sp/search?query=swift" }
+    ]
+  },
   "home": {
     "directory": "/Users/me",
     "cases": [
