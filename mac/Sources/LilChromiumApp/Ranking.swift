@@ -269,10 +269,7 @@ enum Ranking {
     static func topByFrecency(index: HistoryIndex, limit: Int) -> [RankedResult] {
         var results: [RankedResult] = []
         for origin in index.origins {
-            results.append(RankedResult(title: origin.displayTitle, url: origin.url,
-                                        host: origin.host, score: origin.frecency,
-                                        isOrigin: true, frecency: origin.frecency,
-                                        matchesRegistrableLabel: false))
+            results.append(RankedResult(origin: origin))
         }
         results.sort(by: isBefore)
         results = dedupeByURL(results)
@@ -525,6 +522,26 @@ enum Ranking {
         return host + (path.isEmpty ? "/" : path)
     }
 
+    /// Whether two URLs open the same page: `normalizeURLKey` equivalence
+    /// (case, scheme, `www.`, trailing slash) with the port and query kept,
+    /// since either one names a different page.
+    static func isSameDestination(_ a: String, _ b: String) -> Bool {
+        let (ca, cb) = (URLComponents(string: a), URLComponents(string: b))
+        return normalizeURLKey(a) == normalizeURLKey(b)
+            && significantPort(ca) == significantPort(cb)
+            && ca?.query == cb?.query
+    }
+
+    /// The port that names a different page: nil for none, or for the
+    /// scheme's own default (`:80` http, `:443` https), as URL canonicalization
+    /// treats them.
+    private static func significantPort(_ url: URLComponents?) -> Int? {
+        switch (url?.scheme?.lowercased(), url?.port) {
+        case ("http", 80), ("https", 443): return nil
+        case (_, let port): return port
+        }
+    }
+
     /// "github.com" → "Github", "news.ycombinator.com" → "News". Best-effort
     /// label when we have no page title for a host.
     static func capitalizedHost(_ host: String) -> String {
@@ -546,5 +563,14 @@ enum Ranking {
         case let (nil, y?): return y
         default: return nil
         }
+    }
+}
+
+extension Ranking.RankedResult {
+    /// An origin ranked by frecency alone, with no query to match.
+    init(origin: Ranking.Origin) {
+        self.init(title: origin.displayTitle, url: origin.url, host: origin.host,
+                  score: origin.frecency, isOrigin: true, frecency: origin.frecency,
+                  matchesRegistrableLabel: false)
     }
 }

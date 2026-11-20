@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import LilShared
 
 /// A single selectable row in the palette.
@@ -39,6 +39,103 @@ struct PaletteAction: Equatable {
 struct PaletteResults {
     let rows: [PaletteRow]
     let autocompleteHost: String?
+}
+
+/// What the palette field holds (issue #38): the text the user typed and, while
+/// inline type-ahead shows one, the history row it completes to. On the top
+/// row the field displays `text` with `completionRange` selected; on another
+/// row, that row's preview (`display(previewing:)`). The completion is the
+/// default action, so the field, the selected row, and Return never disagree.
+struct PaletteInput {
+    /// Text the user entered; excludes the auto-appended remainder.
+    fileprivate(set) var typed = ""
+    /// The origin row whose host the field is completed to, if any.
+    fileprivate(set) var completion: PaletteRow?
+
+    /// The full field text: typed text plus the completed host's remainder,
+    /// with the user's casing kept for the typed prefix.
+    var text: String {
+        guard let host = completion?.host else { return typed }
+        return typed + host.dropFirst(typed.count)
+    }
+
+    /// The selected remainder in UTF-16 units (NSRange), nil with no completion.
+    var completionRange: NSRange? {
+        guard completion != nil else { return nil }
+        let base = (typed as NSString).length
+        return NSRange(location: base, length: (text as NSString).length - base)
+    }
+
+    /// The user changed the field text (typing, deleting, pasting): it is the
+    /// query now, with no completion until its ranking lands
+    /// (`PaletteModel.completing`). Returns whether that ranking may offer
+    /// one: type-ahead follows only an edit that extends the typed text,
+    /// never a deletion.
+    mutating func edit(to newText: String) -> Bool {
+        let extends = newText.count > typed.count
+            && newText.lowercased().hasPrefix(typed.lowercased())
+        typed = newText
+        completion = nil
+        return extends
+    }
+
+    /// The field's selection moved. If the field still shows the completed
+    /// text but the remainder is no longer exactly selected (→, ⌘→, End, a
+    /// click), the user accepted it: the full text becomes the typed query.
+    /// Returns whether the query changed. A selection change that arrives
+    /// with different text belongs to an edit and is left to `edit`.
+    mutating func selectionDidChange(to range: NSRange, in fieldText: String) -> Bool {
+        guard let completionRange, fieldText == text, range != completionRange else {
+            return false
+        }
+        acceptCompletion()
+        return true
+    }
+
+    /// What the field shows while `row` is selected, nil for the top row.
+    /// The top row shows `text` with the completion's remainder selected.
+    /// Any other row previews, caret at the end: a history row's URL as
+    /// Chrome's field shows it (`URLIntent.fieldText`), an Open row's URL, or
+    /// the typed text (Search, Settings). A preview never changes the query;
+    /// editing it does, through `edit`.
+    /// Browser precedent (r04 §2): Chrome and Firefox show the arrow-selected
+    /// result in the field; Firefox restores the autofill on reselecting the
+    /// top row.
+    func display(previewing row: PaletteRow?) -> (text: String, selection: NSRange) {
+        func caretAtEnd(of text: String) -> NSRange {
+            NSRange(location: (text as NSString).length, length: 0)
+        }
+        guard let row else { return (text, completionRange ?? caretAtEnd(of: text)) }
+        let shown = switch row.kind {
+        case .history: URLIntent.fieldText(forHistoryURL: row.actionURL, typed: typed)
+        case .openURL: row.actionURL
+        case .search, .settings: typed
+        }
+        return (shown, caretAtEnd(of: shown))
+    }
+
+    /// A key command reached the field, which shows `fieldText`, before its
+    /// editor runs it. End accepts a displayed completion here because its
+    /// command only scrolls; → and ⌘→ move the caret and accept through
+    /// `selectionDidChange`. A field previewing another row has no completion
+    /// to accept. Returns whether the query changed (the caller then consumes
+    /// the command).
+    /// verified: StandardKeyBinding.dict plus a live field editor — → sends
+    /// moveRight: and ⌘→ moveToRightEndOfLine:, each then posting the caret at
+    /// the end; End sends scrollToEndOfDocument: and leaves the selection.
+    mutating func handle(_ command: Selector, in fieldText: String) -> Bool {
+        guard command == #selector(NSResponder.scrollToEndOfDocument(_:)),
+              completion != nil, fieldText == text else {
+            return false
+        }
+        acceptCompletion()
+        return true
+    }
+
+    private mutating func acceptCompletion() {
+        typed = text
+        completion = nil
+    }
 }
 
 /// The only modifier keys that participate in a palette Return chord.
@@ -211,6 +308,34 @@ final class PaletteModel {
         results(for: query).rows
     }
 
+    /// The ranking of `input.typed` landed: complete the field to its
+    /// type-ahead host when the typed text strictly prefixes that host.
+    func completing(_ input: PaletteInput, with results: PaletteResults) -> PaletteInput {
+        guard !input.typed.isEmpty, let host = results.autocompleteHost,
+              host.lowercased().hasPrefix(input.typed.lowercased()),
+              host.count > input.typed.count else { return input }
+        var next = input
+        next.completion = originRow(host: host)
+        return next
+    }
+
+    /// Rows for the field state, ranked now (see `rows(for:typedRows:)`).
+    func rows(for input: PaletteInput) -> [PaletteRow] {
+        rows(for: input, typedRows: rows(for: input.typed))
+    }
+
+    /// Rows for the field state, given `typedRows` ranked for `input.typed`.
+    /// A displayed completion leads; below it sit the typed text's own rows,
+    /// minus the history row for the same destination. Open and Search rows
+    /// always stay.
+    func rows(for input: PaletteInput, typedRows: [PaletteRow]) -> [PaletteRow] {
+        guard let top = input.completion else { return typedRows }
+        let rest = typedRows.filter {
+            $0.kind != .history || !Ranking.isSameDestination($0.actionURL, top.actionURL)
+        }
+        return Array(([top] + rest).prefix(maxRows))
+    }
+
     /// Compute the rows to display for `query`.
     ///
     /// Ordering (Issue #13) — non-URL text behaves like search unless history
@@ -309,6 +434,12 @@ final class PaletteModel {
             host: r.host,
             autocompleteHost: r.host
         )
+    }
+
+    /// The site row for `host`, as ranking would show its origin.
+    private func originRow(host: String) -> PaletteRow? {
+        guard let origin = index.origins.first(where: { $0.host == host }) else { return nil }
+        return historyRow(Ranking.RankedResult(origin: origin))
     }
 
     private func settingsRow() -> PaletteRow {

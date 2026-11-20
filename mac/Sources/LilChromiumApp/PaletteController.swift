@@ -22,11 +22,15 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     private var selection = PaletteSelection()
     private var currentReturnChord: PaletteReturnChord = .plain
 
-    // Inline autocomplete state.
-    /// The text the user has actually typed (excludes auto-appended completion).
-    /// Enter opens the selected row (row 0 after every edit), so an "is
-    /// completion active" flag is unnecessary — the completion is purely visual.
-    private var committedQuery: String = ""
+    /// Typed text plus any displayed inline completion. Rows and Return derive
+    /// from this, never from the raw field text.
+    private var input = PaletteInput()
+    /// True while the controller itself writes the field (a completion or a
+    /// row preview), so the selection changes it causes are not read as the
+    /// user accepting a completion.
+    /// verified: setting `stringValue` on an editing field posts
+    /// didChangeSelection with the caret at the end — an apparent acceptance.
+    private var isWritingField = false
 
     /// Typed queries rank off the main thread: across a full history window
     /// (20,000 items) one keystroke takes ~100 ms in a release build (issue
@@ -70,8 +74,8 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         guard let panel = panel, let inputField = inputField else { return }
 
         // Reset input + autocomplete state each open.
+        input = PaletteInput()
         inputField.stringValue = ""
-        committedQuery = ""
         refreshTabHint()
         currentReturnChord = .plain
 
@@ -165,6 +169,14 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         let field = PaletteSearchField()
         field.configureAsPaletteInput()
         field.delegate = self
+        // NSTextFieldDelegate has no selection callback; the field editor posts
+        // this one. Filtered to our field editor in the handler.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(fieldSelectionDidChange(_:)),
+            name: NSTextView.didChangeSelectionNotification,
+            object: nil
+        )
 
         // Dim trailing `Search ⇥` hint (Raycast's Tab hint). It shares a stack
         // with the field: the stack detaches it while hidden, so the field
@@ -333,31 +345,32 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
                 guard let self, self.model.install(index, from: ticket) else { return }
                 // Re-render with whatever is currently typed. `render` clamps
                 // rather than resets: the user may already have arrowed down.
-                self.reload(query: self.committedQuery)
+                self.reload()
             }
         }
     }
 
-    /// Recompute rows for a query off the main thread, then render them if no
-    /// newer edit arrived meanwhile. `autocomplete` also offers inline
+    /// Recompute rows for the typed text off the main thread, then render them
+    /// if no newer edit arrived meanwhile. `autocomplete` also offers inline
     /// type-ahead for the top hit once the rows land.
-    private func reload(query: String, autocomplete: Bool = false) {
+    private func reload(autocomplete: Bool = false) {
         pendingRank?.cancel()
         let ticket = model.beginRanking()
         let worker = model.copy()
+        let query = input.typed
         let work = DispatchWorkItem { [weak self] in
             let ranked = worker.results(for: query)
             DispatchQueue.main.async {
                 guard let self, let results = self.model.land(ranked, from: ticket) else { return }
                 self.pendingRank = nil
-                self.render(results.rows)
                 // Rows depend on the text alone; a completion also needs the
                 // caret and selection it was ranked for.
-                if autocomplete, let host = results.autocompleteHost,
-                   let field = self.inputField, let editor = field.fieldText,
+                if autocomplete, let field = self.inputField, let editor = field.fieldText,
                    Self.completionApplies(rankedFor: query, text: field.stringValue, selection: editor.selectedRange) {
-                    self.applyAutocomplete(typed: query, host: host, field: field)
+                    self.input = self.model.completing(self.input, with: results)
                 }
+                self.render(self.model.rows(for: self.input, typedRows: results.rows))
+                self.showSelection()
             }
         }
         pendingRank = work
@@ -384,7 +397,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     private func settleRows() {
         guard pendingRank != nil else { return }
         cancelPendingRank()
-        render(model.rows(for: committedQuery))
+        render(model.rows(for: input))
     }
 
     /// Show `rows` and rebuild the stacked row views. A fresh open sends the
@@ -401,7 +414,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
 
     /// Show `Search ⇥` only while Tab has an action (a non-empty query).
     private func refreshTabHint() {
-        let hint = model.tabAction(for: committedQuery)?.hint
+        let hint = model.tabAction(for: input.typed)?.hint
         tabHintLabel?.stringValue = hint ?? ""
         tabHintLabel?.isHidden = hint == nil
     }
@@ -454,6 +467,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     private func moveSelection(_ direction: PaletteSelection.Direction) {
         selection.move(direction)
         refreshHighlights()
+        showSelection()
     }
 
     private func refreshHighlights() {
@@ -471,7 +485,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     }
 
     private func returnAction(chord: PaletteReturnChord) -> PaletteAction? {
-        model.returnAction(for: committedQuery, rows: currentRows,
+        model.returnAction(for: input.typed, rows: currentRows,
                            selection: selection, chord: chord)
     }
 
@@ -550,20 +564,26 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// "Enter select-alls" bug). `cancelOperation` returns false so Esc bubbles
     /// to the panel's cancelOperation → close().
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if input.handle(selector, in: textView.string) {
+            // Drop the selected remainder so the field reads as accepted.
+            textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+            queryDidChange()
+            return true
+        }
         switch selector {
         case #selector(NSResponder.insertNewline(_:)):
             settleRows()
             activateSelection(chord: returnChordOnCurrentEvent())
             return true
         case #selector(NSResponder.insertTab(_:)):
-            // Tab searches the TYPED text (committedQuery, never the inline
+            // Tab searches the TYPED text (input.typed, never the inline
             // completion) whatever row is selected. Always consumed, so an
             // empty query keeps focus in the field instead of moving it to
             // the Settings/Close buttons.
             // verified: macOS 27.0.1, 2026-11-19 probe — plain Tab arrives here as
             // `insertTab:`; returning true leaves the field editor first
             // responder with its text unchanged.
-            if let action = model.tabAction(for: committedQuery) { perform(action) }
+            if let action = model.tabAction(for: input.typed) { perform(action) }
             return true
         case #selector(NSResponder.moveUp(_:)):
             settleRows()
@@ -583,55 +603,50 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
 
     func controlTextDidChange(_ obj: Notification) {
         guard let field = inputField else { return }
-        let newText = field.stringValue
-
-        // Deletion detection: compare against what the user had typed before.
-        // Autocomplete must NEVER fire after a deletion (per contract), so any
-        // change that isn't a strict forward extension of the committed query
-        // is treated as a deletion/edit.
-        let isInsertion = newText.count > committedQuery.count
-                          && newText.lowercased().hasPrefix(committedQuery.lowercased())
-
-        // The current user-typed text becomes the new committed query. When
-        // autocomplete was active, typing over the selected completion yields
-        // exactly the new typed text here (the selection was replaced).
-        committedQuery = newText
-        // The hint depends on the typed text alone: update it now, not when
-        // this query's rows land.
-        refreshTabHint()
-
-        // Reset selection to the top on each edit so Enter opens the best match.
-        // Reset now, while the new rows still rank: Return settles them first,
-        // and a history refresh landing meanwhile only clamps.
-        selection.rowsChanged(count: currentRows.count, resetSelection: true)
-
-        // Inline type-ahead: only on insertions, only if the top hit's host
-        // starts with the typed text (case-insensitive, "www." already stripped
-        // in the index).
-        reload(query: newText, autocomplete: isInsertion && !newText.isEmpty)
+        // Autocomplete must NEVER fire after a deletion (per contract).
+        queryDidChange(offeringCompletion: input.edit(to: field.stringValue))
     }
 
-    /// If the top-hit `host` begins with `typed`, complete the field to the
-    /// full host and SELECT the appended portion (so the next keystroke replaces
-    /// it — the "git → git[hub.com]" behavior).
-    private func applyAutocomplete(typed: String, host: String, field: PaletteSearchField) {
-        let lowerTyped = typed.lowercased()
-        let lowerHost = host.lowercased()
-        // Host must start with the typed text and be strictly longer.
-        guard lowerHost.hasPrefix(lowerTyped), lowerHost.count > lowerTyped.count else { return }
+    /// The query changed (an edit, or an accepted completion). The hint
+    /// depends on the typed text alone, so it updates now, not when the rows
+    /// land. The selection goes back to the top so Enter opens the best match;
+    /// it resets now, while the new rows still rank: Return settles them
+    /// first, and a history refresh landing meanwhile only clamps.
+    private func queryDidChange(offeringCompletion: Bool = false) {
+        refreshTabHint()
+        selection.rowsChanged(count: currentRows.count, resetSelection: true)
+        reload(autocomplete: offeringCompletion)
+    }
 
-        // Preserve the user's original casing for the typed prefix; append the
-        // remainder of the host verbatim.
-        let remainderStart = host.index(host.startIndex, offsetBy: typed.count)
-        let completed = typed + String(host[remainderStart...])
+    /// Make the field show the selected row: on the top row, the input with
+    /// any completion's remainder SELECTED, so the next keystroke replaces it
+    /// ("git" → "git[hub.com]"); on any other row, that row's preview. Writes
+    /// only when the text differs, so an edit keeps the caret where it is.
+    private func showSelection() {
+        guard let field = inputField, let editor = field.fieldText else { return }
+        // `selection` always counts `currentRows`, so a nonzero row exists.
+        let row = selection.selected == 0 ? nil : currentRows[selection.selected]
+        let display = input.display(previewing: row)
+        guard editor.string != display.text else { return }
+        isWritingField = true
+        defer { isWritingField = false }
+        field.stringValue = display.text
+        editor.selectedRange = display.selection
+    }
 
-        field.stringValue = completed
-        // Select the appended range using UTF-16 offsets (NSRange is UTF-16).
-        guard let editor = field.fieldText else { return }
-        let base = (typed as NSString).length
-        let full = (completed as NSString).length
-        editor.selectedRange = NSRange(location: base, length: full - base)
-        // committedQuery stays as the user-typed text (not the completion), so
-        // the next change's insertion/deletion check is against the real prefix.
+    /// →, ⌘→, End, or a click that drops the selected remainder accepts the
+    /// completion: rows and hint recompute for the full field text. Reads the
+    /// editor's current state, so it is correct whether AppKit posts this
+    /// before or after the text-change callback of an edit.
+    /// verified: typing over or deleting the selection posts this first, with
+    /// the edited text (≠ `input.text`, so a no-op), then controlTextDidChange;
+    /// moveRight: and moveToEndOfLine: post it with the text unchanged.
+    @objc private func fieldSelectionDidChange(_ note: Notification) {
+        guard !isWritingField,
+              let editor = inputField?.fieldText,
+              (note.object as AnyObject?) === editor,
+              input.selectionDidChange(to: editor.selectedRange, in: editor.string)
+        else { return }
+        queryDidChange()
     }
 }
