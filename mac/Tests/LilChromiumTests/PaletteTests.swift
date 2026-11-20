@@ -92,6 +92,21 @@ struct PaletteRowsTests {
         #expect(rows.count <= 8)
     }
 
+    /// Word order never hides a page (issue #42): every term of a multi-word
+    /// query must appear in the host, title, or URL — in any order, in any field.
+    @Test(
+        "Multi-word queries find a page in any word order",
+        .bug(id: 42),
+        arguments: ["fix gizmo", "gizmo fix", "alignment gizmo", "github gizmo"]
+    )
+    func multiWordQueriesMatchInAnyOrder(_ query: String) throws {
+        let rows = try makeModel().rows(for: query)
+
+        #expect(rows.first?.kind == .search, "a multi-word query never leads Search")
+        #expect(rows.dropFirst().first?.actionURL
+            == "https://github.com/mygirleatsmayo/lil-chromium/commit/deadbeef")
+    }
+
     /// Inline autocomplete only offers a host that actually prefixes the query.
     @Test func autocompleteOffersOnlyAPrefixedHost() throws {
         let model = try makeModel()
@@ -149,19 +164,21 @@ struct PaletteSettingsAccessTests {
     }
 }
 
-/// Row ORDER around the Search action (issue #13).
-///
-/// The rule under test: for non-empty, non-URL text, only a contiguous literal
-/// match inside the distinctive label of a history entry's registrable domain
-/// may sit above Search. Public suffixes (e.g. `com`) never promote.
-/// Every assertion names rows and action URLs in order — never a score.
-struct PaletteOrderingTests {
+/// Shared history fixtures for palette suites that build their own history.
+/// A suite adds standing pages through `baseHistory`.
+protocol PaletteHistoryFixture {
+    /// Pages present in every palette the suite builds.
+    var baseHistory: [HistoryItem] { get }
+}
+
+extension PaletteHistoryFixture {
+    var baseHistory: [HistoryItem] { [] }
 
     /// A fixed clock; every fixture visit is expressed as an age against it.
-    private let nowMs: Double = 1_700_000_000_000
+    var nowMs: Double { 1_700_000_000_000 }
 
     /// One history entry. Defaults describe an ordinary, recently visited page.
-    private func visit(
+    func visit(
         _ url: String,
         title: String = "",
         visits: Int = 5,
@@ -177,17 +194,27 @@ struct PaletteOrderingTests {
         )
     }
 
-    /// A palette model over exactly `items`, searching with the Startpage default.
-    private func model(_ items: HistoryItem...) -> PaletteModel {
+    /// A palette model over `items` plus `baseHistory`, searching with the
+    /// Startpage default.
+    func model(_ items: HistoryItem...) -> PaletteModel {
         model(items)
     }
 
-    private func model(_ items: [HistoryItem]) -> PaletteModel {
+    func model(_ items: [HistoryItem]) -> PaletteModel {
         let model = PaletteModel()
-        model.install(Ranking.buildIndex(items: items, nowMs: nowMs), from: model.beginRefresh())
+        model.install(Ranking.buildIndex(items: items + baseHistory, nowMs: nowMs), from: model.beginRefresh())
         model.searchEngine = .defaults
         return model
     }
+}
+
+/// Row ORDER around the Search action (issue #13).
+///
+/// The rule under test: for non-empty, non-URL text, only a contiguous literal
+/// match inside the distinctive label of a history entry's registrable domain
+/// may sit above Search. Public suffixes (e.g. `com`) never promote.
+/// Every assertion names rows and action URLs in order — never a score.
+struct PaletteOrderingTests: PaletteHistoryFixture {
 
     // MARK: - Above Search: literal registrable-domain matches
 
@@ -404,6 +431,147 @@ struct PaletteOrderingTests {
 
         #expect(rows.prefix(2).map(\.kind) == [.openURL, .search])
         #expect(rows[0].actionURL == "https://example.com/pricing")
+    }
+}
+
+/// The any-order matching contract for multi-word queries (issue #42). Every
+/// assertion names rows in order — never a score.
+struct PaletteAnyOrderTests: PaletteHistoryFixture {
+
+    /// example.com's root page, so the site's origin row is titled "Example"
+    /// and never matches the queries under test.
+    var baseHistory: [HistoryItem] {
+        [visit("https://example.com/", title: "Example", visits: 50)]
+    }
+
+    private func historyURLs(_ rows: [PaletteRow]) -> [String] {
+        rows.filter { $0.kind == .history }.map(\.actionURL)
+    }
+
+    private var gizmoPages: [HistoryItem] {
+        [
+            visit("https://example.com/a", title: "Gizmo alignment fix"),
+            visit("https://example.com/b", title: "Gizmos realignment fixture", visits: 10),
+        ]
+    }
+
+    /// Both pages start a title word with each term; the more visited leads.
+    @Test("Repeated terms and extra spaces change nothing", .bug(id: 42))
+    func repeatedTermsAndExtraSpacesChangeNothing() {
+        let palette = model(gizmoPages)
+        let expected = ["https://example.com/b", "https://example.com/a"]
+
+        #expect(historyURLs(palette.rows(for: "fix gizmo")) == expected)
+        #expect(historyURLs(palette.rows(for: "  fix   gizmo fix  ")) == expected)
+    }
+
+    /// The whole-query fuzzy fallback sees the normalized query too.
+    @Test("Extra spaces and repeats don't change a fuzzy-only match", .bug(id: 42))
+    func normalizationReachesTheFuzzyFallback() {
+        let palette = model([visit("https://example.com/1", title: "SwiftUI Basics")])
+        let expected = ["https://example.com/1"]
+
+        #expect(historyURLs(palette.rows(for: "sui bsc")) == expected)
+        #expect(historyURLs(palette.rows(for: "  sui   bsc sui ")) == expected)
+    }
+
+    /// A term that only matches as a scattered subsequence disqualifies the page.
+    @Test("Fuzzy matching never applies to one term of a multi-term query", .bug(id: 42))
+    func fuzzyNeverAppliesPerTerm() {
+        let rows = model([visit("https://example.com/1", title: "SwiftUI Basics")])
+            .rows(for: "basics swui")
+
+        #expect(rows.map(\.kind) == [.search])
+    }
+
+    /// "sui bsc" matches both pages only as a whole-query subsequence. They
+    /// are still found, and the dense match keeps its tier above the more
+    /// frecent scattered one.
+    @Test("Whole-query matches are never lost", .bug(id: 42))
+    func wholeQueryMatchesAreNeverLost() {
+        let rows = model([
+            visit("https://example.com/scattered", title: "Super user interface bus schedule", visits: 10),
+            visit("https://example.com/dense", title: "SwiftUI Basics"),
+        ]).rows(for: "sui bsc")
+
+        #expect(rows.first?.kind == .search)
+        #expect(historyURLs(rows) == ["https://example.com/dense", "https://example.com/scattered"])
+    }
+
+    /// Every term of the first page starts a title word; the second page's
+    /// "alignment" only sits inside "realignment". Its weakest term ranks it
+    /// lower despite more visits.
+    @Test("The weakest term sets an any-order match's tier", .bug(id: 42))
+    func weakestTermSetsTheTier() {
+        let rows = model(gizmoPages).rows(for: "fix alignment gizmo")
+
+        #expect(historyURLs(rows) == ["https://example.com/a", "https://example.com/b"])
+    }
+
+    /// "swift basics" is a dense whole-query subsequence of both titles, but only
+    /// "SwiftUI Basics" also has both words as literal title-word prefixes. That
+    /// stronger tier outranks the more frecent fuzzy-only page.
+    @Test("The stronger of whole-query and any-order tiers wins", .bug(id: 42))
+    func strongerTierWins() {
+        let rows = model([
+            visit("https://example.com/fuzzy", title: "Swift basic stats", visits: 20),
+            visit("https://example.com/both", title: "SwiftUI Basics", visits: 5),
+        ]).rows(for: "swift basics")
+
+        #expect(historyURLs(rows) == ["https://example.com/both", "https://example.com/fuzzy"])
+    }
+
+    @Test("Any-order rows do not depend on history order", .bug(id: 42))
+    func rowsDoNotDependOnHistoryOrder() {
+        let history = ["c", "a", "b"].map { visit("https://example.com/\($0)", title: "Gizmo fix") }
+
+        let forward = historyURLs(model(history).rows(for: "fix gizmo"))
+        let reversed = historyURLs(model(history.reversed()).rows(for: "fix gizmo"))
+
+        #expect(forward == reversed)
+        #expect(forward == ["https://example.com/a", "https://example.com/b", "https://example.com/c"])
+    }
+
+    /// `/A` and `/a` collapse to one page; with equal signal, the survivor
+    /// is the same whichever the browser reported first.
+    @Test("Case-only duplicates collapse independently of history order", .bug(id: 42))
+    func caseOnlyDuplicatesCollapseDeterministically() {
+        let history = [
+            visit("https://example.com/Gizmo", title: "Gizmo fix"),
+            visit("https://example.com/gizmo", title: "Gizmo fix"),
+        ]
+
+        let forward = historyURLs(model(history).rows(for: "fix gizmo"))
+        let reversed = historyURLs(model(history.reversed()).rows(for: "fix gizmo"))
+
+        #expect(forward == ["https://example.com/Gizmo"])
+        #expect(reversed == forward)
+    }
+
+    /// Both terms hit github.com's registrable label and title, yet the whole
+    /// query is not a literal domain match, so Search still leads.
+    @Test("A multi-term query never puts history above Search", .bug(id: 42))
+    func multiTermNeverLeadsSearch() {
+        let rows = model([visit("https://github.com/", title: "GitHub hub", visits: 90)])
+            .rows(for: "hub git")
+
+        #expect(rows.map(\.kind) == [.search, .history])
+    }
+
+    @Test("Per-host cap and duplicate collapsing still apply", .bug(id: 42))
+    func perHostCapAndDuplicatesStillApply() {
+        let history = [
+            visit("https://example.com/a", title: "Gizmo fix"),
+            visit("https://www.example.com/a", title: "Gizmo fix", visits: 9),
+            visit("https://example.com/b", title: "Gizmo fix"),
+            visit("https://example.com/c", title: "Gizmo fix"),
+            visit("https://example.com/d", title: "Gizmo fix"),
+        ]
+
+        // The more visited www. copy stands for /a; the plain copy never shows.
+        #expect(historyURLs(model(history).rows(for: "fix gizmo")) == [
+            "https://www.example.com/a", "https://example.com/b", "https://example.com/c",
+        ])
     }
 }
 

@@ -149,8 +149,10 @@ enum Ranking {
             if let existing = bestByKey[key] {
                 // Ties break on the URL so the surviving page never depends on
                 // the order the browser reported history in.
+                // Lowercased URLs can tie (`/A` vs `/a`), so the raw URL settles it.
                 let wins = page.frecency > existing.frecency
-                    || (page.frecency == existing.frecency && page.lowerURL < existing.lowerURL)
+                    || (page.frecency == existing.frecency
+                        && (page.lowerURL, page.item.url) < (existing.lowerURL, existing.item.url))
                 if wins { bestByKey[key] = page }
             } else {
                 bestByKey[key] = page
@@ -206,8 +208,8 @@ enum Ranking {
     /// Returns results already ordered best-first. The TOP HIT (if any host
     /// prefixes the query) is guaranteed at index 0.
     static func rank(query rawQuery: String, index: HistoryIndex, limit: Int) -> [RankedResult] {
-        let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if query.isEmpty {
+        let query = Query(rawQuery)
+        if query.terms.isEmpty {
             return topByFrecency(index: index, limit: limit)
         }
 
@@ -215,7 +217,7 @@ enum Ranking {
 
         // --- Origins: the only source of the host-prefix top hit. ---
         for origin in index.origins {
-            guard let tier = matchTier(query: query, host: origin.host,
+            guard let tier = matchTier(query, host: origin.host,
                                        title: origin.displayTitle.lowercased(),
                                        url: origin.url.lowercased(),
                                        isOrigin: true) else { continue }
@@ -226,13 +228,13 @@ enum Ranking {
                 score: tier * (origin.frecency + 0.1),
                 isOrigin: true,
                 frecency: origin.frecency,
-                matchesRegistrableLabel: queryMatchesRegistrableLabel(query, in: origin.registrableDomain)
+                matchesRegistrableLabel: queryMatchesRegistrableLabel(query.text, in: origin.registrableDomain)
             ))
         }
 
         // --- Pages. ---
         for page in index.pages {
-            guard let tier = matchTier(query: query, host: page.host,
+            guard let tier = matchTier(query, host: page.host,
                                        title: page.lowerTitle, url: page.lowerURL,
                                        isOrigin: false) else { continue }
             let title = page.item.title.isEmpty ? page.item.url : page.item.title
@@ -243,7 +245,7 @@ enum Ranking {
                 score: tier * (page.frecency + 0.1),
                 isOrigin: false,
                 frecency: page.frecency,
-                matchesRegistrableLabel: queryMatchesRegistrableLabel(query, in: page.registrableDomain)
+                matchesRegistrableLabel: queryMatchesRegistrableLabel(query.text, in: page.registrableDomain)
             ))
         }
 
@@ -274,9 +276,63 @@ enum Ranking {
 
     // MARK: - Match tiering
 
+    /// A parsed palette query. Repeated terms and extra spaces change nothing:
+    /// `terms` are lowercased, whitespace-split, first occurrence kept, and
+    /// `text` is their canonical join, so "fix  gizmo fix" ≡ "fix gizmo".
+    struct Query {
+        let text: String
+        let terms: [String]
+
+        init(_ raw: String) {
+            var seen = Set<String>()
+            terms = raw.lowercased()
+                .split(whereSeparator: \.isWhitespace)
+                .map(String.init)
+                .filter { seen.insert($0).inserted }
+            text = terms.joined(separator: " ")
+        }
+    }
+
+    /// Best tier for a candidate: the whole-query tier or, for a multi-term
+    /// query, the any-order tier — whichever is stronger (issue #42). nil → no
+    /// match (excluded).
+    static func matchTier(_ query: Query, host: String, title: String, url: String, isOrigin: Bool) -> Double? {
+        let whole = matchTier(query: query.text, host: host, title: title, url: url, isOrigin: isOrigin)
+        guard query.terms.count > 1 else { return whole }
+        return maxOptional(whole, anyOrderTier(terms: query.terms, host: host, title: title, url: url))
+    }
+
+    /// Any-order match: every term occurs LITERALLY in host, title, or URL
+    /// (terms may land in different fields); scored by the weakest term's tier.
+    /// Never fuzzy — a per-term subsequence would match nearly anything.
+    static func anyOrderTier(terms: [String], host: String, title: String, url: String) -> Double? {
+        var weakest = Double.infinity
+        for term in terms {
+            guard let tier = literalTier(query: term, host: host, title: title, url: url) else { return nil }
+            weakest = min(weakest, tier)
+        }
+        return weakest
+    }
+
     /// Return the best matching tier's score for a candidate, or nil if it does
     /// not match at all (→ excluded from results). Query is already lowercased.
     static func matchTier(query: String, host: String, title: String, url: String, isOrigin: Bool) -> Double? {
+        if let tier = literalTier(query: query, host: host, title: title, url: url) {
+            return tier
+        }
+        // Tier 5: dense fuzzy subsequence against the better of title/url.
+        // Origins only get tiers 1–4 (a fuzzy host match is noise for a top hit).
+        if isOrigin { return nil }
+        let f1 = fuzzyDensity(query: query, text: title)
+        let f2 = fuzzyDensity(query: query, text: url)
+        if let best = maxOptional(f1, f2), best > 0 {
+            return best
+        }
+        return nil
+    }
+
+    /// Tiers 1–4: the query occurs literally in host, title, or URL.
+    static func literalTier(query: String, host: String, title: String, url: String) -> Double? {
         // Tier 1: host prefix (sans www — host is already stripped).
         if host.hasPrefix(query) {
             return MatchTier.hostPrefix.rawValue
@@ -292,14 +348,6 @@ enum Ranking {
         // Tier 4: plain substring in title or url.
         if title.contains(query) || url.contains(query) {
             return MatchTier.contains.rawValue
-        }
-        // Tier 5: dense fuzzy subsequence against the better of host/title/url.
-        // Origins only get tiers 1–4 (a fuzzy host match is noise for a top hit).
-        if isOrigin { return nil }
-        let f1 = fuzzyDensity(query: query, text: title)
-        let f2 = fuzzyDensity(query: query, text: url)
-        if let best = maxOptional(f1, f2), best > 0 {
-            return best
         }
         return nil
     }
