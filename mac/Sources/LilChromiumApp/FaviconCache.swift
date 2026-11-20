@@ -22,9 +22,26 @@ import Foundation
 /// holds naturally); the only work that leaves the main thread is the disk read
 /// and the URLSession request, both of which hop back to main before touching
 /// any cache state. NSCache itself is thread-safe regardless.
+@MainActor
 final class FaviconCache {
 
-    static let shared = FaviconCache()
+    /// Fetches one URL and calls back on any queue. The seam tests replace.
+    typealias Fetch = (URL, @escaping @Sendable (Data?, URLResponse?) -> Void) -> Void
+
+    static let shared: FaviconCache = {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        // URLSession with default config (respects system proxy/TLS).
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 8
+        config.requestCachePolicy = .returnCacheDataElseLoad
+        let session = URLSession(configuration: config)
+        return FaviconCache(
+            diskDir: home.appendingPathComponent(".lilchromium/favicons", isDirectory: true),
+            fetch: { url, done in
+                session.dataTask(with: url) { data, response, _ in done(data, response) }.resume()
+            }
+        )
+    }()
 
     /// In-memory cache keyed by host. NSCache is thread-safe and self-evicting.
     private let memory = NSCache<NSString, NSImage>()
@@ -32,24 +49,19 @@ final class FaviconCache {
     /// Disk cache dir: ~/.lilchromium/favicons/. Created lazily.
     private let diskDir: URL
 
-    /// URLSession with default config (respects system proxy/TLS). Shared.
-    private let session: URLSession
+    private let fetchData: Fetch
 
-    /// Hosts with an in-flight fetch, so we don't hammer the service.
-    private var inFlight = Set<String>()
+    /// Callers waiting on each host's in-flight fetch. One request per host;
+    /// every waiter gets its result, so a row built mid-fetch still fills in.
+    private var waiters: [String: [(NSImage?) -> Void]] = [:]
 
     /// A reusable globe placeholder (tinted secondary).
     let placeholder: NSImage
 
-    private init() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        diskDir = home.appendingPathComponent(".lilchromium/favicons", isDirectory: true)
+    init(diskDir: URL, fetch: @escaping Fetch) {
+        self.diskDir = diskDir
         try? FileManager.default.createDirectory(at: diskDir, withIntermediateDirectories: true)
-
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 8
-        config.requestCachePolicy = .returnCacheDataElseLoad
-        session = URLSession(configuration: config)
+        fetchData = fetch
 
         placeholder = FaviconCache.makePlaceholder()
     }
@@ -58,28 +70,25 @@ final class FaviconCache {
     /// final favicon (or nil if the fetch fails — caller keeps the placeholder).
     /// If a cached image exists it's delivered synchronously before returning.
     func icon(for host: String, completion: @escaping (NSImage?) -> Void) {
-        let key = host.lowercased() as NSString
-
         // 1. Memory hit.
-        if let img = memory.object(forKey: key) {
+        if let img = memory.object(forKey: Self.key(host)) {
             completion(img)
             return
         }
 
         // 2. Disk hit (read off the main thread, then decode + cache on main).
         let diskURL = diskPath(for: host)
-        let fm = FileManager.default
-        if fm.fileExists(atPath: diskURL.path) {
+        if FileManager.default.fileExists(atPath: diskURL.path) {
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 let data = try? Data(contentsOf: diskURL)
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     if let data = data, let img = NSImage(data: data) {
-                        self.memory.setObject(img, forKey: key)
+                        self.memory.setObject(img, forKey: Self.key(host))
                         completion(img)
                     } else {
                         // Corrupt cache file → refetch.
-                        try? fm.removeItem(at: diskURL)
+                        try? FileManager.default.removeItem(at: diskURL)
                         self.fetch(host: host, completion: completion)
                     }
                 }
@@ -94,51 +103,46 @@ final class FaviconCache {
     // MARK: - Network
 
     private func fetch(host: String, completion: @escaping (NSImage?) -> Void) {
-        guard !host.isEmpty else { completion(nil); return }
-        // Coalesce concurrent requests for the same host: still call completion
-        // for this caller, but only issue one network request.
-        let alreadyFetching = inFlight.contains(host)
-        inFlight.insert(host)
-
-        guard let url = faviconURL(for: host) else { completion(nil); return }
-        if alreadyFetching {
-            // Another fetch is in flight; when it finishes it writes to disk +
-            // memory. Fall back to a fresh request here anyway is wasteful, so
-            // just deliver nil now (placeholder stays) — the next render hits
-            // the warmed cache. Keeps this simple and non-blocking.
-            completion(nil)
+        guard !host.isEmpty, let url = faviconURL(for: host) else { completion(nil); return }
+        // Coalesce concurrent requests for the same host into one request.
+        if waiters[host] != nil {
+            waiters[host]?.append(completion)
             return
         }
+        waiters[host] = [completion]
 
-        let key = host.lowercased() as NSString
         let diskURL = diskPath(for: host)
 
-        let task = session.dataTask(with: url) { [weak self] data, response, _ in
-            // Runs on a URLSession background queue. Hop to main for all state.
+        fetchData(url) { [weak self] data, response in
+            // Runs on a background queue. Hop to main for all state.
             DispatchQueue.main.async {
                 guard let self = self else { return }
-                self.inFlight.remove(host)
+                let callbacks = self.waiters.removeValue(forKey: host) ?? []
 
                 guard
                     let data = data, !data.isEmpty,
                     let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
                     let img = NSImage(data: data)
                 else {
-                    completion(nil)
+                    callbacks.forEach { $0(nil) }
                     return
                 }
-                self.memory.setObject(img, forKey: key)
+                self.memory.setObject(img, forKey: Self.key(host))
                 // Persist to disk off the main thread (best-effort).
                 DispatchQueue.global(qos: .utility).async {
                     try? data.write(to: diskURL, options: .atomic)
                 }
-                completion(img)
+                callbacks.forEach { $0(img) }
             }
         }
-        task.resume()
     }
 
     // MARK: - Helpers
+
+    /// Memory-cache key. Built where used: NSString can't cross queue hops.
+    private static func key(_ host: String) -> NSString {
+        host.lowercased() as NSString
+    }
 
     private func faviconURL(for host: String) -> URL? {
         var comps = URLComponents()

@@ -167,6 +167,19 @@ final class PaletteModel {
         )
     }
 
+    /// What Return does right now: the selected row's action, never the
+    /// hovered one's. The controller's Return handler and the selected row's
+    /// hint both resolve through here, so they cannot disagree.
+    func returnAction(
+        for query: String,
+        rows: [PaletteRow],
+        selection: PaletteSelection,
+        chord: PaletteReturnChord
+    ) -> PaletteAction? {
+        guard rows.indices.contains(selection.selected) else { return nil }
+        return action(for: query, selectedRow: rows[selection.selected], chord: chord)
+    }
+
     /// Resolve Tab: search for the typed text whatever row is selected (the
     /// Raycast Tab-to-Quick-AI pattern). Same action as ⇧Return. The hint is
     /// the input row's trailing `Search ⇥` label; nil (no action, no hint)

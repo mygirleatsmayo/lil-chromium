@@ -697,3 +697,76 @@ struct PaletteOutOfDateTests {
         #expect(PaletteController.completionApplies(rankedFor: "git", text: text, selection: selection) == applies)
     }
 }
+
+/// The palette's selected row (keyboard, Return) and hovered row (pointer,
+/// visual only) are separate states (#40). No window is involved: the pointer
+/// is modeled as the hover input the controller feeds in.
+struct PaletteSelectionTests {
+
+    @Test("Pointer hover never changes the selected row or the Return action", .bug(id: 40))
+    func hoverNeverChangesTheReturnAction() throws {
+        let model = PaletteModel()
+        var selection = PaletteSelection()
+
+        // The pointer rests on row 1 (Search) under "example.com/pricing".
+        var rows = model.rows(for: "example.com/pricing")
+        selection.rowsChanged(count: rows.count, resetSelection: true)
+        selection.hover(1)
+        let first = try #require(model.returnAction(
+            for: "example.com/pricing", rows: rows, selection: selection, chord: .plain))
+        #expect(first.url == "https://example.com/pricing")
+        #expect(first.hint == "⏎ Open")
+
+        // The user types; the list rebuilds with different rows under the
+        // parked pointer, which re-reports row 1 (now Search, not Settings).
+        rows = model.rows(for: "settings")
+        selection.rowsChanged(count: rows.count, resetSelection: true)
+        selection.hover(1)
+        let second = try #require(model.returnAction(
+            for: "settings", rows: rows, selection: selection, chord: .plain))
+        try #require(rows.count > 1)
+        #expect(rows[1].kind == .search)
+        #expect(second.kind == .settings)
+        #expect(second.hint == "⏎ Settings")
+    }
+
+    @Test("Selected and hovered rows highlight independently; selected wins on one row", .bug(id: 40))
+    func highlightsCoexistAndNeverStack() {
+        var selection = PaletteSelection()
+        selection.rowsChanged(count: 4, resetSelection: true)
+
+        selection.hover(2)
+        #expect((0..<4).map(selection.highlight(for:)) == [.selected, .none, .hovered, .none])
+
+        selection.hover(0)
+        #expect((0..<4).map(selection.highlight(for:)) == [.selected, .none, .none, .none])
+
+        selection.hover(nil)
+        #expect((0..<4).map(selection.highlight(for:)) == [.selected, .none, .none, .none])
+    }
+
+    @Test("Arrow keys move from the selected row, not the hovered one", .bug(id: 40))
+    func arrowsMoveFromTheSelectedRow() {
+        var selection = PaletteSelection()
+        selection.rowsChanged(count: 4, resetSelection: true)
+        selection.hover(3)
+
+        selection.move(.down)
+        #expect(selection.selected == 1)
+        selection.move(.up)
+        selection.move(.up)
+        #expect(selection.selected == 3)  // wraps
+    }
+
+    @Test("Clicking a row selects it", .bug(id: 40))
+    func clickSelectsTheRow() {
+        var selection = PaletteSelection()
+        selection.rowsChanged(count: 4, resetSelection: true)
+        selection.hover(2)
+
+        selection.click(2)
+
+        #expect(selection.selected == 2)
+        #expect(selection.highlight(for: 2) == .selected)
+    }
+}
