@@ -895,14 +895,19 @@
       return { type: "search", title: `Search ${name} for “${query}”`, query };
     }
 
+    // Trimmed as the service worker trims typed text (`trimWhitespace`).
+    function typedQuery() {
+      return addr.value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+    }
+
     async function queryOmni() {
-      // Trimmed as the service worker trims typed text (`trimWhitespace`).
-      const q = addr.value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+      const q = typedQuery();
+      // Every query supersedes a reply still pending, an empty one too.
+      const seq = ++omniSeq;
       if (!q) {
         closeOmni();
         return;
       }
-      const seq = ++omniSeq;
       const resp = await send({ action: "omnibox", query: q });
       if (seq !== omniSeq) return; // a newer query superseded this one
       if (!addrFocused()) return;
@@ -928,7 +933,10 @@
 
     addr.addEventListener("input", () => {
       clearTimeout(omniDebounce);
-      omniDebounce = setTimeout(queryOmni, OMNIBOX_DEBOUNCE_MS);
+      // Only a relay query waits out the debounce. An emptied field closes
+      // suggestions now, so no reply still pending can reopen them.
+      if (typedQuery()) omniDebounce = setTimeout(queryOmni, OMNIBOX_DEBOUNCE_MS);
+      else queryOmni();
     });
 
     // Issue #19: while the address field or suggestions own the event, consume
