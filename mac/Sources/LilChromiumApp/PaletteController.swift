@@ -331,14 +331,14 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
 
     // MARK: - Data flow
 
-    /// Read the history window off the main actor: the relay read blocks
+    /// Read the history window off the main actor: the relay read waits
     /// until the reply lands, and parsing every URL in the window is the
     /// expensive part (done once here, not per keystroke).
     private func refreshHistory() {
         let ticket = model.beginRefresh()
         Task { @concurrent [weak self] in
             // A failed or timed-out refresh keeps the snapshot the palette has.
-            guard let items = try? RelayClient.historyWindow() else { return }
+            guard let items = try? await RelayClient.historyWindow() else { return }
             let index = Ranking.buildIndex(items: items)
             await self?.install(index, from: ticket)
         }
