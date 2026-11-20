@@ -96,5 +96,9 @@ Lucas asked that review weigh how likely a defect is to reach a user, as a senio
 - S11 · **fix**, `promotedRowAndTypeAheadNameTheSameHost` only: require the row count before indexing. The relay test's force-try of a fixed fixture stays (orchestrator's call: it can't fail).
 - S12 · **fix**.
 - S13 · **won't-fix** (Lucas).
-- P6 · filed as #53 (`needs-triage`). Code reading suggests promote leaves a hidden hoverbar in the normal window; Lucas has never seen one on `main`, so #53 starts by confirming it live.
-- P8 · pending Lucas: this branch or its own ticket. Chrome's rule settles the design: the site-level suggestion is the best history URL with its path removed (`ConvertToHostOnly` → `GURL::GetWithEmptyPath()`, `components/omnibox/browser/history_url_provider.cc`), so it keeps that URL's scheme and port.
+- P6 · filed as #53 (`needs-triage`). It also covers the reverse case, which Lucas confirmed live on `main`: promote leaves a hidden hoverbar in the normal window, shown when the pointer enters the reveal zone.
+- P8 · filed as #54, its own PR (Lucas). Chrome's rule settles the design: the site-level suggestion is the best history URL with its path removed (`ConvertToHostOnly` → `GURL::GetWithEmptyPath()`, `components/omnibox/browser/history_url_provider.cc`), so it keeps that URL's scheme and port.
+
+## Fix round 4
+
+- S11, S12 built on the integration branch (`b7249ca`) by the orchestrator: two test lines, so no fixer agent (Lucas approved). Not yet reviewed.
