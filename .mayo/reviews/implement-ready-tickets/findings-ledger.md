@@ -41,7 +41,7 @@ Initial reviewed point: `0db3180`
 
 - Built on `fix/remediation-1-review-findings` (`cb3f82c...ad68ab9`): N1, N2, N3, N4. Not yet reviewed. N1 also closes suggestions at once when the field is emptied, not after the 120 ms debounce.
 - Skill departures the fixer reported: N2's GCD for the one blocking read (Lucas approved in advance); no new test for N2 (it would depend on filling the pool and on real timeouts).
-- Raised by the fixer, pending Lucas: Escape while a suggestions reply is pending lets that reply reopen suggestions (same cause as N1); the blocking and async history reads share the name `historyWindow()`, and only the async one calls the blocking one.
+- The fixer raised two more items; Lucas ruled them as C1 and C2 below.
 - C1 · `overlay.js`: Escape while a suggestions reply is pending lets that reply reopen suggestions (same cause as N1) · **fix** · Settled (Lucas): closing suggestions, by any path, drops any reply still pending.
 - C2 · `RelayClient.swift`: the blocking and async history reads share the name `historyWindow()`; only the async one calls the blocking one · **fix** (Lucas): the blocking read gets its own private name; only the async read is callable from outside.
 - Lucas accepted N1 closing suggestions at once when the field is emptied, and approved no new test for N2.
