@@ -888,6 +888,18 @@ struct PaletteCompletionTests {
         #expect(field.rows.map(\.actionURL) == rows)
     }
 
+    /// A previewed history row shows Chrome's field text for its URL, not the
+    /// raw URL; Return still opens the URL itself.
+    @Test(.bug(id: 38)) func previewShowsChromesFieldTextForAHistoryURL() throws {
+        let url = "http://me:pw@wiki.example.org/team%20notes"
+        var field = field(typing: "notes", in: palette([Self.visit(url, "Team notes")]))
+        let row = try #require(field.rows.firstIndex { $0.actionURL == url })
+        field.move(row)
+
+        #expect(field.display.text == "wiki.example.org/team notes")
+        #expect(field.pressReturn()?.url == url)
+    }
+
     /// Selecting the top row again shows the completion with its remainder
     /// selected, whichever way the selection got there.
     @Test(.bug(id: 38), arguments: [[1, -1], [-1, 1], [1, 1, 1, 1]])

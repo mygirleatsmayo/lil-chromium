@@ -37,6 +37,24 @@ struct URLIntentTests {
         #expect(URLIntent.hostForDisplay("not a url") == nil)
     }
 
+    /// A history row's field text follows Chrome's `fill_into_edit` (#38 P2
+    /// amended): `FormatUrl` with `kFormatUrlOmitDefaults`.
+    @Test(.bug(id: 38), arguments: [
+        ("https://github.com/", "git", "https://github.com"),
+        ("https://www.example.com/a/", "ex", "https://www.example.com/a/"),
+        ("http://example.com/", "ex", "example.com"),
+        ("http://example.com:8080/", "ex", "example.com:8080"),
+        ("http://example.com/?q=1", "ex", "example.com/?q=1"),
+        ("https://me:pw@example.com/a%20b?q=c%20d#e%20f", "ex", "https://example.com/a b?q=c d#e f"),
+        ("http://example.com/", "foo http", "http://example.com"),
+        ("http://ftp.example.com/", "ex", "http://ftp.example.com"),
+        ("http://example./", "ex", "example./"),
+        ("not a url", "x", "not a url"),
+    ])
+    func historyFieldTextMatchesChrome(_ url: String, _ typed: String, _ shown: String) {
+        #expect(URLIntent.fieldText(forHistoryURL: url, typed: typed) == shown)
+    }
+
     // MARK: - Search templates
 
     /// `%s` is where the query goes, percent-encoded.

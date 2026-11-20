@@ -52,6 +52,34 @@ enum URLIntent {
         return "https://\(text)"
     }
 
+    /// The field text for a history URL, as Chrome's omnibox shows it on
+    /// that row (`fill_into_edit`, `HistoryQuickProvider`): `FormatUrl` with
+    /// `kFormatUrlOmitDefaults` and `UnescapeRule::SPACES`. It drops the
+    /// username and password, `http://` (kept when a `typed` term matches at
+    /// the URL's start, or the host starts with `ftp.`), and the `/` of a bare
+    /// host unless dropping it changes whether the text reads as a URL
+    /// (`FormattedStringWithEquivalentMeaning`). `%20` reads as a space;
+    /// `https://` and `www.` stay. Unparseable URLs come back unchanged.
+    static func fieldText(forHistoryURL url: String, typed: String) -> String {
+        guard var parts = URLComponents(string: url), let host = parts.host, !host.isEmpty else {
+            return url
+        }
+        parts.user = nil
+        parts.password = nil
+        let isBareHost = parts.percentEncodedPath == "/" && parts.query == nil && parts.fragment == nil
+        if isBareHost { parts.percentEncodedPath = "" }
+        guard var text = parts.string else { return url }
+
+        let matchesInScheme = typed.split(whereSeparator: \.isWhitespace).contains {
+            url.lowercased().hasPrefix($0.lowercased())
+        }
+        if parts.scheme?.lowercased() == "http", !host.lowercased().hasPrefix("ftp."), !matchesInScheme {
+            text.removeFirst("http://".count)
+        }
+        if isBareHost, looksLikeURL(text) != looksLikeURL(text + "/") { text += "/" }
+        return text.replacingOccurrences(of: "%20", with: " ")
+    }
+
     /// A compact display host for a URL string (drops a leading "www."), for the
     /// search row subtitle. Nil if the string has no parseable host.
     static func hostForDisplay(_ urlString: String) -> String? {

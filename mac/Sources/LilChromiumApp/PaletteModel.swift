@@ -73,19 +73,11 @@ struct PaletteInput {
         return true
     }
 
-    /// A key command reached the field, which shows `fieldText`, before its
-    /// editor runs it. End accepts a displayed completion here because its
-    /// command only scrolls; → and ⌘→ move the caret and accept through
-    /// `selectionDidChange`. A field previewing another row has no completion
-    /// to accept. Returns whether the query changed (the caller then consumes
-    /// the command).
-    /// verified: StandardKeyBinding.dict plus a live field editor — → sends
-    /// moveRight: and ⌘→ moveToRightEndOfLine:, each then posting the caret at
-    /// the end; End sends scrollToEndOfDocument: and leaves the selection.
     /// What the field shows while `row` is selected, nil for the top row.
     /// The top row shows `text` with the completion's remainder selected.
-    /// Any other row previews its URL (history, Open) or the typed text
-    /// (Search, Settings), caret at the end. A preview never changes the query;
+    /// Any other row previews, caret at the end: a history row's URL as
+    /// Chrome's field shows it (`URLIntent.fieldText`), an Open row's URL, or
+    /// the typed text (Search, Settings). A preview never changes the query;
     /// editing it does, through `editing`.
     /// Browser precedent (r04 §2): Chrome and Firefox show the arrow-selected
     /// result in the field; Firefox restores the autofill on reselecting the
@@ -96,12 +88,22 @@ struct PaletteInput {
         }
         guard let row else { return (text, completionRange ?? caretAtEnd(of: text)) }
         let shown = switch row.kind {
-        case .history, .openURL: row.actionURL
+        case .history: URLIntent.fieldText(forHistoryURL: row.actionURL, typed: typed)
+        case .openURL: row.actionURL
         case .search, .settings: typed
         }
         return (shown, caretAtEnd(of: shown))
     }
 
+    /// A key command reached the field, which shows `fieldText`, before its
+    /// editor runs it. End accepts a displayed completion here because its
+    /// command only scrolls; → and ⌘→ move the caret and accept through
+    /// `selectionDidChange`. A field previewing another row has no completion
+    /// to accept. Returns whether the query changed (the caller then consumes
+    /// the command).
+    /// verified: StandardKeyBinding.dict plus a live field editor — → sends
+    /// moveRight: and ⌘→ moveToRightEndOfLine:, each then posting the caret at
+    /// the end; End sends scrollToEndOfDocument: and leaves the selection.
     mutating func handle(_ command: Selector, in fieldText: String) -> Bool {
         guard command == #selector(NSResponder.scrollToEndOfDocument(_:)),
               completion != nil, fieldText == text else {
