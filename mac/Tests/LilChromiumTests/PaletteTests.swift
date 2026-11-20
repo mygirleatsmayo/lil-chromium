@@ -60,6 +60,7 @@ struct PaletteRowsTests {
     ])
     func urlInputLeadsWithAnOpenRow(_ typed: String, _ url: String) throws {
         let rows = try makeModel().rows(for: typed)
+        try #require(rows.count >= 2)
 
         #expect(rows[0].kind == .openURL)
         #expect(rows[0].title == "Open \(typed)")

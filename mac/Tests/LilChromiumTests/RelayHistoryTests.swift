@@ -23,7 +23,7 @@ struct RelayHistoryTests {
         // Short path: sun_path holds 104 bytes.
         let path = "/tmp/lil-test-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
         let server = SocketServer(path: path)
-        #expect(server.bindAndListen().ok)
+        try #require(server.bindAndListen().ok)
         defer { server.stop() }
         server.onLine = { line, conn in
             guard let query = try? LilCodec.decodeLine(HistoryQueryMessage.self, from: line) else { return }
@@ -46,7 +46,7 @@ struct RelayHistoryTests {
     @Test(.bug(id: 41)) func aReportedFailureIsNotAnEmptyHistory() throws {
         let path = "/tmp/lil-test-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
         let server = SocketServer(path: path)
-        #expect(server.bindAndListen().ok)
+        try #require(server.bindAndListen().ok)
         defer { server.stop() }
         server.onLine = { line, conn in
             guard let query = try? LilCodec.decodeLine(HistoryQueryMessage.self, from: line),
@@ -70,7 +70,7 @@ struct RelayHistoryTests {
         try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
         defer { close(fds[0]) }
         let line = Data(repeating: UInt8(ascii: "x"), count: length) + Data([0x0A])
-        #expect(line.withUnsafeBytes { write(fds[1], $0.baseAddress, line.count) } == line.count)
+        try #require(line.withUnsafeBytes { write(fds[1], $0.baseAddress, line.count) } == line.count)
         close(fds[1])
 
         let read = RelayClient.readLine(fds[0], maxBytes: 16)
