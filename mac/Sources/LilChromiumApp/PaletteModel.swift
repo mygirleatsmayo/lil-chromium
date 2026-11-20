@@ -180,7 +180,8 @@ final class PaletteModel {
 
     /// An independent copy of the snapshot and engine, so a keystroke can be
     /// ranked off the main thread while the original keeps changing (issue #41).
-    func copy() -> PaletteModel {
+    /// `sending`: the copy shares no state, so it can move to another task.
+    func copy() -> sending PaletteModel {
         let copy = PaletteModel()
         copy.index = index
         copy.searchEngine = searchEngine
