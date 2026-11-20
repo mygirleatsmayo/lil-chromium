@@ -208,6 +208,77 @@ public struct HoverBarConfig: Codable, Sendable {
     }
 }
 
+/// How far back palette history and hoverbar suggestions reach (issue #43).
+/// See PROTOCOL.md `history`.
+public struct HistoryConfig: Codable, Equatable, Sendable {
+    /// Whole days; 0 means everything the browser retains. Chromium itself
+    /// expires history after 90 days, so a longer window only helps browsers
+    /// that keep more.
+    public var windowDays: Int
+
+    public init(windowDays: Int = 90) {
+        self.windowDays = windowDays
+    }
+
+    public static let defaults = HistoryConfig()
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // A negative or non-integer window is unusable; it takes the default
+        // rather than silently becoming "All".
+        if let raw = try? c.decode(Int.self, forKey: .windowDays), raw >= 0 {
+            self.windowDays = raw
+        } else {
+            self.windowDays = Self.defaults.windowDays
+        }
+    }
+}
+
+/// How a multi-word palette query matches history (issue #43).
+public enum PaletteWordMatch: String, Codable, CaseIterable, Sendable {
+    /// Every word, in any order, anywhere in host, title, or URL (#42).
+    case anyOrder = "any-order"
+    /// The whole query as one string — the matching before #42.
+    case phrase
+}
+
+/// Palette appearance and matching. See PROTOCOL.md `palette`.
+public struct PaletteConfig: Codable, Equatable, Sendable {
+    /// Rows the palette shows, counting every row (Open, Search, Settings,
+    /// history). Always clamped into `maxResultsRange`: this model is the
+    /// single clamp site, like `HoverBarConfig.revealHeight`.
+    public var maxResults: Int {
+        didSet { maxResults = Self.clampMaxResults(maxResults) }
+    }
+    public var wordMatch: PaletteWordMatch
+
+    public static let defaultMaxResults = 8
+    public static let maxResultsRange = 4...12
+
+    public static func clampMaxResults(_ value: Int) -> Int {
+        min(max(value, maxResultsRange.lowerBound), maxResultsRange.upperBound)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case maxResults, wordMatch
+    }
+
+    public init(maxResults: Int = PaletteConfig.defaultMaxResults, wordMatch: PaletteWordMatch = .anyOrder) {
+        self.maxResults = PaletteConfig.clampMaxResults(maxResults)
+        self.wordMatch = wordMatch
+    }
+
+    public static let defaults = PaletteConfig()
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = PaletteConfig.defaults
+        let rawMax = (try? c.decode(Int.self, forKey: .maxResults)) ?? d.maxResults
+        self.maxResults = PaletteConfig.clampMaxResults(rawMax)
+        self.wordMatch = (try? c.decode(PaletteWordMatch.self, forKey: .wordMatch)) ?? d.wordMatch
+    }
+}
+
 /// The full user config.
 public struct LilConfig: Codable, Sendable {
     public var version: Int
@@ -219,6 +290,8 @@ public struct LilConfig: Codable, Sendable {
     public var sleep: SleepConfig
     public var searchEngine: SearchEngineConfig
     public var hoverBar: HoverBarConfig
+    public var history: HistoryConfig
+    public var palette: PaletteConfig
     public var knownBrowsers: [KnownBrowser]
 
     public init(
@@ -231,6 +304,8 @@ public struct LilConfig: Codable, Sendable {
         sleep: SleepConfig,
         searchEngine: SearchEngineConfig,
         hoverBar: HoverBarConfig,
+        history: HistoryConfig = .defaults,
+        palette: PaletteConfig = .defaults,
         knownBrowsers: [KnownBrowser]
     ) {
         self.version = version
@@ -242,11 +317,14 @@ public struct LilConfig: Codable, Sendable {
         self.sleep = sleep
         self.searchEngine = searchEngine
         self.hoverBar = hoverBar
+        self.history = history
+        self.palette = palette
         self.knownBrowsers = knownBrowsers
     }
 
     /// Built-in defaults (schema v3): helium / chrome / top-center / new-lil /
-    /// never / sleep-off / Startpage / glass / [].
+    /// never / sleep-off / Startpage / glass / 90-day history / 8 any-order
+    /// palette rows / [].
     public static let defaults = LilConfig(
         version: 3,
         primaryBrowser: "helium",
@@ -277,6 +355,8 @@ public struct LilConfig: Codable, Sendable {
         self.sleep = (try? c.decode(SleepConfig.self, forKey: .sleep)) ?? d.sleep
         self.searchEngine = (try? c.decode(SearchEngineConfig.self, forKey: .searchEngine)) ?? d.searchEngine
         self.hoverBar = (try? c.decode(HoverBarConfig.self, forKey: .hoverBar)) ?? d.hoverBar
+        self.history = (try? c.decode(HistoryConfig.self, forKey: .history)) ?? d.history
+        self.palette = (try? c.decode(PaletteConfig.self, forKey: .palette)) ?? d.palette
         self.knownBrowsers = (try? c.decode([KnownBrowser].self, forKey: .knownBrowsers)) ?? d.knownBrowsers
     }
 
@@ -291,6 +371,8 @@ public struct LilConfig: Codable, Sendable {
         case sleep
         case searchEngine
         case hoverBar
+        case history
+        case palette
         case knownBrowsers
     }
 
@@ -305,6 +387,8 @@ public struct LilConfig: Codable, Sendable {
         try c.encode(sleep, forKey: .sleep)
         try c.encode(searchEngine, forKey: .searchEngine)
         try c.encode(hoverBar, forKey: .hoverBar)
+        try c.encode(history, forKey: .history)
+        try c.encode(palette, forKey: .palette)
         try c.encode(knownBrowsers, forKey: .knownBrowsers)
     }
 

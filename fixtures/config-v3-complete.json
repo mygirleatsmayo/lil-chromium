@@ -24,6 +24,13 @@
     "tint": "#112233",
     "revealHeight": 24
   },
+  "history": {
+    "windowDays": 30
+  },
+  "palette": {
+    "maxResults": 10,
+    "wordMatch": "phrase"
+  },
   "knownBrowsers": [
     {"slug": "helium", "name": "Helium", "bundleId": "net.imput.helium", "installed": true},
     {"slug": "chrome", "name": "Google Chrome", "bundleId": "com.google.Chrome", "installed": true},

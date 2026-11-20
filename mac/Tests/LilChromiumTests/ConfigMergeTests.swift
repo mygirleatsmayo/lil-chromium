@@ -73,6 +73,28 @@ struct ConfigMergeTests {
         #expect(sleep["localGuard"] as? Bool == false)
     }
 
+    /// `history` and `palette` keep nested keys a newer component added
+    /// (issue #43: e.g. a later palette setting survives an older save).
+    @Test(.bug(id: 43)) func savePreservesUnknownNestedPaletteSettings() throws {
+        let existing = Data(#"""
+        {"history":{"windowDays":7,"futureHistoryProbe":1},
+         "palette":{"maxResults":5,"wordMatch":"phrase","futurePaletteProbe":"x"}}
+        """#.utf8)
+        var cfg = try JSONDecoder().decode(LilConfig.self, from: existing)
+        cfg.palette.maxResults = 9
+
+        let merged = try #require(ConfigMerge.mergedJSONData(existing: existing, applying: cfg))
+        let out = try jsonObject(merged)
+        let history = try #require(out["history"] as? [String: Any])
+        let palette = try #require(out["palette"] as? [String: Any])
+
+        #expect(history["futureHistoryProbe"] as? Int == 1)
+        #expect(history["windowDays"] as? Int == 7)
+        #expect(palette["futurePaletteProbe"] as? String == "x")
+        #expect(palette["maxResults"] as? Int == 9)
+        #expect(palette["wordMatch"] as? String == "phrase")
+    }
+
     /// With no file on disk yet, the merge is just the encoded config.
     @Test func saveFromNoExistingFileWritesTheConfig() throws {
         let merged = try #require(ConfigMerge.mergedJSONData(existing: nil, applying: .defaults))
@@ -106,8 +128,8 @@ struct ConfigMergeTests {
         #expect(first == second, "an unchanged save must be byte-identical")
 
         let text = try #require(String(data: first, encoding: .utf8))
-        let keyOrder = ["ephemeralDefault", "fallbackBrowser", "hoverBar", "knownBrowsers",
-                        "linkBehavior", "paletteAnchor", "primaryBrowser", "searchEngine",
+        let keyOrder = ["ephemeralDefault", "fallbackBrowser", "history", "hoverBar", "knownBrowsers",
+                        "linkBehavior", "palette", "paletteAnchor", "primaryBrowser", "searchEngine",
                         "sleep", "unknownSectionProbe", "version"]
         let offsets = keyOrder.compactMap { text.range(of: "\"\($0)\"")?.lowerBound }
         #expect(offsets.count == keyOrder.count, "every top-level key is present")
