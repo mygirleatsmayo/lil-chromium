@@ -274,6 +274,19 @@ enum RelayClient {
         throw lastError
     }
 
+    /// `historyWindow()` for async callers, which suspend instead of blocking.
+    /// The read can block for 15 s per routed socket (`SO_RCVTIMEO`), so it
+    /// runs on a GCD thread: blocking work stays off Swift concurrency's
+    /// pool, which has one thread per core (WWDC22 110350, "Visualize and
+    /// optimize Swift concurrency").
+    static func historyWindow() async throws -> [HistoryItem] {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(with: Result { try historyWindow() })
+            }
+        }
+    }
+
     /// One history-query on one relay socket. The reply waits on the browser
     /// gathering the whole window (~0.4 s for 12,400 items on Helium) and then
     /// streams several MB, so its reads get a longer bound and the relay's full

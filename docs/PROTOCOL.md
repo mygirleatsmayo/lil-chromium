@@ -180,7 +180,7 @@ One contract for typed text in the palette and the hoverbar address field: does 
 | 8 | Contains a dot that is neither the first nor the last character | Open with `https://` |
 | 9 | Anything else | Search |
 
-- Every resolved URL is percent-encoded as UTF-8: every character outside RFC 3986's unreserved and reserved sets, except `%`, so text already encoded stays as typed (`My Report.html` → `My%20Report.html`).
+- Every resolved URL is percent-encoded as UTF-8: every character outside RFC 3986's unreserved and reserved sets (`My Report.html` → `My%20Report.html`). Rules 2, 3, 7 and 8 keep `%`, so text already encoded stays as typed; rules 4 and 5 escape it, as rule 4 says.
 - A search puts the trimmed input, as one query value, in place of every `%s` in config `searchEngine.template`; a template without `%s` uses the default (Startpage) template. The value is percent-encoded as UTF-8 except `A–Z a–z 0–9 - _ . ! ~ * ' ( )` (JavaScript's `encodeURIComponent`), so `R&D` → `R%26D`, `C++` → `C%2B%2B`, a space → `%20`. Every search builds its URL this way: the palette's Search row, Tab and ⇧Return; the hoverbar's Search row and Return.
 - Out of scope: IPv6 literals; schemes without `//` other than `about:` (`mailto:`, `javascript:`, `data:`, `view-source:`) fall through to rules 6–9; file paths are not checked for existence.
 - Shared fixture: `fixtures/url-intent.json`. Both suites run `cases` and `search.cases`; `home.cases` open under `home.directory` in the app suite and search in the extension suite.

@@ -70,8 +70,11 @@ struct RelayHistoryTests {
         try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
         defer { close(fds[0]) }
         let line = Data(repeating: UInt8(ascii: "x"), count: length) + Data([0x0A])
-        try #require(line.withUnsafeBytes { write(fds[1], $0.baseAddress, line.count) } == line.count)
+        let written = line.withUnsafeBytes { write(fds[1], $0.baseAddress, line.count) }
+        // Close before the require, so a failed write leaks nothing; the read
+        // then ends at EOF instead of waiting.
         close(fds[1])
+        try #require(written == line.count)
 
         let read = RelayClient.readLine(fds[0], maxBytes: 16)
 

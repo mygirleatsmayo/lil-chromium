@@ -252,9 +252,14 @@ function createChrome(options = {}) {
   const suggestions = options.omnibox || [
     { url: "https://github.com/issues", title: "Issues", host: "github.com" },
   ];
+  // `holdOmnibox: true` keeps omnibox replies pending until `releaseOmnibox()`.
+  const heldOmnibox = [];
 
   const chrome = {
     messages,
+    releaseOmnibox() {
+      for (const reply of heldOmnibox.splice(0)) reply();
+    },
     runtime: {
       lastError: undefined,
       getManifest() {
@@ -266,7 +271,11 @@ function createChrome(options = {}) {
           if (!cb) return;
           if (msg.action === "isEphemeral") cb({ ephemeral: options.ephemeral !== false });
           else if (msg.action === "getContext") cb({ context });
-          else if (msg.action === "omnibox") cb({ suggestions, searchEngine: context.searchEngine });
+          else if (msg.action === "omnibox") {
+            const reply = () => cb({ suggestions, searchEngine: context.searchEngine });
+            if (options.holdOmnibox) heldOmnibox.push(reply);
+            else reply();
+          }
           else cb({});
         });
       },
