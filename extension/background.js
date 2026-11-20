@@ -30,7 +30,7 @@ const LAST_SIZE_KEY = "lastSize"; // {width, height} — last user-resized lil s
 const CONTEXT_KEY = "hostContext"; // cached `context` reply (stale-but-usable)
 const CONTEXT_TS_KEY = "hostContextTs"; // when the cache was last refreshed
 const DEFAULT_SIZE = { width: 1100, height: 800 };
-const HISTORY_WINDOW_MS = 90 * 24 * 3600 * 1000; // 90 days
+const DAY_MS = 24 * 3600 * 1000;
 const CASCADE_OFFSET = 32;
 
 // Context handshake: how long a clickHint is considered a match for a nav target.
@@ -72,11 +72,13 @@ const DEFAULT_SLEEP = {
   afterMinutes: 30,
   audioGuard: true,
   formGuard: true,
+  localGuard: true,
   tint: "purple",
   whitelist: [],
 };
 const DEFAULT_SEARCH = { name: "Startpage", template: "https://www.startpage.com/sp/search?query=%s" };
 const DEFAULT_HOVERBAR = { style: "glass", tint: null, revealHeight: 15 };
+const DEFAULT_HISTORY = { windowDays: 90 };
 const DEFAULT_CONTEXT = {
   browser: "chrome",
   browserName: "Chrome",
@@ -88,6 +90,7 @@ const DEFAULT_CONTEXT = {
   sleep: DEFAULT_SLEEP,
   searchEngine: DEFAULT_SEARCH,
   hoverBar: DEFAULT_HOVERBAR,
+  history: DEFAULT_HISTORY,
   knownBrowsers: [],
 };
 
@@ -127,6 +130,7 @@ function normalizeContext(msg) {
   const sleep = src.sleep && typeof src.sleep === "object" ? src.sleep : {};
   const searchEngine = src.searchEngine && typeof src.searchEngine === "object" ? src.searchEngine : {};
   const hoverBar = src.hoverBar && typeof src.hoverBar === "object" ? src.hoverBar : {};
+  const history = src.history && typeof src.history === "object" ? src.history : {};
   return {
     browser: src.browser || DEFAULT_CONTEXT.browser,
     browserName: src.browserName || DEFAULT_CONTEXT.browserName,
@@ -143,6 +147,7 @@ function normalizeContext(msg) {
       afterMinutes: typeof sleep.afterMinutes === "number" ? sleep.afterMinutes : DEFAULT_SLEEP.afterMinutes,
       audioGuard: sleep.audioGuard !== false,
       formGuard: sleep.formGuard !== false,
+      localGuard: sleep.localGuard !== false,
       tint: typeof sleep.tint === "string" ? sleep.tint : DEFAULT_SLEEP.tint,
       whitelist: Array.isArray(sleep.whitelist) ? sleep.whitelist.slice() : [],
     },
@@ -159,6 +164,14 @@ function normalizeContext(msg) {
         typeof hoverBar.revealHeight === "number" && Number.isFinite(hoverBar.revealHeight)
           ? hoverBar.revealHeight
           : DEFAULT_HOVERBAR.revealHeight,
+    },
+    // `palette` is the app's alone; the worker keeps only the history window.
+    history: {
+      // Whole days; 0 = everything the browser retains (PROTOCOL.md).
+      windowDays:
+        Number.isInteger(history.windowDays) && history.windowDays >= 0
+          ? history.windowDays
+          : DEFAULT_HISTORY.windowDays,
     },
     knownBrowsers: Array.isArray(src.knownBrowsers) ? src.knownBrowsers : [],
   };
@@ -493,14 +506,14 @@ async function setPriorContext(windowId, prior) {
     incognitoPriorContexts.set(windowId, prior);
     return overwrote;
   }
-  const reg = await getRegistry();
-  const entry = reg[String(windowId)];
-  if (!entry) return undefined;
-  const overwrote = normalizePriorContext(entry.priorContext);
-  entry.priorContext = prior;
-  priorContexts.set(windowId, prior);
-  await setRegistry(reg);
-  return overwrote;
+  return updateRegistry((reg) => {
+    const entry = reg[String(windowId)];
+    if (!entry) return undefined;
+    const overwrote = normalizePriorContext(entry.priorContext);
+    entry.priorContext = prior;
+    priorContexts.set(windowId, prior);
+    return overwrote;
+  });
 }
 
 // ===========================================================================
@@ -629,16 +642,34 @@ async function broadcastContextToLils() {
   }
 }
 
+// The oldest visit `history.search` may return under the configured window.
+// 0 ("All") must pass startTime 0 explicitly: an omitted startTime means
+// "the last 24 hours" to chrome.history.search.
+async function historyStartTime() {
+  const { windowDays } = (await getContext()).history;
+  return windowDays === 0 ? 0 : Date.now() - windowDays * DAY_MS;
+}
+
 async function answerHistoryQuery(msg) {
+  // A rejected search is a failure, never an empty history (PROTOCOL.md
+  // history-query): the palette keeps the snapshot it has.
   const results = await safe(
     chrome.history.search({
       text: typeof msg.text === "string" ? msg.text : "",
+      // maxResults 0 = no cap: every item in the window (the palette's
+      // snapshot, issue #41). verified: Helium (Chromium) 2026-11-19 —
+      // maxResults 0 and 100000 both returned the same 12,403 items reaching
+      // back 90 days; 3000 reached 19 days.
       maxResults: typeof msg.maxResults === "number" ? msg.maxResults : 100,
-      startTime: Date.now() - HISTORY_WINDOW_MS,
+      startTime: await historyStartTime(),
     }),
     "history.search"
   );
-  const items = (results || []).map((h) => ({
+  if (!results) {
+    postToHost({ type: "history-result", id: msg.id, items: [], error: "history-search-failed" });
+    return;
+  }
+  const items = results.map((h) => ({
     url: h.url,
     title: h.title || "",
     lastVisitTime: h.lastVisitTime || 0,
@@ -661,6 +692,31 @@ async function setRegistry(reg) {
   await safe(chrome.storage.local.set({ [REGISTRY_KEY]: reg }), "set registry");
 }
 
+// Every registry change goes through here: one serialized read → change →
+// write, so no write carries a stale read over another's change. `change(reg)`
+// is synchronous: it edits `reg` in place, decides only from what it reads
+// there, and returns a result for the caller. Other I/O (captures, tab
+// queries) stays outside, so one lil's stall never holds another's update.
+// An unchanged registry is not rewritten.
+let registryQueue = Promise.resolve();
+function updateRegistry(change) {
+  const run = async () => {
+    const reg = await getRegistry();
+    const before = JSON.stringify(reg);
+    const result = change(reg);
+    if (JSON.stringify(reg) !== before) await setRegistry(reg);
+    return result;
+  };
+  const next = registryQueue.then(run, run);
+  registryQueue = next.catch(() => undefined);
+  return next;
+}
+
+// windowId -> captureKey of a nap that sleepLil has written to the registry but
+// not yet released or rolled back. Until then the lil is not napping: its
+// navigations are the user's and record as an awake lil's do.
+const stagedNaps = new Map();
+
 // Normalize expiry into "never" | "quit" | <hoursNumber>.
 function normalizeExpiry(v, fallback) {
   if (v === "never" || v === "quit") return v;
@@ -674,30 +730,28 @@ function normalizeExpiry(v, fallback) {
 }
 
 async function registerWindow(windowId, url, bounds, extra) {
-  const reg = await getRegistry();
-  const prev = reg[String(windowId)] || {};
-  reg[String(windowId)] = Object.assign(
-    {
-      url,
-      bounds,
-      expiry: prev.expiry !== undefined ? prev.expiry : "never",
-      lastInteraction: Date.now(),
-    },
-    prev,
-    { url, bounds },
-    extra || {}
-  );
-  priorContexts.set(windowId, reg[String(windowId)].priorContext);
-  await setRegistry(reg);
+  await updateRegistry((reg) => {
+    const prev = reg[String(windowId)] || {};
+    reg[String(windowId)] = Object.assign(
+      {
+        url,
+        bounds,
+        expiry: prev.expiry !== undefined ? prev.expiry : "never",
+        lastInteraction: Date.now(),
+      },
+      prev,
+      { url, bounds },
+      extra || {}
+    );
+    priorContexts.set(windowId, reg[String(windowId)].priorContext);
+  });
 }
 
 async function deregisterWindow(windowId) {
   priorContexts.delete(windowId);
-  const reg = await getRegistry();
-  if (reg[String(windowId)] !== undefined) {
+  await updateRegistry((reg) => {
     delete reg[String(windowId)];
-    await setRegistry(reg);
-  }
+  });
 }
 
 // A window is a "lil" if it's in the persistent registry OR the in-memory
@@ -872,6 +926,36 @@ async function restorePriorContext(priorContext, at) {
   await focusWindow(prior.windowId);
 }
 
+// Lils still being created, each `{windowId, done}`; `windowId` is filled in
+// once windows.create returns. A lil's page can load and ask `isEphemeral`
+// before its window is registered (a local file loads that fast), so that
+// answer waits while the sender's window could still be a lil being created.
+const lilCreations = new Set();
+
+// Resolves on the next change to creation state: a window id learned, a lil
+// registered, or a creation ended. Waiters re-check on each change.
+let creationChange = Promise.withResolvers();
+
+function signalCreationChange() {
+  const settled = creationChange;
+  creationChange = Promise.withResolvers();
+  settled.resolve();
+}
+
+// Settles once `windowId` is a known lil, or no pending creation can still be
+// its own: its own creation, or one whose window is not yet known. Re-checked
+// on every creation change, not fixed when the wait starts.
+async function lilCreationSettled(windowId) {
+  for (;;) {
+    // Take the signal before checking, so a change during the check still wakes us.
+    const changed = creationChange.promise;
+    if (await isEphemeralWindow(windowId)) return;
+    const couldBeSender = (c) => c.windowId === undefined || c.windowId === windowId;
+    if (![...lilCreations].some(couldBeSender)) return;
+    await changed;
+  }
+}
+
 /**
  * Open one lil and bring it into the lifecycle. Returns the created window, or
  * null if creation failed.
@@ -893,6 +977,18 @@ async function restorePriorContext(priorContext, at) {
  *                the host's ephemeralDefault, lastInteraction stamped now).
  */
 async function openLil(spec) {
+  const creation = { windowId: undefined };
+  creation.done = createLil(spec, creation);
+  lilCreations.add(creation);
+  try {
+    return await creation.done;
+  } finally {
+    lilCreations.delete(creation);
+    signalCreationChange();
+  }
+}
+
+async function createLil(spec, creation) {
   const adopting = spec.tabId !== undefined;
   if (!adopting && (typeof spec.url !== "string" || !spec.url)) {
     log("openLil: missing url");
@@ -928,6 +1024,8 @@ async function openLil(spec) {
     focusTrace("lil-create-failed", { url: spec.url });
     return null;
   }
+  creation.windowId = win.id;
+  signalCreationChange();
 
   // The creation focus event is the worker's doing whichever side of this
   // line it lands on; if it is still to come, mark it so it keeps the
@@ -950,6 +1048,7 @@ async function openLil(spec) {
   // Incognito lils live in memory only: never persisted, never restored.
   if (spec.incognito) {
     incognitoLils.add(win.id);
+    signalCreationChange();
     if (priorContext) incognitoPriorContexts.set(win.id, priorContext);
     if (focus) await refreshMenusForWindow(win);
     return win;
@@ -965,6 +1064,7 @@ async function openLil(spec) {
       spec.registration
     )
   );
+  signalCreationChange();
   if (focus) await refreshMenusForWindow(win);
   return win;
 }
@@ -1033,12 +1133,15 @@ async function broadcastToWindow(windowId, message) {
 // ===========================================================================
 
 async function restoreWindows() {
-  const oldReg = await getRegistry();
-  const entries = Object.entries(oldReg);
+  // Take the parked entries and empty the registry in one update.
+  const entries = await updateRegistry((reg) => {
+    const parked = Object.entries(reg);
+    for (const [key] of parked) delete reg[key];
+    return parked;
+  });
   if (!entries.length) return;
 
   priorContexts.clear();
-  await setRegistry({});
 
   // Nap pages are rebuilt with the current configured tint; the normalized
   // context already carries the built-in default when configuration has none.
@@ -1088,17 +1191,15 @@ async function restoreWindows() {
 
   // Restored Chromium window ids are new. Re-key predecessor-lil references
   // after every window exists so chain order in storage cannot matter.
-  const reg = await getRegistry();
-  let remapped = false;
-  for (const [key, entry] of Object.entries(reg)) {
-    const prior = normalizePriorContext(entry && entry.priorContext);
-    if (!prior || prior.kind !== "lil") continue;
-    const newWindowId = restoredWindowIds.get(String(prior.windowId));
-    entry.priorContext = newWindowId === undefined ? null : { kind: "lil", windowId: newWindowId };
-    priorContexts.set(Number(key), entry.priorContext);
-    remapped = true;
-  }
-  if (remapped) await setRegistry(reg);
+  await updateRegistry((reg) => {
+    for (const [key, entry] of Object.entries(reg)) {
+      const prior = normalizePriorContext(entry && entry.priorContext);
+      if (!prior || prior.kind !== "lil") continue;
+      const newWindowId = restoredWindowIds.get(String(prior.windowId));
+      entry.priorContext = newWindowId === undefined ? null : { kind: "lil", windowId: newWindowId };
+      priorContexts.set(Number(key), entry.priorContext);
+    }
+  });
   log("restored", restored, "little window(s)");
 }
 
@@ -1106,41 +1207,68 @@ async function restoreWindows() {
 // REGISTRY UPKEEP — react to tab/window events.
 // ===========================================================================
 
+// Per-lil queues for navigation handling: a lil's navigations are handled in
+// arrival order, so one that lands while that lil's nap check or cleanup is
+// pending is handled after it, and the registry ends at the last URL the lil
+// reported. Other lils have their own queues and never wait on this one.
+const navigationQueues = new Map();
+function inLilOrder(windowId, task) {
+  const next = (navigationQueues.get(windowId) || Promise.resolve()).then(task);
+  const tail = next.catch(() => undefined);
+  navigationQueues.set(windowId, tail);
+  tail.then(() => {
+    if (navigationQueues.get(windowId) === tail) navigationQueues.delete(windowId);
+  });
+  return next;
+}
+
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (!changeInfo.url) return;
   if (!tab || tab.windowId === undefined) return;
-  const reg = await getRegistry();
-  const key = String(tab.windowId);
-  if (reg[key]) {
-    // Don't overwrite the "real" url with the sleep-page URL — slept entries
-    // keep their originalUrl and are managed by sleep/wake directly.
-    // If the active, user-visible document has left the nap URL (page fallback
-    // whose own cleanup hung), finish the leftover registry/capture work.
-    // An inactive same-window wake preload reporting the original URL is not
-    // a completed wake and must not clear nap state; neither is the fresh
-    // document of a swap that still has a nap document to fall back to.
-    if (reg[key].slept) {
-      if (tab.active && !isSleepPageUrl(changeInfo.url) && !(await napDocumentMayRemain(tab.windowId))) {
-        await clearNapState(
-          tab.windowId,
-          reg[key].originalUrl || changeInfo.url,
-          reg[key].sleepCaptureKey
-        );
-      }
-      return;
-    }
-    reg[key].url = changeInfo.url;
-    await setRegistry(reg);
-  }
+  // The capture deletion runs after the lil's queue lets go: capture I/O never
+  // holds that lil's later navigations.
+  const staleCapture = await inLilOrder(tab.windowId, () => handleNavigation(changeInfo, tab));
+  if (staleCapture) await safe(idbDelete(staleCapture), "idbDelete nap leftover");
 });
+
+// Records a lil's navigation; returns the capture key of a nap it found left
+// over, for the caller to delete outside the lil's queue.
+async function handleNavigation(changeInfo, tab) {
+  const windowId = tab.windowId;
+  // A nap page is never the lil's url, however late its event is handled:
+  // slept entries keep their real page in originalUrl, and a restart cannot
+  // return to a nap page whose capture may be gone. A staged nap is not a nap
+  // yet (see stagedNaps): any other navigation records like an awake lil's.
+  // Returns the capture key of a nap whose active, user-visible document has
+  // left the nap URL.
+  if (isSleepPageUrl(changeInfo.url)) return null;
+  const leftover = await updateRegistry((reg) => {
+    const entry = reg[String(windowId)];
+    if (!entry) return null;
+    const staged = stagedNaps.has(windowId);
+    if (entry.slept && !staged) {
+      return tab.active ? { captureKey: entry.sleepCaptureKey } : null;
+    }
+    entry.url = changeInfo.url;
+    return null;
+  });
+  // A page fallback whose own cleanup hung: finish the leftover registry and
+  // capture work. An inactive same-window wake preload reporting the original
+  // URL is not a completed wake and must not clear nap state; neither is the
+  // fresh document of a swap that still has a nap document to fall back to.
+  if (!leftover || (await napDocumentMayRemain(windowId))) return null;
+  return (await clearNapRegistry(windowId, leftover.captureKey)) ? leftover.captureKey : null;
+}
 
 chrome.windows.onBoundsChanged.addListener(async (win) => {
   if (!win || win.id === undefined) return;
-  const reg = await getRegistry();
-  const key = String(win.id);
-  if (!reg[key]) return;
-  reg[key].bounds = { left: win.left, top: win.top, width: win.width, height: win.height };
-  await setRegistry(reg);
+  const isLil = await updateRegistry((reg) => {
+    const entry = reg[String(win.id)];
+    if (!entry) return false;
+    entry.bounds = { left: win.left, top: win.top, width: win.width, height: win.height };
+    return true;
+  });
+  if (!isLil) return;
   if (typeof win.width === "number" && typeof win.height === "number") {
     await setLastSize(win.width, win.height);
   }
@@ -1487,20 +1615,25 @@ async function napDocumentMayRemain(windowId) {
 // the only truthful release: when scripting is unavailable or fails, return
 // false and leave the live document untouched — never degrade to
 // history-pushing navigation.
-async function replaceTabDocument(tabId, url) {
+// `onlyFrom` ({protocol, hostname}) refuses the release when the document has
+// since navigated to another page: the check runs inside the document, so no
+// navigation can land between it and the replace.
+async function replaceTabDocument(tabId, url, onlyFrom = null) {
   const execute = chrome.scripting && chrome.scripting.executeScript;
   if (typeof execute !== "function") return false;
   const injected = await safe(
     execute.call(chrome.scripting, {
       target: { tabId },
-      func: (nextUrl) => {
+      func: (nextUrl, from) => {
+        if (from && (location.protocol !== from.protocol || location.hostname !== from.hostname)) return false;
         location.replace(nextUrl);
+        return true;
       },
-      args: [url],
+      args: [url, onlyFrom],
     }),
     "scripting.executeScript replace"
   );
-  return !!injected;
+  return !!(injected && injected[0] && injected[0].result === true);
 }
 
 // Global capture throttle: serialize captures with a min gap so we never exceed
@@ -1546,7 +1679,10 @@ function dataUrlToBlob(dataUrl) {
 }
 
 // Put a lil to sleep. Caller has already checked guards. Returns true on success.
-async function sleepLil(windowId) {
+// `keepAwake(url)` carries the automatic sweep's page guards. sleepLil applies
+// it to the page it actually naps and pins the release to that page, so a
+// navigation after the check cannot slip past it. Manual nap passes none.
+async function sleepLil(windowId, { keepAwake = null } = {}) {
   if (incognitoLils.has(windowId)) return false; // never sleep incognito lils
   const reg = await getRegistry();
   const entry = reg[String(windowId)];
@@ -1558,6 +1694,8 @@ async function sleepLil(windowId) {
   const originalUrl = tab.url || entry.url || "";
   const originalTitle = typeof tab.title === "string" ? tab.title : "";
   if (!originalUrl || /^chrome-extension:\/\//i.test(originalUrl)) return false; // already a lil page
+  const guarded = keepAwake ? parseUrl(originalUrl) : null;
+  if (keepAwake && (!guarded || keepAwake(guarded))) return false;
 
   const dataUrl = await throttledCapture(windowId);
   if (!dataUrl) {
@@ -1574,33 +1712,43 @@ async function sleepLil(windowId) {
   const ctx = await getContext();
   const tint = ctx.sleep && ctx.sleep.tint ? ctx.sleep.tint : "purple";
 
-  // Mark registry BEFORE navigating so onUpdated doesn't clobber originalUrl.
-  const reg2 = await getRegistry();
-  if (reg2[String(windowId)]) {
-    reg2[String(windowId)].slept = true;
-    reg2[String(windowId)].sleepCaptureKey = captureKey;
-    reg2[String(windowId)].originalUrl = originalUrl;
-    reg2[String(windowId)].originalTitle = originalTitle;
-    await setRegistry(reg2);
-  }
+  // Stage the nap in the registry BEFORE releasing, so the release's nap URL
+  // is never recorded over the lil's real url.
+  stagedNaps.set(windowId, captureKey);
+  let released = false;
+  try {
+    await updateRegistry((reg) => {
+      const staging = reg[String(windowId)];
+      if (!staging) return;
+      staging.slept = true;
+      staging.sleepCaptureKey = captureKey;
+      staging.originalUrl = originalUrl;
+      staging.originalTitle = originalTitle;
+    });
 
-  const released = await replaceTabDocument(
-    tab.id,
-    sleepPageUrl({ captureKey, originalUrl, originalTitle, tint })
-  );
-  if (!released) {
-    // The live document was never released, so the nap never happened: roll
-    // back this entry's nap-only registry fields and the freshly stored
-    // capture rather than claim a nap the user cannot see.
-    const reg3 = await getRegistry();
-    const pending = reg3[String(windowId)];
-    if (pending && pending.sleepCaptureKey === captureKey) {
-      delete pending.slept;
-      delete pending.sleepCaptureKey;
-      delete pending.originalUrl;
-      delete pending.originalTitle;
-      await setRegistry(reg3);
+    released = await replaceTabDocument(
+      tab.id,
+      sleepPageUrl({ captureKey, originalUrl, originalTitle, tint }),
+      guarded && { protocol: guarded.protocol, hostname: guarded.hostname }
+    );
+    if (!released) {
+      // The live document was never released, so the nap never happened: roll
+      // back this entry's nap-only registry fields and the freshly stored
+      // capture rather than claim a nap the user cannot see. Navigation fields
+      // are the recorder's alone: a navigation mid-staging recorded normally.
+      await updateRegistry((reg) => {
+        const pending = reg[String(windowId)];
+        if (!pending || pending.sleepCaptureKey !== captureKey) return;
+        delete pending.slept;
+        delete pending.sleepCaptureKey;
+        delete pending.originalUrl;
+        delete pending.originalTitle;
+      });
     }
+  } finally {
+    if (stagedNaps.get(windowId) === captureKey) stagedNaps.delete(windowId);
+  }
+  if (!released) {
     await safe(idbDelete(captureKey), "idbDelete nap rollback");
     log("sleepLil: document replacement failed for", windowId);
     return false;
@@ -1657,22 +1805,28 @@ function waitForWakeSwap(tabId, startedAt) {
   });
 }
 
-// Clear every nap-only registry field while keeping the lil registered, and
-// delete the stored capture. Used after a successful wake replacement, and as
-// the event-driven backstop when the nap document is already gone.
-async function clearNapState(windowId, originalUrl, captureKey) {
-  const reg = await getRegistry();
-  const entry = reg[String(windowId)];
-  if (entry) {
+// Clear every nap-only registry field of the nap `captureKey` names while
+// keeping the lil registered, and delete that capture. Used after a successful
+// wake replacement, and as the event-driven backstop when the nap document is
+// already gone. The entry is cleared only while it is still that nap.
+async function clearNapState(windowId, captureKey) {
+  await clearNapRegistry(windowId, captureKey);
+  if (captureKey) await safe(idbDelete(captureKey), "idbDelete wake");
+}
+
+// The registry half of clearNapState; true when it cleared the entry.
+function clearNapRegistry(windowId, captureKey) {
+  return updateRegistry((reg) => {
+    const entry = reg[String(windowId)];
+    if (!entry || !entry.slept || entry.sleepCaptureKey !== captureKey) return false;
+    entry.url = entry.originalUrl || entry.url;
     delete entry.slept;
     delete entry.sleepCaptureKey;
     delete entry.originalUrl;
     delete entry.originalTitle;
-    entry.url = originalUrl;
     entry.lastInteraction = Date.now();
-    await setRegistry(reg);
-  }
-  if (captureKey) await safe(idbDelete(captureKey), "idbDelete wake");
+    return true;
+  });
 }
 
 // A wake preload is usable only when it actually sits in the napping lil.
@@ -1734,7 +1888,7 @@ async function wakeLil(windowId) {
       log("wakeLil: no fresh navigation possible for", windowId);
       return false;
     }
-    await clearNapState(windowId, originalUrl, captureKey);
+    await clearNapState(windowId, captureKey);
     log("woke lil", windowId, "(replacement fallback)");
     return true;
   }
@@ -1760,7 +1914,7 @@ async function wakeLil(windowId) {
     await safe(chrome.tabs.remove(freshTab.id), "tabs.remove wake preload");
     return false;
   }
-  await clearNapState(windowId, originalUrl, captureKey);
+  await clearNapState(windowId, captureKey);
   log("woke lil", windowId);
   return true;
 }
@@ -1772,6 +1926,36 @@ function hostOf(url) {
   } catch (_) {
     return "";
   }
+}
+
+function parseUrl(url) {
+  try {
+    return new URL(url);
+  } catch (_) {
+    return null;
+  }
+}
+
+// The automatic sweep's page guards (local pages, whitelisted domains) over one
+// parsed URL. The whitelist lowercases as hostOf does: the URL parser leaves
+// the case of non-special schemes' hosts alone.
+function pageKeepsAwake(sleep, parsed) {
+  if (sleep.localGuard && isLocalPage(parsed)) return true; // file or localhost
+  return hostWhitelisted(parsed.hostname.toLowerCase(), sleep.whitelist); // whitelisted
+}
+
+// Is this a page on this Mac — a file, or a loopback/localhost host? The URL
+// parser already lowercases hosts and canonicalizes IPv4 (`127.1`) and IPv6
+// (`[0::1]`) spellings; a trailing root dot (`localhost.`) is still the same host.
+function isLocalPage(parsed) {
+  if (parsed.protocol === "file:") return true;
+  const host = parsed.hostname.replace(/\.$/, "");
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "[::1]" ||
+    /^127\.\d+\.\d+\.\d+$/.test(host)
+  );
 }
 
 // Does a host match any whitelist domain (exact or subdomain)?
@@ -1847,10 +2031,8 @@ async function runSweep() {
       if (!tab) continue;
       if (ctx.sleep.audioGuard && tab.audible) continue; // playing audio
       if (ctx.sleep.formGuard && dirtyTabs.has(tab.id)) continue; // unsubmitted form
-      const host = hostOf(tab.url || entry.url);
-      if (hostWhitelisted(host, ctx.sleep.whitelist)) continue; // whitelisted
-
-      await sleepLil(windowId);
+      // Page guards (local, whitelist) run inside sleepLil, on the page it naps.
+      await sleepLil(windowId, { keepAwake: (parsed) => pageKeepsAwake(ctx.sleep, parsed) });
     }
 
     await cleanupOrphanCaptures();
@@ -1886,11 +2068,10 @@ const dirtyTabs = new Set(); // tab ids with unsubmitted form input
 
 async function refreshLastInteraction(windowId) {
   if (windowId === undefined) return;
-  const reg = await getRegistry();
-  if (reg[String(windowId)]) {
-    reg[String(windowId)].lastInteraction = Date.now();
-    await setRegistry(reg);
-  }
+  await updateRegistry((reg) => {
+    const entry = reg[String(windowId)];
+    if (entry) entry.lastInteraction = Date.now();
+  });
 }
 
 // ===========================================================================
@@ -1966,6 +2147,9 @@ async function handOffToBrowser(tabId, browserSlug) {
   const tab = await safe(chrome.tabs.get(tabId), "tabs.get handoff");
   if (!tab || !tab.url) return false;
   const posted = postToHost({ type: "open-external", browser: browserSlug, url: tab.url });
+  // Close only once the hand-off is posted; when posting fails (no host
+  // port), the lil stays open. A launch failure after posting is not seen.
+  if (!posted) return false;
   const wid = tab.windowId;
   if (wid !== undefined) {
     await deregisterWindow(wid);
@@ -2102,7 +2286,7 @@ async function omniboxSuggest(rawQuery) {
   if (!q) return [];
 
   const results = await safe(
-    chrome.history.search({ text: q, maxResults: 200, startTime: Date.now() - HISTORY_WINDOW_MS }),
+    chrome.history.search({ text: q, maxResults: 200, startTime: await historyStartTime() }),
     "omnibox history.search"
   );
   const items = results || [];
@@ -2207,14 +2391,13 @@ async function toggleWhitelist(host, add) {
 // ===========================================================================
 
 async function setLilExpiry(windowId, expiry) {
-  const reg = await getRegistry();
-  if (reg[String(windowId)]) {
-    reg[String(windowId)].expiry = normalizeExpiry(expiry, "never");
-    reg[String(windowId)].lastInteraction = Date.now();
-    await setRegistry(reg);
+  return updateRegistry((reg) => {
+    const entry = reg[String(windowId)];
+    if (!entry) return false;
+    entry.expiry = normalizeExpiry(expiry, "never");
+    entry.lastInteraction = Date.now();
     return true;
-  }
-  return false;
+  });
 }
 
 // ===========================================================================
@@ -2233,6 +2416,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       switch (msg.action) {
         case "isEphemeral": {
+          // A known lil answers at once; any other sender may be a lil still
+          // being created. Only this answer waits: isEphemeralWindow also
+          // runs inside createLil, where waiting would deadlock.
+          if (senderWindowId !== undefined) await lilCreationSettled(senderWindowId);
           sendResponse({
             ephemeral: await isEphemeralWindow(senderWindowId),
             incognito: incognitoLils.has(senderWindowId),

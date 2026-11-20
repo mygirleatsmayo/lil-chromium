@@ -14,11 +14,12 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     private var container: NSView?
     private var contentRoot: NSView?
     private var inputField: PaletteSearchField?
-    private var resultsStack: NSStackView?
+    private var tabHintLabel: NSTextField?
+    private var resultsStack: PaletteResultsStackView?
     private var hairline: HairlineBorderView?
 
     private var currentRows: [PaletteRow] = []
-    private var selectedIndex: Int = 0
+    private var selection = PaletteSelection()
     private var currentReturnChord: PaletteReturnChord = .plain
 
     /// Typed text plus any displayed inline completion. Rows and Return derive
@@ -31,6 +32,14 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// didChangeSelection with the caret at the end — an apparent acceptance.
     private var isWritingField = false
 
+    /// Typed queries rank off the main thread: across a full history window
+    /// (20,000 items) one keystroke takes ~100 ms in a release build (issue
+    /// #41). Serial, so a newer query never races an older one; each edit
+    /// cancels the queued one and takes a new model ranking ticket, so a
+    /// result that lands after a newer edit is dropped.
+    private let rankQueue = DispatchQueue(label: "com.lilchromium.palette.rank", qos: .userInteractive)
+    private var pendingRank: DispatchWorkItem?
+
     /// Anchor read fresh at each show() (a cheap file read, always fresh) and
     /// cached for the session so per-keystroke repositioning doesn't re-read the
     /// config file. Refreshed on the next show().
@@ -40,7 +49,6 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     private let panelWidth: CGFloat = 620
     private let inputRowHeight: CGFloat = 56
     private let resultRowHeight: CGFloat = 44
-    private let maxResultRows = 8
     private let cornerRadius = PaletteGlass.cornerRadius
 
     /// The palette's two functional controls (Settings, Close) share one symbol
@@ -68,34 +76,42 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         // Reset input + autocomplete state each open.
         input = PaletteInput()
         inputField.stringValue = ""
-        selectedIndex = 0
+        refreshTabHint()
         currentReturnChord = .plain
 
         // Read config fresh at each show() (always current), cache for the
         // session so per-keystroke reposition/row-building doesn't re-hit the
         // config file. Anchor drives positioning; searchEngine drives the
-        // "Search {name} for …" row.
+        // "Search {name} for …" row; palette sets the row budget and word
+        // matching (issue #43).
         let cfg = LilConfig.load()
         currentAnchor = cfg.paletteAnchor
         model.searchEngine = cfg.searchEngine
+        model.config = cfg.palette
 
         // Refresh history cache on open (async) then re-render.
         refreshHistory()
 
-        // Render initial (empty-query) rows from whatever is cached.
-        reload()
+        // Render initial (empty-query) rows from whatever is cached. The empty
+        // query is a frecency listing (~1 ms at 20,000 items), so the palette
+        // appears complete at once.
+        cancelPendingRank()
+        render(model.rows(for: ""), resetSelection: true)
 
         positionPanel()
         // Become key WITHOUT activating the whole app (accessory stays put).
         panel.orderFrontRegardless()
         panel.makeKey()
         panel.makeFirstResponder(inputField)
+        // Hover reflects only where the pointer is now, never a past session.
+        syncHoverToPointer()
     }
 
     /// Close the palette. The ONLY paths that call this: Esc, ⌘⌥N toggle, the X
     /// button, opening a result, and showing Settings. No resignKey /
     /// deactivation path exists.
     func close() {
+        cancelPendingRank()
         panel?.orderOut(nil)
     }
 
@@ -162,6 +178,27 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
             object: nil
         )
 
+        // Dim trailing `Search ⇥` hint (Raycast's Tab hint). It shares a stack
+        // with the field: the stack detaches it while hidden, so the field
+        // spans the row; while shown, the field yields width and scrolls, so
+        // the hint never overlaps typed text.
+        // verified: macOS 27.0.1, 2026-11-19 probe — hiding the hint returns its width plus
+        // the 10pt spacing to the field; shown, field.maxX < hint.minX.
+        let tabHint = NSTextField(labelWithString: "")
+        tabHint.font = .systemFont(ofSize: 13, weight: .regular)
+        tabHint.textColor = .tertiaryLabelColor
+        tabHint.isHidden = true
+        tabHint.setContentHuggingPriority(.required, for: .horizontal)
+        tabHint.setContentCompressionResistancePriority(.required, for: .horizontal)
+        field.setContentHuggingPriority(.defaultLow - 1, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let fieldStack = NSStackView(views: [field, tabHint])
+        fieldStack.translatesAutoresizingMaskIntoConstraints = false
+        fieldStack.orientation = .horizontal
+        fieldStack.alignment = .centerY
+        fieldStack.spacing = 10
+
         let settingsButton = NSButton()
         settingsButton.translatesAutoresizingMaskIntoConstraints = false
         settingsButton.isBordered = false
@@ -193,12 +230,13 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         closeButton.target = self
         closeButton.action = #selector(closeButtonPressed)
 
-        inputRow.addSubview(field)
+        inputRow.addSubview(fieldStack)
         inputRow.addSubview(settingsButton)
         inputRow.addSubview(closeButton)
 
         // --- Results stack ---
-        let stack = NSStackView()
+        let stack = PaletteResultsStackView()
+        stack.onPointerChange = { [weak self] in self?.syncHoverToPointer() }
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -213,10 +251,11 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
             inputRow.topAnchor.constraint(equalTo: root.topAnchor),
             inputRow.heightAnchor.constraint(equalToConstant: inputRowHeight),
 
-            // Field: leading inset 20, vertically centered, intrinsic height.
-            field.leadingAnchor.constraint(equalTo: inputRow.leadingAnchor, constant: 20),
-            field.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -10),
-            field.centerYAnchor.constraint(equalTo: inputRow.centerYAnchor),
+            // Field (+ Tab hint): leading inset 20, vertically centered,
+            // intrinsic height.
+            fieldStack.leadingAnchor.constraint(equalTo: inputRow.leadingAnchor, constant: 20),
+            fieldStack.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -10),
+            fieldStack.centerYAnchor.constraint(equalTo: inputRow.centerYAnchor),
 
             settingsButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -8),
             settingsButton.centerYAnchor.constraint(equalTo: inputRow.centerYAnchor),
@@ -257,6 +296,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         self.container = container
         self.contentRoot = root
         self.inputField = field
+        self.tabHintLabel = tabHint
         self.resultsStack = stack
         self.hairline = hairline
     }
@@ -287,50 +327,106 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     }
 
     private func currentPanelHeight() -> CGFloat {
-        let rows = min(currentRows.count, maxResultRows)
-        return inputRowHeight + CGFloat(rows) * resultRowHeight
+        // The model caps rows at `palette.maxResults`, so the height follows it.
+        inputRowHeight + CGFloat(currentRows.count) * resultRowHeight
     }
 
     // MARK: - Data flow
 
     private func refreshHistory() {
+        let ticket = model.beginRefresh()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let items = (try? RelayClient.historyQuery(text: "", maxResults: 3000)) ?? []
-            // Build the index off the main thread (parsing 3000 URLs is the
-            // expensive part; do it once here, not per keystroke).
+            // A failed or timed-out refresh keeps the snapshot the palette has.
+            guard let items = try? RelayClient.historyWindow() else { return }
+            // Build the index off the main thread (parsing every URL in the
+            // window is the expensive part; do it once here, not per keystroke).
             let index = Ranking.buildIndex(items: items)
             DispatchQueue.main.async {
-                guard let self = self else { return }
-                self.model.setIndex(index)
-                // Re-render with whatever is currently typed.
+                guard let self, self.model.install(index, from: ticket) else { return }
+                // Re-render with whatever is currently typed. `render` clamps
+                // rather than resets: the user may already have arrowed down.
                 self.reload()
             }
         }
     }
 
-    /// Recompute rows for the current input and rebuild the stacked row views.
-    private func reload() {
-        currentRows = model.rows(for: input)
-        if currentRows.isEmpty {
-            selectedIndex = 0
-        } else if selectedIndex >= currentRows.count {
-            selectedIndex = currentRows.count - 1
+    /// Recompute rows for the typed text off the main thread, then render them
+    /// if no newer edit arrived meanwhile. `autocomplete` also offers inline
+    /// type-ahead for the top hit once the rows land.
+    private func reload(autocomplete: Bool = false) {
+        pendingRank?.cancel()
+        let ticket = model.beginRanking()
+        let worker = model.copy()
+        let query = input.typed
+        let work = DispatchWorkItem { [weak self] in
+            let ranked = worker.results(for: query)
+            DispatchQueue.main.async {
+                guard let self, let results = self.model.land(ranked, from: ticket) else { return }
+                self.pendingRank = nil
+                // Rows depend on the text alone; a completion also needs the
+                // caret and selection it was ranked for.
+                if autocomplete, let field = self.inputField, let editor = field.fieldText,
+                   Self.completionApplies(rankedFor: query, text: field.stringValue, selection: editor.selectedRange) {
+                    self.input = self.model.completing(self.input, with: results)
+                }
+                self.render(self.model.rows(for: self.input, typedRows: results.rows))
+                self.showSelection()
+            }
         }
+        pendingRank = work
+        rankQueue.async(execute: work)
+    }
+
+    /// Drop the queued or in-flight ranking; its result will not render.
+    private func cancelPendingRank() {
+        pendingRank?.cancel()
+        pendingRank = nil
+        model.outdateRankings()
+    }
+
+    /// A completion applies only to the field state it was ranked for: the
+    /// same text, caret at its end, nothing selected. Any edit, caret move or
+    /// selection change since drops it (issue #41).
+    static func completionApplies(rankedFor query: String, text: String, selection: NSRange) -> Bool {
+        text == query && selection == NSRange(location: (query as NSString).length, length: 0)
+    }
+
+    /// Keyboard selection and Return act on the rows for what is typed now:
+    /// if they are still being ranked, rank them here instead of acting on the
+    /// previous query's rows. Clicks and hover act on the rows on screen.
+    private func settleRows() {
+        guard pendingRank != nil else { return }
+        cancelPendingRank()
+        render(model.rows(for: input))
+    }
+
+    /// Show `rows` and rebuild the stacked row views. A fresh open sends the
+    /// selection back to the top; otherwise it is clamped to the new rows.
+    private func render(_ rows: [PaletteRow], resetSelection: Bool = false) {
+        currentRows = rows
+        selection.rowsChanged(count: currentRows.count, resetSelection: resetSelection)
         rebuildRowViews()
         positionPanel()
+        // Rows (and the panel) moved under a possibly parked pointer, which
+        // fires no tracking event; hit-test it directly.
+        syncHoverToPointer()
+    }
+
+    /// Show `Search ⇥` only while Tab has an action (a non-empty query).
+    private func refreshTabHint() {
+        let hint = model.tabAction(for: input.typed)?.hint
+        tabHintLabel?.stringValue = hint ?? ""
+        tabHintLabel?.isHidden = hint == nil
     }
 
     private func rebuildRowViews() {
         guard let stack = resultsStack else { return }
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
-        for (i, row) in currentRows.prefix(maxResultRows).enumerated() {
+        for (i, row) in currentRows.enumerated() {
             let rowView = PaletteRowView()
-            rowView.configure(row, selected: i == selectedIndex,
-                              hint: i == selectedIndex ? actionHint(for: row) : nil,
-                              index: i)
+            rowView.configure(row, index: i)
             rowView.heightAnchor.constraint(equalToConstant: resultRowHeight).isActive = true
-            rowView.onHover = { [weak self] idx in self?.hoverSelect(idx) }
             rowView.onClick = { [weak self] idx in self?.clickRow(idx) }
             stack.addArrangedSubview(rowView)
             // Pin each row to the stack width at REQUIRED priority: rows never
@@ -341,64 +437,67 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
             w.priority = .required
             w.isActive = true
         }
+        refreshHighlights()
     }
 
     private func clickRow(_ idx: Int) {
-        guard idx >= 0 && idx < currentRows.count else { return }
-        selectedIndex = idx
+        // A stale index must open nothing, not the previously selected row.
+        guard currentRows.indices.contains(idx) else { return }
+        selection.click(idx)
+        refreshHighlights()
         activateSelection()
     }
 
-    /// Hover leaves the field alone: a list rebuilt under a parked pointer
-    /// would overwrite the user's typing. #40 stops hover selecting at all.
-    private func hoverSelect(_ idx: Int) {
-        guard idx >= 0 && idx < currentRows.count, idx != selectedIndex else { return }
-        selectedIndex = idx
-        refreshSelectionHighlight()
+    /// Hover follows the row actually under the pointer, read from the window
+    /// rather than inferred from enter/exit events, so rebuilt rows, a resized
+    /// panel, and a reopened palette all land on the truth. Visual only.
+    /// PalettePanel also calls this while a press's tracking loop runs.
+    func syncHoverToPointer() {
+        var hovered: Int?
+        if let panel, panel.isVisible, let stack = resultsStack {
+            hovered = stack.rowIndex(atWindowPoint: panel.mouseLocationOutsideOfEventStream)
+        }
+        guard hovered != selection.hovered else { return }
+        selection.hover(hovered)
+        refreshHighlights()
     }
 
     // MARK: - Selection & activation
 
-    private enum Direction { case up, down }
-
-    private func moveSelection(_ direction: Direction) {
-        guard !currentRows.isEmpty else { return }
-        let count = min(currentRows.count, maxResultRows)
-        switch direction {
-        case .up:   selectedIndex = (selectedIndex - 1 + count) % count  // wraparound
-        case .down: selectedIndex = (selectedIndex + 1) % count
-        }
-        refreshSelectionHighlight()
+    private func moveSelection(_ direction: PaletteSelection.Direction) {
+        selection.move(direction)
+        refreshHighlights()
         showSelection()
     }
 
-    private func refreshSelectionHighlight() {
+    private func refreshHighlights() {
         guard let stack = resultsStack else { return }
         for (i, view) in stack.arrangedSubviews.enumerated() {
             guard let rowView = view as? PaletteRowView, i < currentRows.count else { continue }
-            rowView.configure(currentRows[i], selected: i == selectedIndex,
-                              hint: i == selectedIndex ? actionHint(for: currentRows[i]) : nil,
-                              index: i)
+            let highlight = selection.highlight(for: i)
+            rowView.setHighlight(highlight, hint: highlight == .selected ? selectedHint : nil)
         }
     }
 
-    private func actionHint(for row: PaletteRow) -> String? {
-        model.action(
-            for: input.typed,
-            selectedRow: row,
-            chord: currentReturnChord
-        )?.hint
+    /// The hint names exactly what Return would do with the held modifiers.
+    private var selectedHint: String? {
+        returnAction(chord: currentReturnChord)?.hint
+    }
+
+    private func returnAction(chord: PaletteReturnChord) -> PaletteAction? {
+        model.returnAction(for: input.typed, rows: currentRows,
+                           selection: selection, chord: chord)
     }
 
     /// Resolve and open the current Return action. Mouse clicks use the plain
     /// chord; keyboard submission uses the current event's semantic chord.
     private func activateSelection(chord: PaletteReturnChord = .plain) {
-        guard !currentRows.isEmpty, selectedIndex < currentRows.count else { return }
-        guard let action = model.action(
-            for: input.typed,
-            selectedRow: currentRows[selectedIndex],
-            chord: chord
-        ) else { return }
+        guard let action = returnAction(chord: chord) else { return }
+        perform(action)
+    }
+
+    /// Run a resolved palette action: Settings, or open a lil and close.
+    private func perform(_ action: PaletteAction) {
         if action.kind == .settings {
             requestSettings()
             return
@@ -435,7 +534,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         let chord = Self.returnChord(from: flags)
         guard chord != currentReturnChord else { return }
         currentReturnChord = chord
-        refreshSelectionHighlight()
+        refreshHighlights()
     }
 
     /// Chrome-space coordinates anchored to the palette's current position.
@@ -468,18 +567,30 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         if input.handle(selector, in: textView.string) {
             // Drop the selected remainder so the field reads as accepted.
             textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
-            selectedIndex = 0
-            reload()
+            queryDidChange()
             return true
         }
         switch selector {
         case #selector(NSResponder.insertNewline(_:)):
+            settleRows()
             activateSelection(chord: returnChordOnCurrentEvent())
             return true
+        case #selector(NSResponder.insertTab(_:)):
+            // Tab searches the TYPED text (input.typed, never the inline
+            // completion) whatever row is selected. Always consumed, so an
+            // empty query keeps focus in the field instead of moving it to
+            // the Settings/Close buttons.
+            // verified: macOS 27.0.1, 2026-11-19 probe — plain Tab arrives here as
+            // `insertTab:`; returning true leaves the field editor first
+            // responder with its text unchanged.
+            if let action = model.tabAction(for: input.typed) { perform(action) }
+            return true
         case #selector(NSResponder.moveUp(_:)):
+            settleRows()
             moveSelection(.up)
             return true
         case #selector(NSResponder.moveDown(_:)):
+            settleRows()
             moveSelection(.down)
             return true
         case #selector(NSResponder.cancelOperation(_:)):
@@ -492,11 +603,19 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
 
     func controlTextDidChange(_ obj: Notification) {
         guard let field = inputField else { return }
-        input = model.editing(input, to: field.stringValue)
-        // Reset selection to the top on each edit so Enter opens the best match.
-        selectedIndex = 0
-        reload()
-        showSelection()
+        // Autocomplete must NEVER fire after a deletion (per contract).
+        queryDidChange(offeringCompletion: input.edit(to: field.stringValue))
+    }
+
+    /// The query changed (an edit, or an accepted completion). The hint
+    /// depends on the typed text alone, so it updates now, not when the rows
+    /// land. The selection goes back to the top so Enter opens the best match;
+    /// it resets now, while the new rows still rank: Return settles them
+    /// first, and a history refresh landing meanwhile only clamps.
+    private func queryDidChange(offeringCompletion: Bool = false) {
+        refreshTabHint()
+        selection.rowsChanged(count: currentRows.count, resetSelection: true)
+        reload(autocomplete: offeringCompletion)
     }
 
     /// Make the field show the selected row: on the top row, the input with
@@ -505,7 +624,8 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// only when the text differs, so an edit keeps the caret where it is.
     private func showSelection() {
         guard let field = inputField, let editor = field.fieldText else { return }
-        let row = selectedIndex == 0 ? nil : currentRows[selectedIndex]
+        // `selection` always counts `currentRows`, so a nonzero row exists.
+        let row = selection.selected == 0 ? nil : currentRows[selection.selected]
         let display = input.display(previewing: row)
         guard editor.string != display.text else { return }
         isWritingField = true
@@ -527,7 +647,6 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
               (note.object as AnyObject?) === editor,
               input.selectionDidChange(to: editor.selectedRange, in: editor.string)
         else { return }
-        selectedIndex = 0
-        reload()
+        queryDidChange()
     }
 }

@@ -97,7 +97,7 @@ struct MessageTests {
 
         #expect(wire.keys.sorted() == [
             "browser", "browserName", "ephemeralDefault", "fallbackBrowser",
-            "hoverBar", "id", "knownBrowsers", "linkBehavior",
+            "history", "hoverBar", "id", "knownBrowsers", "linkBehavior", "palette",
             "primaryBrowser", "primaryBrowserName", "searchEngine", "sleep", "type",
         ])
 
@@ -114,12 +114,16 @@ struct MessageTests {
         #expect(ctx.ephemeralDefault == "6h")
         #expect(ctx.sleep.afterMinutes == 45)
         #expect(ctx.sleep.formGuard == false)
+        #expect(ctx.sleep.localGuard == false)
         #expect(ctx.sleep.tint == "#3311aa")
         #expect(ctx.sleep.whitelist == ["mail.google.com"])
         #expect(ctx.searchEngine.name == "Kagi")
         #expect(ctx.searchEngine.template == "https://kagi.com/search?q=%s")
         #expect(ctx.hoverBar.style == "solid")
         #expect(ctx.hoverBar.tint == "#112233")
+        #expect(ctx.history.windowDays == 30)
+        #expect(ctx.palette.maxResults == 10)
+        #expect(ctx.palette.wordMatch == .phrase)
         // Browsers are the trimmed context shape: no bundle ids.
         #expect(ctx.knownBrowsers.map(\.slug) == ["helium", "brave"])
         #expect(ctx.knownBrowsers.map(\.name) == ["Helium", "Brave"])
@@ -163,6 +167,10 @@ struct MessageTests {
         #expect(ctx.searchEngine.name == update.searchEngine.name)
         #expect(ctx.hoverBar.revealHeight == 48, "both messages carry the clamped value")
         #expect(ctx.hoverBar.revealHeight == update.hoverBar.revealHeight)
+        #expect(ctx.history == config.history)
+        #expect(ctx.history == update.history)
+        #expect(ctx.palette == config.palette)
+        #expect(ctx.palette == update.palette)
         #expect(ctx.knownBrowsers.map(\.slug) == ["helium", "chrome", "vivaldi"])
         #expect(ctx.knownBrowsers.map(\.slug) == update.knownBrowsers.map(\.slug))
         #expect(ctx.knownBrowsers.map(\.name) == update.knownBrowsers.map(\.name))
@@ -187,8 +195,8 @@ struct MessageTests {
         let msg = try Fixture.decode(ConfigUpdateMessage.self, from: "message-config-update")
 
         #expect(wire.keys.sorted() == [
-            "ephemeralDefault", "fallbackBrowser", "hoverBar", "knownBrowsers",
-            "linkBehavior", "primaryBrowser", "primaryBrowserName", "searchEngine",
+            "ephemeralDefault", "fallbackBrowser", "history", "hoverBar", "knownBrowsers",
+            "linkBehavior", "palette", "primaryBrowser", "primaryBrowserName", "searchEngine",
             "sleep", "type",
         ])
         #expect(msg.type == "config-update")
@@ -199,11 +207,15 @@ struct MessageTests {
         #expect(msg.ephemeralDefault == "12h")
         #expect(msg.sleep.afterMinutes == 60)
         #expect(msg.sleep.audioGuard == false)
+        #expect(msg.sleep.localGuard)
         #expect(msg.sleep.whitelist == ["example.com", "mail.google.com"])
         #expect(msg.searchEngine.name == "Bing")
         #expect(msg.hoverBar.style == "glass")
         #expect(msg.hoverBar.tint == "#4455ff")
         #expect(msg.hoverBar.revealHeight == 8)
+        #expect(msg.history.windowDays == 7)
+        #expect(msg.palette.maxResults == 6)
+        #expect(msg.palette.wordMatch == .anyOrder)
         #expect(msg.knownBrowsers.map(\.slug) == ["vivaldi", "chrome"])
         let wireText = try #require(String(data: bytes, encoding: .utf8))
         #expect(wireText.contains("bundleId") == false, "config-update wires never carry bundle ids")
@@ -230,6 +242,9 @@ struct MessageTests {
         #expect(msg.hoverBar.style == "solid")
         #expect(msg.hoverBar.tint == "#112233")
         #expect(msg.hoverBar.revealHeight == 48, "the broadcast carries the clamped value")
+        #expect(msg.history.windowDays == 30)
+        #expect(msg.palette.maxResults == 10)
+        #expect(msg.palette.wordMatch == .phrase)
         #expect(msg.knownBrowsers.map(\.slug) == ["helium", "chrome", "vivaldi"])
         #expect(msg.knownBrowsers.map(\.installed) == [true, true, false])
         #expect(wireText.contains("bundleId") == false)
@@ -248,6 +263,14 @@ struct MessageTests {
 
     // MARK: - history-result
 
+    /// The palette's snapshot asks for the whole history window, not a count
+    /// (issue #41): `maxResults: 0` is the protocol's "no cap".
+    @Test(.bug(id: 41)) func historyWindowQueryAsksForEveryItem() throws {
+        let encoded = try LilCodec.encode(HistoryQueryMessage.historyWindow(id: "q-1"))
+
+        #expect(try jsonObject(encoded) as NSDictionary == jsonObject(Fixture.data("message-history-query-window")) as NSDictionary)
+    }
+
     /// Chrome omits fields on some rows; one odd row must never fail the batch.
     @Test func historyResultToleratesSparseRows() throws {
         let result = try Fixture.decode(HistoryResultMessage.self, from: "message-history-result")
@@ -258,6 +281,18 @@ struct MessageTests {
         #expect(sparse.visitCount == 0)
         #expect(sparse.typedCount == 0)
         #expect(sparse.lastVisitTime == 0)
+    }
+
+    /// A failed history search is a failure on the wire, never an empty
+    /// success the palette would install (issue #41).
+    @Test(.bug(id: 41)) func failedHistoryResultCarriesItsFailure() throws {
+        let failed = try Fixture.decode(HistoryResultMessage.self, from: "message-history-result-failed")
+        let ok = try Fixture.decode(HistoryResultMessage.self, from: "message-history-result")
+
+        #expect(failed.error == .historySearchFailed)
+        #expect(ok.error == nil)
+        let encoded = try LilCodec.encode(HistoryResultMessage.failed(id: "h-2", .historySearchFailed))
+        #expect(try jsonObject(encoded) as NSDictionary == jsonObject(Fixture.data("message-history-result-failed")) as NSDictionary)
     }
 
     // MARK: - host-only messages
@@ -276,6 +311,20 @@ struct MessageTests {
 
         #expect(msg.browser == "")
         #expect(msg.url == "")
+    }
+
+    /// Issue #47: the relay hands web pages and local files to another browser,
+    /// and nothing else.
+    @Test(arguments: [
+        ("https://example.com/docs", true),
+        ("HTTP://localhost:5173/", true),
+        ("file:///Users/luke/index.html", true),
+        ("chrome://settings/", false),
+        ("javascript:alert(1)", false),
+        ("", false),
+    ])
+    func openExternalLaunchesOnlyWebAndFileURLs(url: String, launchable: Bool) {
+        #expect(OpenExternalMessage(browser: "helium", url: url).isLaunchable == launchable)
     }
 
     /// Issue #9: extension → host, no extra fields. The host launches Lil

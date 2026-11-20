@@ -19,8 +19,11 @@ enum RelayClient {
         case connectFailed
         case connectTimeout
         case writeFailed
-        case readTimeout
+        /// No reply line arrived: EOF, a read timeout, or a line over the cap.
+        case noReplyLine
         case decodeFailed
+        /// The relay answered with a failure (`history-result.error`).
+        case reportedFailure
     }
 
     /// The routing order for sockets, per PROTOCOL.md "App routing order":
@@ -118,24 +121,26 @@ enum RelayClient {
         }
     }
 
-    /// Read one newline-delimited line (up to a hard cap). Returns nil on EOF or
-    /// timeout without a complete line.
-    private static func readLine(_ fd: Int32, maxBytes: Int = 8 * 1024 * 1024) -> Data? {
+    /// Read one newline-delimited line of at most `maxBytes` (newline
+    /// excluded). Returns nil on EOF, on timeout without a complete line, or
+    /// for a line over the cap.
+    static func readLine(_ fd: Int32, maxBytes: Int = 8 * 1024 * 1024) -> Data? {
         let lineBuffer = LineBuffer()
         var buf = [UInt8](repeating: 0, count: 65536)
-        var readSoFar = 0
-        while readSoFar < maxBytes {
+        while true {
             let n = read(fd, &buf, buf.count)
             if n == 0 { return nil }
             if n < 0 {
                 if errno == EINTR { continue }
                 return nil // includes EAGAIN on RCVTIMEO expiry
             }
-            readSoFar += n
-            let lines = lineBuffer.append(Data(buf[0..<n]))
-            if let first = lines.first { return first }
+            // LineBuffer's one scan finds the delimiter; the cap is checked on
+            // what it reports. At most one chunk is buffered past the cap.
+            if let line = lineBuffer.append(Data(buf[0..<n])).first {
+                return line.count <= maxBytes ? line : nil
+            }
+            if lineBuffer.pending.count > maxBytes { return nil }
         }
-        return nil
     }
 
     // MARK: - Public operations
@@ -236,9 +241,9 @@ enum RelayClient {
                 let id = UUID().uuidString
                 let line = try LilCodec.encodeLine(PingMessage(id: id))
                 if !writeAll(fd, line) { throw RelayError.writeFailed }
-                guard let reply = readLine(fd),
-                      let pong = try? LilCodec.decodeLine(PongMessage.self, from: reply) else {
-                    throw RelayError.readTimeout
+                guard let reply = readLine(fd) else { throw RelayError.noReplyLine }
+                guard let pong = try? LilCodec.decodeLine(PongMessage.self, from: reply) else {
+                    throw RelayError.decodeFailed
                 }
                 setLastServed(target.slug)
                 return pong.extensionConnected
@@ -250,30 +255,40 @@ enum RelayClient {
         throw lastError
     }
 
-    /// Send a history-query and wait for the matching result. Tries routed
-    /// sockets in order (steps 1–3, no browser launch); returns the first
-    /// non-throwing reply, or an empty array if no socket answers.
-    static func historyQuery(text: String, maxResults: Int, connectTimeoutMs: Int = 500) throws -> [HistoryItem] {
+    /// Ask for the palette's history snapshot (the whole history window).
+    /// Tries routed sockets in order (steps 1–3, no browser launch) and
+    /// returns the first reply. Throws when no socket answers, so the caller
+    /// can keep the snapshot it has.
+    static func historyWindow() throws -> [HistoryItem] {
+        let message = HistoryQueryMessage.historyWindow(id: UUID().uuidString)
+        var lastError: Error = RelayError.connectFailed
         for target in routedSockets() {
             do {
-                let fd = try connect(path: target.path, timeoutMs: connectTimeoutMs)
-                defer { Darwin.close(fd) }
-                let id = UUID().uuidString
-                let line = try LilCodec.encodeLine(
-                    HistoryQueryMessage(id: id, text: text, maxResults: maxResults)
-                )
-                if !writeAll(fd, line) { throw RelayError.writeFailed }
-                guard let reply = readLine(fd),
-                      let result = try? LilCodec.decodeLine(HistoryResultMessage.self, from: reply) else {
-                    throw RelayError.readTimeout
-                }
+                let items = try historyQuery(message, socketPath: target.path)
                 setLastServed(target.slug)
-                return result.items
+                return items
             } catch {
-                continue
+                lastError = error
             }
         }
-        // No socket answered — empty result (PROTOCOL.md history-query).
-        return []
+        throw lastError
+    }
+
+    /// One history-query on one relay socket. The reply waits on the browser
+    /// gathering the whole window (~0.4 s for 12,400 items on Helium) and then
+    /// streams several MB, so its reads get a longer bound and the relay's full
+    /// message cap (PROTOCOL.md history-query). A reported failure throws.
+    static func historyQuery(_ message: HistoryQueryMessage, socketPath: String) throws -> [HistoryItem] {
+        let fd = try connect(path: socketPath, timeoutMs: 500)
+        defer { Darwin.close(fd) }
+        var tv = timeval(tv_sec: 15, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        if !writeAll(fd, try LilCodec.encodeLine(message)) { throw RelayError.writeFailed }
+        guard let reply = readLine(fd, maxBytes: LilCodec.maxMessageBytes) else { throw RelayError.noReplyLine }
+        guard let result = try? LilCodec.decodeLine(HistoryResultMessage.self, from: reply) else {
+            throw RelayError.decodeFailed
+        }
+        if result.error != nil { throw RelayError.reportedFailure }
+        return result.items
     }
 }

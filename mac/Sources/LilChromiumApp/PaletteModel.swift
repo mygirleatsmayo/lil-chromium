@@ -35,6 +35,12 @@ struct PaletteAction: Equatable {
     let hint: String
 }
 
+/// One query's rows and inline type-ahead host, from a single ranking pass.
+struct PaletteResults {
+    let rows: [PaletteRow]
+    let autocompleteHost: String?
+}
+
 /// What the palette field holds (issue #38): the text the user typed and, while
 /// inline type-ahead shows one, the history row it completes to. On the top
 /// row the field displays `text` with `completionRange` selected; on another
@@ -60,11 +66,24 @@ struct PaletteInput {
         return NSRange(location: base, length: (text as NSString).length - base)
     }
 
+    /// The user changed the field text (typing, deleting, pasting): it is the
+    /// query now, with no completion until its ranking lands
+    /// (`PaletteModel.completing`). Returns whether that ranking may offer
+    /// one: type-ahead follows only an edit that extends the typed text,
+    /// never a deletion.
+    mutating func edit(to newText: String) -> Bool {
+        let extends = newText.count > typed.count
+            && newText.lowercased().hasPrefix(typed.lowercased())
+        typed = newText
+        completion = nil
+        return extends
+    }
+
     /// The field's selection moved. If the field still shows the completed
     /// text but the remainder is no longer exactly selected (→, ⌘→, End, a
     /// click), the user accepted it: the full text becomes the typed query.
     /// Returns whether the query changed. A selection change that arrives
-    /// with different text belongs to an edit and is left to `editing`.
+    /// with different text belongs to an edit and is left to `edit`.
     mutating func selectionDidChange(to range: NSRange, in fieldText: String) -> Bool {
         guard let completionRange, fieldText == text, range != completionRange else {
             return false
@@ -78,7 +97,7 @@ struct PaletteInput {
     /// Any other row previews, caret at the end: a history row's URL as
     /// Chrome's field shows it (`URLIntent.fieldText`), an Open row's URL, or
     /// the typed text (Search, Settings). A preview never changes the query;
-    /// editing it does, through `editing`.
+    /// editing it does, through `edit`.
     /// Browser precedent (r04 §2): Chrome and Firefox show the arrow-selected
     /// result in the field; Firefox restores the autofill on reselecting the
     /// top row.
@@ -135,11 +154,16 @@ struct PaletteReturnChord: OptionSet, Equatable, Sendable {
 /// and turns a query string into ordered rows.
 ///
 /// The index is rebuilt only when a new snapshot arrives (once per palette
-/// open), so per-keystroke ranking is cheap even at 3000 items.
+/// open). Ranking a keystroke still scans the whole window, so the controller
+/// runs it off the main thread on a `copy()`.
 final class PaletteModel {
 
     private(set) var index: Ranking.HistoryIndex = .empty
-    let maxRows = 8
+
+    /// Row budget and word matching (issue #43). Cached per palette open like
+    /// `searchEngine`. `maxResults` counts every row and arrives clamped.
+    var config: PaletteConfig = .defaults
+    private var maxRows: Int { config.maxResults }
 
     /// The search engine used to build the "Search {name} for …" row and its
     /// action URL. Cached per palette open (set by the controller in show()) so
@@ -147,10 +171,55 @@ final class PaletteModel {
     /// Startpage.
     var searchEngine: SearchEngineConfig = .defaults
 
-    /// Replace the cached snapshot and rebuild the index off the main thread's
-    /// hot path is the caller's job; this just stores the prebuilt index.
-    func setIndex(_ index: Ranking.HistoryIndex) {
+    /// An independent copy of the snapshot and engine, so a keystroke can be
+    /// ranked off the main thread while the original keeps changing (issue #41).
+    func copy() -> PaletteModel {
+        let copy = PaletteModel()
+        copy.index = index
+        copy.searchEngine = searchEngine
+        copy.config = config
+        return copy
+    }
+
+    // MARK: - Out-of-date results (issue #41)
+
+    /// A history refresh in flight. Only the newest may install its snapshot.
+    struct RefreshTicket: Equatable { fileprivate let number: Int }
+    /// A keystroke ranking in flight. Only the newest may render.
+    struct RankingTicket: Equatable { fileprivate let number: Int }
+
+    private var newestRefresh = 0
+    private var newestRanking = 0
+
+    func beginRefresh() -> RefreshTicket {
+        newestRefresh += 1
+        return RefreshTicket(number: newestRefresh)
+    }
+
+    /// Install `index` unless a newer refresh began after `ticket`'s, so an
+    /// older refresh that lands last never replaces a newer snapshot.
+    @discardableResult
+    func install(_ index: Ranking.HistoryIndex, from ticket: RefreshTicket) -> Bool {
+        guard ticket.number == newestRefresh else { return false }
         self.index = index
+        return true
+    }
+
+    /// Begin a ranking; every earlier ranking is now out of date.
+    func beginRanking() -> RankingTicket {
+        newestRanking += 1
+        return RankingTicket(number: newestRanking)
+    }
+
+    /// Put every ranking in flight out of date (close, or Return settling).
+    func outdateRankings() {
+        newestRanking += 1
+    }
+
+    /// The results to render for a ranking that landed, or nil when a newer
+    /// ranking began or rankings were outdated since `ticket` was taken.
+    func land(_ results: PaletteResults, from ticket: RankingTicket) -> PaletteResults? {
+        ticket.number == newestRanking ? results : nil
     }
 
     /// Resolve Return at the native palette boundary. Unsupported modifier
@@ -161,11 +230,9 @@ final class PaletteModel {
         chord: PaletteReturnChord
     ) -> PaletteAction? {
         if chord == [.shift] || chord == [.command, .shift] {
-            let row = searchRow(query.trimmingCharacters(in: .whitespacesAndNewlines))
             let incognito = chord == [.command, .shift]
-            return PaletteAction(
-                kind: .search,
-                url: row.actionURL,
+            return searchAction(
+                for: query.trimmingCharacters(in: .whitespacesAndNewlines),
                 incognito: incognito,
                 hint: incognito ? "⇧⌘⏎ Search Incognito" : "⇧⏎ Search"
             )
@@ -202,37 +269,71 @@ final class PaletteModel {
         )
     }
 
-    /// The user changed the field text (typing, deleting, pasting). Type-ahead
-    /// fires only when the change extends the typed text — never after a
-    /// deletion — and only to a host the text strictly prefixes.
-    func editing(_ input: PaletteInput, to newText: String) -> PaletteInput {
-        let isInsertion = newText.count > input.typed.count
-            && newText.lowercased().hasPrefix(input.typed.lowercased())
-        var next = PaletteInput()
-        next.typed = newText
-        if isInsertion, !newText.isEmpty,
-           let host = autocompleteHost(for: newText),
-           host.lowercased().hasPrefix(newText.lowercased()),
-           host.count > newText.count {
-            next.completion = originRow(host: host)
-        }
+    /// What Return does right now: the selected row's action, never the
+    /// hovered one's. The controller's Return handler and the selected row's
+    /// hint both resolve through here, so they cannot disagree.
+    func returnAction(
+        for query: String,
+        rows: [PaletteRow],
+        selection: PaletteSelection,
+        chord: PaletteReturnChord
+    ) -> PaletteAction? {
+        guard rows.indices.contains(selection.selected) else { return nil }
+        return action(for: query, selectedRow: rows[selection.selected], chord: chord)
+    }
+
+    /// Resolve Tab: search for the typed text whatever row is selected (the
+    /// Raycast Tab-to-Quick-AI pattern). Same action as ⇧Return. The hint is
+    /// the input row's trailing `Search ⇥` label; nil (no action, no hint)
+    /// for an empty query.
+    func tabAction(for query: String) -> PaletteAction? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return searchAction(for: trimmed, incognito: false, hint: "Search ⇥")
+    }
+
+    /// The forced-search action shared by ⇧Return, ⇧⌘Return, and Tab:
+    /// search the configured engine for `query` (already trimmed).
+    private func searchAction(for query: String, incognito: Bool, hint: String) -> PaletteAction {
+        PaletteAction(
+            kind: .search,
+            url: searchRow(query).actionURL,
+            incognito: incognito,
+            hint: hint
+        )
+    }
+
+    /// The rows to display for `query` (see `results(for:)`).
+    func rows(for query: String) -> [PaletteRow] {
+        results(for: query).rows
+    }
+
+    /// The ranking of `input.typed` landed: complete the field to its
+    /// type-ahead host when the typed text strictly prefixes that host.
+    func completing(_ input: PaletteInput, with results: PaletteResults) -> PaletteInput {
+        guard !input.typed.isEmpty, let host = results.autocompleteHost,
+              host.lowercased().hasPrefix(input.typed.lowercased()),
+              host.count > input.typed.count else { return input }
+        var next = input
+        next.completion = originRow(host: host)
         return next
     }
 
-    /// The host offered for inline type-ahead. When a history row sits above
-    /// Search, that is the host Enter opens — ghost text must name it too.
-    /// Otherwise the highest-scoring host-prefix origin, else nil.
-    func autocompleteHost(for query: String) -> String? {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty, !URLIntent.looksLikeURL(trimmed) {
-            if let top = rows(for: query).first, top.kind == .history {
-                return top.host
-            }
+    /// Rows for the field state, ranked now (see `rows(for:typedRows:)`).
+    func rows(for input: PaletteInput) -> [PaletteRow] {
+        rows(for: input, typedRows: rows(for: input.typed))
+    }
+
+    /// Rows for the field state, given `typedRows` ranked for `input.typed`.
+    /// A displayed completion leads; below it sit the typed text's own rows,
+    /// minus the history row for the same destination. Open and Search rows
+    /// always stay.
+    func rows(for input: PaletteInput, typedRows: [PaletteRow]) -> [PaletteRow] {
+        guard let top = input.completion else { return typedRows }
+        let rest = typedRows.filter {
+            $0.kind != .history || !Ranking.isSameDestination($0.actionURL, top.actionURL)
         }
-        let ranked = Ranking.rank(query: query, index: index, limit: 1)
-        guard let first = ranked.first,
-              let host = first.autocompleteHostValue else { return nil }
-        return host
+        return Array(([top] + rest).prefix(maxRows))
     }
 
     /// Compute the rows to display for `query`.
@@ -247,13 +348,20 @@ final class PaletteModel {
     ///   3. every remaining history match, best-first
     /// URL-like input instead leads with "Open <url>" and puts Search directly
     /// after it, so navigation is never mistaken for search.
-    /// Empty query: top-8 by frecency, no search row.
-    func rows(for query: String) -> [PaletteRow] {
+    /// Empty query: top `maxRows` by frecency, no search row.
+    ///
+    /// The autocomplete host comes from the same ranking pass: when a history
+    /// row sits above Search, that is the host Enter opens — ghost text must
+    /// name it too. Otherwise the best history match's host, else nil.
+    func results(for query: String) -> PaletteResults {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if trimmed.isEmpty {
             let matches = Ranking.rank(query: "", index: index, limit: maxRows)
-            return matches.map { historyRow($0) }
+            return PaletteResults(
+                rows: matches.map { historyRow($0) },
+                autocompleteHost: matches.first?.autocompleteHostValue
+            )
         }
 
         var rows: [PaletteRow] = []
@@ -265,8 +373,10 @@ final class PaletteModel {
         var matches = Ranking.rank(
             query: trimmed,
             index: index,
-            limit: max(maxRows, index.pages.count + index.origins.count)
+            limit: max(maxRows, index.pages.count + index.origins.count),
+            wordMatch: config.wordMatch
         )
+        let bestMatchHost = matches.first?.autocompleteHostValue
 
         if SettingsAction.matchesQuery(trimmed) {
             rows.append(settingsRow())
@@ -289,20 +399,10 @@ final class PaletteModel {
 
         rows.append(searchRow(trimmed))
         rows.append(contentsOf: matches.map(historyRow))
+        rows = Array(rows.prefix(maxRows))
 
-        return Array(rows.prefix(maxRows))
-    }
-
-    /// Rows for the field state. A displayed completion leads; below it sit the
-    /// typed text's own rows, minus the history row for the same destination.
-    /// Open and Search rows always stay.
-    func rows(for input: PaletteInput) -> [PaletteRow] {
-        let typedRows = rows(for: input.typed)
-        guard let top = input.completion else { return typedRows }
-        let rest = typedRows.filter {
-            $0.kind != .history || !Ranking.isSameDestination($0.actionURL, top.actionURL)
-        }
-        return Array(([top] + rest).prefix(maxRows))
+        let topHistoryHost = rows.first.flatMap { !looksURL && $0.kind == .history ? $0.host : nil }
+        return PaletteResults(rows: rows, autocompleteHost: topHistoryHost ?? bestMatchHost)
     }
 
     /// Among eligible registrable-label matches, frecency is the tie-breaker

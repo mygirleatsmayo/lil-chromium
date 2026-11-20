@@ -1,35 +1,79 @@
 import AppKit
 
-/// Draws the accent-tinted rounded-rect selection background behind a row.
+/// Draws the accent-tinted rounded-rect highlight behind a row. Hovered uses
+/// the selected pill's shape at lower opacity; a row has exactly one highlight,
+/// so the two never stack.
+@MainActor
 final class RowBackgroundView: NSView {
-    var isSelected: Bool = false {
-        didSet { if isSelected != oldValue { needsDisplay = true } }
+    var highlight: PaletteSelection.Highlight = .none {
+        didSet { if highlight != oldValue { needsDisplay = true } }
     }
 
     override var wantsUpdateLayer: Bool { false }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard isSelected else { return }
+        let alpha: CGFloat
+        switch highlight {
+        case .none: return
+        case .hovered: alpha = 0.12
+        case .selected: alpha = 0.25
+        }
         // Inset so the pill floats with margin inside the 44pt row.
         let rect = bounds.insetBy(dx: 8, dy: 4)
         let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
-        NSColor.controlAccentColor.withAlphaComponent(0.25).setFill()
+        NSColor.controlAccentColor.withAlphaComponent(alpha).setFill()
         path.fill()
+    }
+}
+
+/// The results list. Reports every pointer move, entry, and exit, and answers
+/// which row sits under a point, so the controller never walks its layout.
+@MainActor
+final class PaletteResultsStackView: NSStackView {
+
+    var onPointerChange: (() -> Void)?
+
+    private var trackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let ta = trackingArea { removeTrackingArea(ta) }
+        let ta = NSTrackingArea(rect: bounds,
+                                options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
+                                owner: self, userInfo: nil)
+        addTrackingArea(ta)
+        trackingArea = ta
+    }
+
+    override func mouseEntered(with event: NSEvent) { onPointerChange?() }
+    override func mouseMoved(with event: NSEvent) { onPointerChange?() }
+    override func mouseExited(with event: NSEvent) { onPointerChange?() }
+
+    /// The index of the row a click at `windowPoint` (window coordinates)
+    /// would hit, or nil. Uses the window's own hit test, as a click does, so
+    /// shared row edges and the list's bottom edge resolve the same way.
+    /// Lays out first so freshly rebuilt rows answer with their real frames.
+    func rowIndex(atWindowPoint windowPoint: NSPoint) -> Int? {
+        guard let root = window?.contentView else { return nil }
+        layoutSubtreeIfNeeded()
+        // hitTest takes the point in the receiver's superview's coordinates.
+        var view = root.hitTest(root.superview?.convert(windowPoint, from: nil) ?? windowPoint)
+        while let v = view, v.superview !== self { view = v.superview }
+        return view.flatMap { arrangedSubviews.firstIndex(of: $0) }
     }
 }
 
 /// A single 44pt palette row:
 ///   [favicon 20×20 rounded 4] [title 13 medium] [flex] [dimmed domain 11] [hint]
-/// Selection = accent pill (see RowBackgroundView). Hover moves selection and
-/// click opens (both routed to the controller via callbacks).
+/// Highlight = accent pill (see RowBackgroundView). Hover is tracked by the
+/// results list, not the row; a click is routed to the controller (select+open).
+@MainActor
 final class PaletteRowView: NSView {
 
-    /// Index of this row within the current result list (for click/hover routing).
+    /// Index of this row within the current result list (for click routing).
     var rowIndex: Int = -1
 
-    /// Set by the controller: called when the mouse enters the row (hover→select).
-    var onHover: ((Int) -> Void)?
-    /// Called on click (open).
+    /// Called on click (select + open).
     var onClick: ((Int) -> Void)?
 
     private let background = RowBackgroundView()
@@ -42,7 +86,8 @@ final class PaletteRowView: NSView {
     /// if the row still shows that host (rows are reused across queries).
     private var currentHost: String?
 
-    private var trackingArea: NSTrackingArea?
+    /// Shown in the right slot whenever the row carries no hint.
+    private var subtitle = ""
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -145,18 +190,12 @@ final class PaletteRowView: NSView {
 
     // MARK: - Configuration
 
-    /// Configure the row. The selected row receives the exact Return action's
-    /// modifier-aware hint; other rows receive nil.
-    func configure(_ row: PaletteRow, selected: Bool, hint: String?, index: Int) {
+    /// Configure the row's content. Highlight and hint are set separately
+    /// (`setHighlight`) so hover changes never reload icons.
+    func configure(_ row: PaletteRow, index: Int) {
         rowIndex = index
         titleLabel.stringValue = row.title
-        background.isSelected = selected
-        hintLabel.stringValue = hint ?? ""
-        // When the hint is shown it takes the right slot; blank the domain so it
-        // collapses to zero intrinsic width (hidden views still hold layout, so
-        // clearing the string — not isHidden — is what actually frees the space).
-        // Non-selected rows show the domain.
-        domainLabel.stringValue = hint == nil ? row.subtitle : ""
+        subtitle = row.subtitle
 
         // Icon.
         switch row.kind {
@@ -184,6 +223,17 @@ final class PaletteRowView: NSView {
         }
     }
 
+    /// The selected row receives the exact Return action's modifier-aware hint;
+    /// other rows receive nil.
+    func setHighlight(_ highlight: PaletteSelection.Highlight, hint: String?) {
+        background.highlight = highlight
+        hintLabel.stringValue = hint ?? ""
+        // When the hint is shown it takes the right slot; blank the domain so it
+        // collapses to zero intrinsic width (hidden views still hold layout, so
+        // clearing the string — not isHidden — is what actually frees the space).
+        domainLabel.stringValue = hint == nil ? subtitle : ""
+    }
+
     private func setSymbol(_ name: String) {
         iconView.layer?.cornerRadius = 0
         let cfg = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
@@ -208,21 +258,7 @@ final class PaletteRowView: NSView {
         }
     }
 
-    // MARK: - Hover tracking
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let ta = trackingArea { removeTrackingArea(ta) }
-        let ta = NSTrackingArea(rect: bounds,
-                                options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-                                owner: self, userInfo: nil)
-        addTrackingArea(ta)
-        trackingArea = ta
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        onHover?(rowIndex)
-    }
+    // MARK: - Click
 
     override func mouseDown(with event: NSEvent) {
         onClick?(rowIndex)
