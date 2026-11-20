@@ -602,9 +602,11 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     }
 
     func controlTextDidChange(_ obj: Notification) {
-        guard let field = inputField else { return }
-        // Autocomplete must NEVER fire after a deletion (per contract).
-        queryDidChange(offeringCompletion: input.edit(to: field.stringValue))
+        guard let field = inputField, let editor = field.fieldText else { return }
+        // The editor has already moved the caret (see fieldSelectionDidChange).
+        let pasted = (editor as? PaletteFieldEditor)?.isPasting ?? false
+        queryDidChange(offeringCompletion: input.edit(to: field.stringValue, selection: editor.selectedRange,
+                                                      pasted: pasted))
     }
 
     /// The query changed (an edit, or an accepted completion). The hint

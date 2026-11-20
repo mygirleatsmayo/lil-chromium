@@ -51,6 +51,20 @@ final class PalettePanel: NSPanel {
         dispatch()
     }
 
+    /// The search field edits through a `PaletteFieldEditor`, so the
+    /// palette can tell a paste from typing.
+    /// verified: macOS 27.0.1, 2026-11-20 probe — the field's `currentEditor()`
+    /// is the editor this returns once the field is first responder.
+    private lazy var searchFieldEditor: PaletteFieldEditor = {
+        let editor = PaletteFieldEditor()
+        editor.isFieldEditor = true
+        return editor
+    }()
+
+    override func fieldEditor(_ createFlag: Bool, for object: Any?) -> NSText? {
+        object is PaletteSearchField ? searchFieldEditor : super.fieldEditor(createFlag, for: object)
+    }
+
     /// Esc at the panel level (also reached from the search field's
     /// cancelOperation which returns false and lets this fire). Closes.
     override func cancelOperation(_ sender: Any?) {
