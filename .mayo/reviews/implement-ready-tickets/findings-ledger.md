@@ -22,3 +22,8 @@ Initial reviewed point: `0db3180`
 - P3 · #44 "Tab opens the configured search engine's results for the typed text": same defect as S1 · **fix** with S1.
 - P4 · #39 "the same answer in the palette and in the hoverbar address field": same defect as S4 · **fix** with S4.
 - P5 · #39 out of scope "Inline completion (#38), ranking, and suggestions": choosing the hoverbar's Search row now always searches; on `main` it sent the text through the resolver, so `example.com` opened the site · **won't-fix** · Settled: the Search row searches, as its label says and as Chrome's search suggestion does.
+
+## Fix round 1
+
+- Built on `fix/implement-review-findings` (`1bc6096...07c09cc`): S1/P3, S2/P1, S4/P4, P2, S5, S6, S7. Not yet reviewed.
+- Skill departures the fixer reported, pending Lucas's sign-off: the relay's blocking history read now runs on the Swift concurrency pool (S5; the read has socket timeouts, so it ends on its own); one P2 test passed before the fix and was kept for the other half of the rule; no new test for the S7 refactor.
