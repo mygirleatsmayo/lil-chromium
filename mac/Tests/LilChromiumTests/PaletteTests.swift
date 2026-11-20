@@ -676,8 +676,9 @@ struct PaletteCompletionTests {
     /// The palette as its field editor drives it: an edit replaces the
     /// selection and posts the new caret before the text change; key commands
     /// reach the palette before the editor runs them; the editor then reports
-    /// where the selection landed. Edits and acceptance put the selection back
-    /// on the top row, and Return acts on the selected row, as the controller does.
+    /// where the selection landed. ↑/↓ move the selected row and the field
+    /// shows `display`; edits and acceptance put the selection back on the top
+    /// row, and Return acts on the selected row, as the controller does.
     struct Field {
         let palette: PaletteModel
         private(set) var input = PaletteInput()
@@ -685,18 +686,23 @@ struct PaletteCompletionTests {
 
         var rows: [PaletteRow] { palette.rows(for: input) }
 
-        /// Each character replaces the selected remainder, or lands at the caret.
-        mutating func type(_ characters: String) {
-            for c in characters { edit(to: input.typed + String(c)) }
+        /// What the field shows for the selected row.
+        var display: (text: String, selection: NSRange) {
+            input.display(previewing: selected == 0 ? nil : rows[selected])
         }
 
-        /// Backspace deletes the selected remainder, else the last character.
+        /// Each character replaces the field's selection.
+        mutating func type(_ characters: String) {
+            for c in characters { edit(to: textBeforeSelection + String(c)) }
+        }
+
+        /// Backspace deletes the selection, else the last character.
         mutating func backspace() {
-            edit(to: input.completionRange == nil ? String(input.text.dropLast()) : input.typed)
+            edit(to: display.selection.length > 0 ? textBeforeSelection : String(display.text.dropLast()))
         }
 
         mutating func accept(by key: Acceptance) {
-            let end = NSRange(location: (input.text as NSString).length, length: 0)
+            let end = NSRange(location: (display.text as NSString).length, length: 0)
             switch key {
             case .right: command(#selector(NSResponder.moveRight(_:)), then: end)
             case .commandRight: command(#selector(NSResponder.moveToRightEndOfLine(_:)), then: end)
@@ -705,13 +711,22 @@ struct PaletteCompletionTests {
             }
         }
 
-        mutating func down() { selected = (selected + 1) % rows.count }
+        /// ↓ (positive) or ↑ (negative), wrapping like the controller.
+        mutating func move(_ steps: Int) {
+            selected = ((selected + steps) % rows.count + rows.count) % rows.count
+        }
+
+        mutating func down() { move(1) }
 
         /// A mouse selection: the field reports only the new range.
         mutating func drag(selecting range: NSRange) { select(range) }
 
         func pressReturn(_ chord: PaletteReturnChord = .plain) -> PaletteAction? {
             palette.action(for: input.typed, selectedRow: rows[selected], chord: chord)
+        }
+
+        private var textBeforeSelection: String {
+            (display.text as NSString).substring(to: display.selection.location)
         }
 
         private mutating func edit(to text: String) {
@@ -721,12 +736,12 @@ struct PaletteCompletionTests {
         }
 
         private mutating func command(_ selector: Selector, then selection: NSRange?) {
-            if input.handle(selector) { selected = 0 }
+            if input.handle(selector, in: display.text) { selected = 0 }
             if let selection { select(selection) }
         }
 
         private mutating func select(_ range: NSRange, in text: String? = nil) {
-            if input.selectionDidChange(to: range, in: text ?? input.text) { selected = 0 }
+            if input.selectionDidChange(to: range, in: text ?? display.text) { selected = 0 }
         }
     }
 
@@ -827,12 +842,10 @@ struct PaletteCompletionTests {
     func acceptingTheCompletionMakesTheFieldTextTheQuery(_ key: Acceptance) throws {
         let palette = palette()
         var field = field(typing: "git", in: palette)
-        field.down()
         field.accept(by: key)
 
         #expect(field.input.text == "github.com")
         #expect(field.input.completionRange == nil)
-        #expect(field.selected == 0)
         #expect(field.rows.map(\.actionURL) == palette.rows(for: "github.com").map(\.actionURL))
         #expect(field.rows.first?.kind == .openURL)
         let action = try #require(field.pressReturn())
@@ -842,19 +855,77 @@ struct PaletteCompletionTests {
 
     /// A selection that still covers exactly the remainder (re-selected by
     /// mouse, or posted mid-edit with the new text) leaves the completion
-    /// pending and the selected row where it was.
+    /// pending.
     @Test(.bug(id: 38)) func selectionStillCoveringTheCompletionChangesNothing() throws {
         var field = field(typing: "git")
-        field.down()
         field.drag(selecting: NSRange(location: 3, length: 7))
 
         #expect(field.input.text == "github.com")
         #expect(field.input.completionRange == NSRange(location: 3, length: 7))
-        #expect(field.selected == 1)
 
         field.type("h")
         #expect(field.input.completionRange == NSRange(location: 4, length: 6))
         #expect(field.pressReturn()?.url == "https://github.com")
+    }
+
+    /// ↓ previews the selected row in the field: its URL for an Open or
+    /// history row, the typed text for Search, caret at the end. Return opens
+    /// what the field shows; the query and rows stay put.
+    @Test(.bug(id: 38), arguments: [
+        (1, "https://github.c"),
+        (2, "github.c"),
+        (3, "https://github.com/acme/app"),
+    ])
+    func arrowingPreviewsTheSelectedRow(_ downs: Int, _ shown: String) throws {
+        var field = field(typing: "github.c")
+        let rows = field.rows.map(\.actionURL)
+        field.move(downs)
+
+        #expect(field.display.text == shown)
+        #expect(field.display.selection == NSRange(location: (shown as NSString).length, length: 0))
+        #expect(field.pressReturn()?.url == rows[downs])
+        #expect(field.input.typed == "github.c")
+        #expect(field.rows.map(\.actionURL) == rows)
+    }
+
+    /// Selecting the top row again shows the completion with its remainder
+    /// selected, whichever way the selection got there.
+    @Test(.bug(id: 38), arguments: [[1, -1], [-1, 1], [1, 1, 1, 1]])
+    func reselectingTheTopRowRestoresTheCompletion(_ moves: [Int]) throws {
+        var field = field(typing: "github.c")
+        moves.forEach { field.move($0) }
+
+        #expect(field.selected == 0)
+        #expect(field.display.text == "github.com")
+        #expect(field.display.selection == NSRange(location: 8, length: 2))
+        #expect(field.pressReturn()?.url == "https://github.com")
+    }
+
+    /// The accepting keys act on a displayed completion only; while a preview
+    /// is showing they leave the query and the selected row alone.
+    @Test(.bug(id: 38), arguments: Acceptance.allCases)
+    func acceptingKeysLeaveAPreviewAlone(_ key: Acceptance) throws {
+        var field = field(typing: "github.c")
+        field.down()
+        field.accept(by: key)
+
+        #expect(field.input.typed == "github.c")
+        #expect(field.input.completionRange == NSRange(location: 8, length: 2))
+        #expect(field.selected == 1)
+        #expect(field.pressReturn()?.url == "https://github.c")
+    }
+
+    /// Typing over a preview edits the text the field shows, which becomes
+    /// the query.
+    @Test(.bug(id: 38)) func typingOverAPreviewEditsThePreviewedText() throws {
+        var field = field(typing: "github.c")
+        field.move(3)
+        field.type("/pulls")
+
+        #expect(field.input.text == "https://github.com/acme/app/pulls")
+        #expect(field.selected == 0)
+        #expect(field.rows.first?.kind == .openURL)
+        #expect(field.pressReturn()?.url == "https://github.com/acme/app/pulls")
     }
 
     /// Only the dedupe key's trivial differences make two URLs one page; a

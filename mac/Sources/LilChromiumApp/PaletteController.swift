@@ -24,11 +24,12 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// Typed text plus any displayed inline completion. Rows and Return derive
     /// from this, never from the raw field text.
     private var input = PaletteInput()
-    /// True while the controller itself writes the completion into the field,
-    /// so the selection changes it causes are not read as the user accepting it.
+    /// True while the controller itself writes the field (a completion or a
+    /// row preview), so the selection changes it causes are not read as the
+    /// user accepting a completion.
     /// verified: setting `stringValue` on an editing field posts
     /// didChangeSelection with the caret at the end — an apparent acceptance.
-    private var isApplyingCompletion = false
+    private var isWritingField = false
 
     /// Anchor read fresh at each show() (a cheap file read, always fresh) and
     /// cached for the session so per-keystroke repositioning doesn't re-read the
@@ -348,6 +349,8 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         activateSelection()
     }
 
+    /// Hover leaves the field alone: a list rebuilt under a parked pointer
+    /// would overwrite the user's typing. #40 stops hover selecting at all.
     private func hoverSelect(_ idx: Int) {
         guard idx >= 0 && idx < currentRows.count, idx != selectedIndex else { return }
         selectedIndex = idx
@@ -366,6 +369,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         case .down: selectedIndex = (selectedIndex + 1) % count
         }
         refreshSelectionHighlight()
+        showSelection()
     }
 
     private func refreshSelectionHighlight() {
@@ -461,7 +465,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// "Enter select-alls" bug). `cancelOperation` returns false so Esc bubbles
     /// to the panel's cancelOperation → close().
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        if input.handle(selector) {
+        if input.handle(selector, in: textView.string) {
             // Drop the selected remainder so the field reads as accepted.
             textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
             selectedIndex = 0
@@ -492,17 +496,22 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         // Reset selection to the top on each edit so Enter opens the best match.
         selectedIndex = 0
         reload()
-        showCompletion(in: field)
+        showSelection()
     }
 
-    /// Write the completed text into the field and SELECT the appended
-    /// remainder, so the next keystroke replaces it ("git" → "git[hub.com]").
-    private func showCompletion(in field: PaletteSearchField) {
-        guard let range = input.completionRange, let editor = field.fieldText else { return }
-        isApplyingCompletion = true
-        defer { isApplyingCompletion = false }
-        field.stringValue = input.text
-        editor.selectedRange = range
+    /// Make the field show the selected row: on the top row, the input with
+    /// any completion's remainder SELECTED, so the next keystroke replaces it
+    /// ("git" → "git[hub.com]"); on any other row, that row's preview. Writes
+    /// only when the text differs, so an edit keeps the caret where it is.
+    private func showSelection() {
+        guard let field = inputField, let editor = field.fieldText else { return }
+        let row = selectedIndex == 0 ? nil : currentRows[selectedIndex]
+        let display = input.display(previewing: row)
+        guard editor.string != display.text else { return }
+        isWritingField = true
+        defer { isWritingField = false }
+        field.stringValue = display.text
+        editor.selectedRange = display.selection
     }
 
     /// →, ⌘→, End, or a click that drops the selected remainder accepts the
@@ -513,7 +522,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// the edited text (≠ `input.text`, so a no-op), then controlTextDidChange;
     /// moveRight: and moveToEndOfLine: post it with the text unchanged.
     @objc private func fieldSelectionDidChange(_ note: Notification) {
-        guard !isApplyingCompletion,
+        guard !isWritingField,
               let editor = inputField?.fieldText,
               (note.object as AnyObject?) === editor,
               input.selectionDidChange(to: editor.selectedRange, in: editor.string)

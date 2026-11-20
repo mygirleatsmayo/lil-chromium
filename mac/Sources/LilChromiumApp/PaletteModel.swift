@@ -36,9 +36,10 @@ struct PaletteAction: Equatable {
 }
 
 /// What the palette field holds (issue #38): the text the user typed and, while
-/// inline type-ahead shows one, the history row it completes to. The field
-/// displays `text` with `completionRange` selected. The completion is the
-/// default action, so the field, the top row, and Return never disagree.
+/// inline type-ahead shows one, the history row it completes to. On the top
+/// row the field displays `text` with `completionRange` selected; on another
+/// row, that row's preview (`display(previewing:)`). The completion is the
+/// default action, so the field, the selected row, and Return never disagree.
 struct PaletteInput {
     /// Text the user entered; excludes the auto-appended remainder.
     fileprivate(set) var typed = ""
@@ -72,15 +73,38 @@ struct PaletteInput {
         return true
     }
 
-    /// A key command reached the field before its editor runs it. End accepts
-    /// a displayed completion here because its command only scrolls; → and ⌘→
-    /// move the caret and accept through `selectionDidChange`. Returns whether
-    /// the query changed (the caller then consumes the command).
+    /// A key command reached the field, which shows `fieldText`, before its
+    /// editor runs it. End accepts a displayed completion here because its
+    /// command only scrolls; → and ⌘→ move the caret and accept through
+    /// `selectionDidChange`. A field previewing another row has no completion
+    /// to accept. Returns whether the query changed (the caller then consumes
+    /// the command).
     /// verified: StandardKeyBinding.dict plus a live field editor — → sends
     /// moveRight: and ⌘→ moveToRightEndOfLine:, each then posting the caret at
     /// the end; End sends scrollToEndOfDocument: and leaves the selection.
-    mutating func handle(_ command: Selector) -> Bool {
-        guard command == #selector(NSResponder.scrollToEndOfDocument(_:)), completion != nil else {
+    /// What the field shows while `row` is selected, nil for the top row.
+    /// The top row shows `text` with the completion's remainder selected.
+    /// Any other row previews its URL (history, Open) or the typed text
+    /// (Search, Settings), caret at the end. A preview never changes the query;
+    /// editing it does, through `editing`.
+    /// Browser precedent (r04 §2): Chrome and Firefox show the arrow-selected
+    /// result in the field; Firefox restores the autofill on reselecting the
+    /// top row.
+    func display(previewing row: PaletteRow?) -> (text: String, selection: NSRange) {
+        func caretAtEnd(of text: String) -> NSRange {
+            NSRange(location: (text as NSString).length, length: 0)
+        }
+        guard let row else { return (text, completionRange ?? caretAtEnd(of: text)) }
+        let shown = switch row.kind {
+        case .history, .openURL: row.actionURL
+        case .search, .settings: typed
+        }
+        return (shown, caretAtEnd(of: shown))
+    }
+
+    mutating func handle(_ command: Selector, in fieldText: String) -> Bool {
+        guard command == #selector(NSResponder.scrollToEndOfDocument(_:)),
+              completion != nil, fieldText == text else {
             return false
         }
         acceptCompletion()
