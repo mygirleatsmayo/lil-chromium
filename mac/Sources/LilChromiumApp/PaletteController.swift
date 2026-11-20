@@ -14,6 +14,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     private var container: NSView?
     private var contentRoot: NSView?
     private var inputField: PaletteSearchField?
+    private var tabHintLabel: NSTextField?
     private var resultsStack: NSStackView?
     private var hairline: HairlineBorderView?
 
@@ -162,6 +163,27 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         field.configureAsPaletteInput()
         field.delegate = self
 
+        // Dim trailing `Search ⇥` hint (Raycast's Tab hint). It shares a stack
+        // with the field: the stack detaches it while hidden, so the field
+        // spans the row; while shown, the field yields width and scrolls, so
+        // the hint never overlaps typed text.
+        // verified: macOS 27.0.1, 2026-11-19 probe — hiding the hint returns its width plus
+        // the 10pt spacing to the field; shown, field.maxX < hint.minX.
+        let tabHint = NSTextField(labelWithString: "")
+        tabHint.font = .systemFont(ofSize: 13, weight: .regular)
+        tabHint.textColor = .tertiaryLabelColor
+        tabHint.isHidden = true
+        tabHint.setContentHuggingPriority(.required, for: .horizontal)
+        tabHint.setContentCompressionResistancePriority(.required, for: .horizontal)
+        field.setContentHuggingPriority(.defaultLow - 1, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let fieldStack = NSStackView(views: [field, tabHint])
+        fieldStack.translatesAutoresizingMaskIntoConstraints = false
+        fieldStack.orientation = .horizontal
+        fieldStack.alignment = .centerY
+        fieldStack.spacing = 10
+
         let settingsButton = NSButton()
         settingsButton.translatesAutoresizingMaskIntoConstraints = false
         settingsButton.isBordered = false
@@ -193,7 +215,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         closeButton.target = self
         closeButton.action = #selector(closeButtonPressed)
 
-        inputRow.addSubview(field)
+        inputRow.addSubview(fieldStack)
         inputRow.addSubview(settingsButton)
         inputRow.addSubview(closeButton)
 
@@ -213,10 +235,11 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
             inputRow.topAnchor.constraint(equalTo: root.topAnchor),
             inputRow.heightAnchor.constraint(equalToConstant: inputRowHeight),
 
-            // Field: leading inset 20, vertically centered, intrinsic height.
-            field.leadingAnchor.constraint(equalTo: inputRow.leadingAnchor, constant: 20),
-            field.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -10),
-            field.centerYAnchor.constraint(equalTo: inputRow.centerYAnchor),
+            // Field (+ Tab hint): leading inset 20, vertically centered,
+            // intrinsic height.
+            fieldStack.leadingAnchor.constraint(equalTo: inputRow.leadingAnchor, constant: 20),
+            fieldStack.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -10),
+            fieldStack.centerYAnchor.constraint(equalTo: inputRow.centerYAnchor),
 
             settingsButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -8),
             settingsButton.centerYAnchor.constraint(equalTo: inputRow.centerYAnchor),
@@ -257,6 +280,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         self.container = container
         self.contentRoot = root
         self.inputField = field
+        self.tabHintLabel = tabHint
         self.resultsStack = stack
         self.hairline = hairline
     }
@@ -367,7 +391,15 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
             selectedIndex = currentRows.count - 1
         }
         rebuildRowViews()
+        refreshTabHint()
         positionPanel()
+    }
+
+    /// Show `Search ⇥` only while Tab has an action (a non-empty query).
+    private func refreshTabHint() {
+        let hint = model.tabAction(for: committedQuery)?.hint
+        tabHintLabel?.stringValue = hint ?? ""
+        tabHintLabel?.isHidden = hint == nil
     }
 
     private func rebuildRowViews() {
@@ -446,6 +478,11 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
             selectedRow: currentRows[selectedIndex],
             chord: chord
         ) else { return }
+        perform(action)
+    }
+
+    /// Run a resolved palette action: Settings, or open a lil and close.
+    private func perform(_ action: PaletteAction) {
         if action.kind == .settings {
             requestSettings()
             return
@@ -516,6 +553,16 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         case #selector(NSResponder.insertNewline(_:)):
             settleRows()
             activateSelection(chord: returnChordOnCurrentEvent())
+            return true
+        case #selector(NSResponder.insertTab(_:)):
+            // Tab searches the TYPED text (committedQuery, never the inline
+            // completion) whatever row is selected. Always consumed, so an
+            // empty query keeps focus in the field instead of moving it to
+            // the Settings/Close buttons.
+            // verified: macOS 27.0.1, 2026-11-19 probe — plain Tab arrives here as
+            // `insertTab:`; returning true leaves the field editor first
+            // responder with its text unchanged.
+            if let action = model.tabAction(for: committedQuery) { perform(action) }
             return true
         case #selector(NSResponder.moveUp(_:)):
             settleRows()

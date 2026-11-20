@@ -128,11 +128,9 @@ final class PaletteModel {
         chord: PaletteReturnChord
     ) -> PaletteAction? {
         if chord == [.shift] || chord == [.command, .shift] {
-            let row = searchRow(query.trimmingCharacters(in: .whitespacesAndNewlines))
             let incognito = chord == [.command, .shift]
-            return PaletteAction(
-                kind: .search,
-                url: row.actionURL,
+            return searchAction(
+                for: query.trimmingCharacters(in: .whitespacesAndNewlines),
                 incognito: incognito,
                 hint: incognito ? "⇧⌘⏎ Search Incognito" : "⇧⏎ Search"
             )
@@ -166,6 +164,27 @@ final class PaletteModel {
             url: selectedRow.actionURL,
             incognito: incognito,
             hint: "\(shortcut) \(verb)\(suffix)"
+        )
+    }
+
+    /// Resolve Tab: search for the typed text whatever row is selected (the
+    /// Raycast Tab-to-Quick-AI pattern). Same action as ⇧Return. The hint is
+    /// the input row's trailing `Search ⇥` label; nil (no action, no hint)
+    /// for an empty query.
+    func tabAction(for query: String) -> PaletteAction? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return searchAction(for: trimmed, incognito: false, hint: "Search ⇥")
+    }
+
+    /// The forced-search action shared by ⇧Return, ⇧⌘Return, and Tab:
+    /// search the configured engine for `query` (already trimmed).
+    private func searchAction(for query: String, incognito: Bool, hint: String) -> PaletteAction {
+        PaletteAction(
+            kind: .search,
+            url: searchRow(query).actionURL,
+            incognito: incognito,
+            hint: hint
         )
     }
 
