@@ -47,6 +47,29 @@ struct URLIntentTests {
         #expect(URLIntent.fieldText(forHistoryURL: url, typed: typed) == shown)
     }
 
+    /// An Open row's field text follows Chrome's what-you-typed match (#38 P2
+    /// Open row, `VerbatimMatchForInput`): a scheme shows only when the typed
+    /// text has one, so the resolver's added `https://` or `http://` is
+    /// trimmed. File URLs keep `file://`, as Chrome trims only HTTP(S).
+    @Test(.bug(id: 38), arguments: [
+        "github.c",
+        "github.c/a?q=1",
+        "localhost:3000",
+        "192.168.0.1/admin",
+        "https://github.c",
+        "http://github.c",
+        "about:blank",
+    ])
+    func openFieldTextShowsOnlyATypedScheme(_ typed: String) throws {
+        let url = try #require(URLIntent.intent(of: typed).url)
+        #expect(URLIntent.fieldText(forOpenURL: url, typed: typed) == typed)
+    }
+
+    @Test(.bug(id: 38)) func openFieldTextKeepsTheFileScheme() {
+        #expect(URLIntent.fieldText(forOpenURL: "file:///Users/me/notes.txt", typed: "/Users/me/notes.txt")
+                == "file:///Users/me/notes.txt")
+    }
+
     // MARK: - Search templates
 
     /// `%s` is where the query goes, percent-encoded.
