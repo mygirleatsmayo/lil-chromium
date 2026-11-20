@@ -69,14 +69,20 @@ struct PaletteInput {
     /// The user changed the field text (typing, deleting, pasting): it is the
     /// query now, with no completion until its ranking lands
     /// (`PaletteModel.completing`). Returns whether that ranking may offer
-    /// one: type-ahead follows only an edit that extends the typed text,
-    /// never a deletion.
-    mutating func edit(to newText: String) -> Bool {
-        let extends = newText.count > typed.count
+    /// one, as Chrome decides: the edit extends the typed text (never a
+    /// deletion), leaves the caret at the end (`selection` starts there), and
+    /// is not a paste. Chrome: `OmniboxViewViews::UpdatePopup`,
+    /// `OmniboxEditModel::StartAutocomplete`. Only edits offer a completion,
+    /// so a paste blocks it until the next edit, as Chrome's paste state does
+    /// (`OmniboxEditModel::OnAfterPossibleChange`).
+    mutating func edit(to newText: String, selection: NSRange, pasted: Bool) -> Bool {
+        let offers = !pasted
+            && selection.location == (newText as NSString).length
+            && newText.count > typed.count
             && newText.lowercased().hasPrefix(typed.lowercased())
         typed = newText
         completion = nil
-        return extends
+        return offers
     }
 
     /// The field's selection moved. If the field still shows the completed
