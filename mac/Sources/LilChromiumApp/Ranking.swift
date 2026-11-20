@@ -467,8 +467,18 @@ enum Ranking {
     static func isSameDestination(_ a: String, _ b: String) -> Bool {
         let (ca, cb) = (URLComponents(string: a), URLComponents(string: b))
         return normalizeURLKey(a) == normalizeURLKey(b)
-            && ca?.port == cb?.port
+            && significantPort(ca) == significantPort(cb)
             && ca?.query == cb?.query
+    }
+
+    /// The port that names a different page: nil for none, or for the
+    /// scheme's own default (`:80` http, `:443` https), as URL canonicalization
+    /// treats them.
+    private static func significantPort(_ url: URLComponents?) -> Int? {
+        switch (url?.scheme?.lowercased(), url?.port) {
+        case ("http", 80), ("https", 443): return nil
+        case (_, let port): return port
+        }
     }
 
     /// "github.com" → "Github", "news.ycombinator.com" → "News". Best-effort

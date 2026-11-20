@@ -858,12 +858,17 @@ struct PaletteCompletionTests {
     }
 
     /// Only the dedupe key's trivial differences make two URLs one page; a
-    /// different port or query is a different destination.
+    /// different port or query is a different destination. An explicit
+    /// default port for its own scheme is no port at all.
     @Test(.bug(id: 38), arguments: [
         ("https://example.com", "https://www.Example.com/", true),
         ("https://example.com", "http://example.com", true),
         ("https://example.com", "https://example.com:8443/", false),
         ("https://example.com", "https://example.com/?tab=1", false),
+        ("https://example.com", "https://example.com:443/", true),
+        ("http://example.com", "http://example.com:80/", true),
+        ("http://example.com:80/", "https://example.com:443/", true),
+        ("https://example.com", "http://example.com:443/", false),
     ])
     func sameDestinationIgnoresOnlyTrivialDifferences(_ a: String, _ b: String, _ same: Bool) {
         #expect(Ranking.isSameDestination(a, b) == same)
