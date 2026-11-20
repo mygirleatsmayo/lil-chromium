@@ -343,7 +343,8 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
             let index = Ranking.buildIndex(items: items)
             DispatchQueue.main.async {
                 guard let self, self.model.install(index, from: ticket) else { return }
-                // Re-render with whatever is currently typed. `render` clamps
+                // Re-render with whatever is currently typed, working its
+                // completion out again from the new history. `render` clamps
                 // rather than resets: the user may already have arrowed down.
                 self.reload()
             }
@@ -363,14 +364,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
             DispatchQueue.main.async {
                 guard let self, let results = self.model.land(ranked, from: ticket) else { return }
                 self.pendingRank = nil
-                // Rows depend on the text alone; a completion also needs the
-                // caret and selection it was ranked for.
-                if autocomplete, let field = self.inputField, let editor = field.fieldText,
-                   Self.completionApplies(rankedFor: query, text: field.stringValue, selection: editor.selectedRange) {
-                    self.input = self.model.completing(self.input, with: results)
-                }
-                self.render(self.model.rows(for: self.input, typedRows: results.rows))
-                self.showSelection()
+                self.renderResults(results, offeringCompletion: autocomplete && self.fieldStillShows(query))
             }
         }
         pendingRank = work
@@ -391,13 +385,29 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         text == query && selection == NSRange(location: (query as NSString).length, length: 0)
     }
 
+    /// Whether the field is still in the state `query` was ranked for.
+    private func fieldStillShows(_ query: String) -> Bool {
+        guard let field = inputField, let editor = field.fieldText else { return false }
+        return Self.completionApplies(rankedFor: query, text: field.stringValue, selection: editor.selectedRange)
+    }
+
+    /// Render `results`, ranked for the typed text. Rows depend on the text
+    /// alone. A displayed completion is worked out again from them, so after
+    /// a history refresh one the new history doesn't offer is dropped;
+    /// `offeringCompletion` lets them add one.
+    private func renderResults(_ results: PaletteResults, offeringCompletion: Bool) {
+        if offeringCompletion || input.completion != nil { input = model.completing(input, with: results) }
+        render(model.rows(for: input, typedRows: results.rows))
+        showSelection()
+    }
+
     /// Keyboard selection and Return act on the rows for what is typed now:
     /// if they are still being ranked, rank them here instead of acting on the
     /// previous query's rows. Clicks and hover act on the rows on screen.
     private func settleRows() {
         guard pendingRank != nil else { return }
         cancelPendingRank()
-        render(model.rows(for: input))
+        renderResults(model.results(for: input.typed), offeringCompletion: false)
     }
 
     /// Show `rows` and rebuild the stacked row views. A fresh open sends the

@@ -316,12 +316,17 @@ final class PaletteModel {
     }
 
     /// The ranking of `input.typed` landed: complete the field to its
-    /// type-ahead host when the typed text strictly prefixes that host.
+    /// type-ahead host when the typed text strictly prefixes that host. The
+    /// completion is worked out afresh, so after a history refresh one the
+    /// new history doesn't offer is dropped, as Chrome re-applies the default
+    /// match's completion whenever results change
+    /// (`OmniboxEditModel::OnCurrentMatchChanged`).
     func completing(_ input: PaletteInput, with results: PaletteResults) -> PaletteInput {
+        var next = input
+        next.completion = nil
         guard !input.typed.isEmpty, let host = results.autocompleteHost,
               host.lowercased().hasPrefix(input.typed.lowercased()),
-              host.count > input.typed.count else { return input }
-        var next = input
+              host.count > input.typed.count else { return next }
         next.completion = originRow(host: host)
         return next
     }
