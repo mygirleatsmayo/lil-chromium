@@ -207,8 +207,13 @@ enum Ranking {
     ///
     /// Returns results already ordered best-first. The TOP HIT (if any host
     /// prefixes the query) is guaranteed at index 0.
-    static func rank(query rawQuery: String, index: HistoryIndex, limit: Int) -> [RankedResult] {
-        let query = Query(rawQuery)
+    static func rank(
+        query rawQuery: String,
+        index: HistoryIndex,
+        limit: Int,
+        wordMatch: PaletteWordMatch = .anyOrder
+    ) -> [RankedResult] {
+        let query = Query(rawQuery, wordMatch: wordMatch)
         if query.terms.isEmpty {
             return topByFrecency(index: index, limit: limit)
         }
@@ -276,20 +281,28 @@ enum Ranking {
 
     // MARK: - Match tiering
 
-    /// A parsed palette query. Repeated terms and extra spaces change nothing:
-    /// `terms` are lowercased, whitespace-split, first occurrence kept, and
-    /// `text` is their canonical join, so "fix  gizmo fix" ≡ "fix gizmo".
+    /// A parsed palette query. Any-order: repeated terms and extra spaces
+    /// change nothing — `terms` are lowercased, whitespace-split, first
+    /// occurrence kept, and `text` is their canonical join, so
+    /// "fix  gizmo fix" ≡ "fix gizmo". Phrase (issue #43) restores the pre-#42
+    /// parse: the trimmed, lowercased query is the one and only term.
     struct Query {
         let text: String
         let terms: [String]
 
-        init(_ raw: String) {
-            var seen = Set<String>()
-            terms = raw.lowercased()
-                .split(whereSeparator: \.isWhitespace)
-                .map(String.init)
-                .filter { seen.insert($0).inserted }
-            text = terms.joined(separator: " ")
+        init(_ raw: String, wordMatch: PaletteWordMatch = .anyOrder) {
+            switch wordMatch {
+            case .anyOrder:
+                var seen = Set<String>()
+                terms = raw.lowercased()
+                    .split(whereSeparator: \.isWhitespace)
+                    .map(String.init)
+                    .filter { seen.insert($0).inserted }
+                text = terms.joined(separator: " ")
+            case .phrase:
+                text = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                terms = text.isEmpty ? [] : [text]
+            }
         }
     }
 

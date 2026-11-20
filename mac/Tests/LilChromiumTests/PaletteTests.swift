@@ -575,6 +575,76 @@ struct PaletteAnyOrderTests: PaletteHistoryFixture {
     }
 }
 
+
+/// The palette settings (issue #43): `maxResults` is the whole row budget,
+/// and `wordMatch` picks any-order (#42) or whole-phrase matching.
+struct PaletteSettingsBehaviorTests: PaletteHistoryFixture {
+
+    /// Twenty sites whose registrable label starts with "site", so every
+    /// query below has more matches than any row budget.
+    private var sites: [HistoryItem] {
+        (0..<20).map { visit("https://site\($0).example/", title: "Site \($0)") }
+    }
+
+    private func palette(_ config: PaletteConfig, _ items: [HistoryItem]) -> PaletteModel {
+        let palette = model(items)
+        palette.config = config
+        return palette
+    }
+
+    @Test(.bug(id: 43), arguments: [4, 8, 12])
+    func maxResultsCountsEveryRow(_ maxResults: Int) {
+        let palette = palette(PaletteConfig(maxResults: maxResults), sites)
+
+        let typed = palette.rows(for: "site")
+        #expect(typed.count == maxResults)
+        #expect(typed.contains { $0.kind == .search }, "Search spends one of the rows")
+
+        let url = palette.rows(for: "site1.example")
+        #expect(url.count <= maxResults)
+        #expect(url.prefix(2).map(\.kind) == [.openURL, .search])
+
+        #expect(palette.rows(for: "").count == maxResults, "the empty palette fills the budget too")
+    }
+
+    @Test(.bug(id: 43)) func settingsRowSpendsTheBudget() {
+        let rows = palette(PaletteConfig(maxResults: 4), [
+            visit("https://example.com/1", title: "Settings guide"),
+            visit("https://example.com/2", title: "Settings tips"),
+            visit("https://example.com/3", title: "Settings faq"),
+            visit("https://example.com/4", title: "Settings more"),
+        ]).rows(for: "settings")
+
+        #expect(rows.count == 4)
+        #expect(rows.first?.kind == .settings)
+    }
+
+    @Test(.bug(id: 43)) func anyOrderFindsWordsOutOfOrder() {
+        let rows = palette(PaletteConfig(wordMatch: .anyOrder), [
+            visit("https://example.com/a", title: "Gizmo alignment fix"),
+        ]).rows(for: "fix gizmo")
+
+        #expect(rows.map(\.actionURL).contains("https://example.com/a"))
+    }
+
+    /// Phrase restores the pre-#42 matcher: the query is one string.
+    @Test(.bug(id: 43)) func phraseMatchesOnlyTheWholeQuery() {
+        let palette = palette(PaletteConfig(wordMatch: .phrase), [
+            visit("https://example.com/a", title: "Gizmo alignment fix"),
+        ])
+
+        #expect(palette.rows(for: "fix gizmo").map(\.kind) == [.search])
+        #expect(palette.rows(for: " Gizmo Alignment ").map(\.actionURL).contains("https://example.com/a"))
+    }
+
+    /// The off-main-thread ranking copy must rank with the same settings.
+    @Test(.bug(id: 43)) func copyKeepsThePaletteSettings() {
+        let original = palette(PaletteConfig(maxResults: 5, wordMatch: .phrase), sites)
+
+        #expect(original.copy().config == original.config)
+    }
+}
+
 /// Return chooses a concrete palette action at the native model boundary.
 /// The controller strips lock/key-origin metadata before this seam, leaving
 /// only Command, Shift, Option, and Control in the finite chord domain.
