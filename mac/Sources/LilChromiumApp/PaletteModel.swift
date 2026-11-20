@@ -101,9 +101,10 @@ struct PaletteInput {
     /// What the field shows while `row` is selected, nil for the top row.
     /// The top row shows `text` with the completion's remainder selected.
     /// Any other row previews, caret at the end: a history row's URL as
-    /// Chrome's field shows it (`URLIntent.fieldText`), an Open row's URL, or
-    /// the typed text (Search, Settings). A preview never changes the query;
-    /// editing it does, through `edit`.
+    /// Chrome's field shows it (`URLIntent.fieldText`), an Open row's URL
+    /// with no scheme the user didn't type, or the typed text (Search,
+    /// Settings). A preview never changes the query; editing it does, through
+    /// `edit`.
     /// Browser precedent (r04 §2): Chrome and Firefox show the arrow-selected
     /// result in the field; Firefox restores the autofill on reselecting the
     /// top row.
@@ -114,7 +115,7 @@ struct PaletteInput {
         guard let row else { return (text, completionRange ?? caretAtEnd(of: text)) }
         let shown = switch row.kind {
         case .history: URLIntent.fieldText(forHistoryURL: row.actionURL, typed: typed)
-        case .openURL: row.actionURL
+        case .openURL: URLIntent.fieldText(forOpenURL: row.actionURL, typed: typed)
         case .search, .settings: typed
         }
         return (shown, caretAtEnd(of: shown))

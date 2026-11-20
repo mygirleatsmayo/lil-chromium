@@ -38,8 +38,7 @@ enum URLIntent {
     ) -> Intent {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty { return .empty }
-        if text.prefixMatch(of: #/[A-Za-z][A-Za-z0-9+.\-]*:\/\//#) != nil
-            || text.lowercased().hasPrefix("about:") {
+        if namesScheme(text) || text.lowercased().hasPrefix("about:") {
             return .open(percentEncoded(text))
         }
         if text.hasPrefix("/") { return .open(percentEncoded("file://" + text)) }
@@ -50,6 +49,11 @@ enum URLIntent {
         if namesLocalHost(text) { return .open(percentEncoded("http://" + text)) }
         if text.dropFirst().dropLast().contains(".") { return .open(percentEncoded("https://" + text)) }
         return .search
+    }
+
+    /// Rule 2: the text starts with `scheme://`.
+    private static func namesScheme(_ text: String) -> Bool {
+        text.prefixMatch(of: #/[A-Za-z][A-Za-z0-9+.\-]*:\/\//#) != nil
     }
 
     /// Rule 7: the host is `localhost`, a `.localhost` name, a dotted IPv4
@@ -90,6 +94,20 @@ enum URLIntent {
     /// (`FormattedStringWithEquivalentMeaning`). `%20` reads as a space;
     /// `https://` and `www.` stay. Unparseable URLs come back unchanged.
     static func fieldText(forHistoryURL url: String, typed: String) -> String {
+        fieldText(for: url, typed: typed, trimmingAddedScheme: false)
+    }
+
+    /// The field text for an Open row, as Chrome's what-you-typed match shows
+    /// it (`VerbatimMatchForInput`): formatted as for a history URL, less the
+    /// `https://` or `http://` the resolver added when the typed text had no
+    /// scheme (`AutocompleteProvider::TrimSchemePrefix`). Editing it resolves
+    /// to the same URL again. `file://` stays, as Chrome trims only HTTP(S).
+    static func fieldText(forOpenURL url: String, typed: String) -> String {
+        let typedScheme = namesScheme(typed.trimmingCharacters(in: .whitespacesAndNewlines))
+        return fieldText(for: url, typed: typed, trimmingAddedScheme: !typedScheme)
+    }
+
+    private static func fieldText(for url: String, typed: String, trimmingAddedScheme: Bool) -> String {
         guard var parts = URLComponents(string: url), let host = parts.host, !host.isEmpty else {
             return url
         }
@@ -102,9 +120,12 @@ enum URLIntent {
         let matchesInScheme = typed.split(whereSeparator: \.isWhitespace).contains {
             url.lowercased().hasPrefix($0.lowercased())
         }
-        if parts.scheme?.lowercased() == "http", !host.lowercased().hasPrefix("ftp."), !matchesInScheme {
-            text.removeFirst("http://".count)
+        let omitsScheme = switch parts.scheme?.lowercased() {
+        case "http": trimmingAddedScheme || (!host.lowercased().hasPrefix("ftp.") && !matchesInScheme)
+        case "https": trimmingAddedScheme
+        default: false
         }
+        if let scheme = parts.scheme, omitsScheme { text.removeFirst(scheme.count + "://".count) }
         if isBareHost, (intent(of: text).url == nil) != (intent(of: text + "/").url == nil) { text += "/" }
         return text.replacingOccurrences(of: "%20", with: " ")
     }

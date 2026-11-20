@@ -1133,11 +1133,12 @@ struct PaletteCompletionTests {
         #expect(field.pressReturn()?.url == "https://github.com")
     }
 
-    /// ↓ previews the selected row in the field: its URL for an Open or
-    /// history row, the typed text for Search, caret at the end. Return opens
-    /// what the field shows; the query and rows stay put.
+    /// ↓ previews the selected row in the field: Chrome's field text for an
+    /// Open or history row (an Open row has no scheme the user didn't type),
+    /// the typed text for Search, caret at the end. Return opens the selected
+    /// row; the query and rows stay put.
     @Test(.bug(id: 38), arguments: [
-        (1, "https://github.c"),
+        (1, "github.c"),
         (2, "github.c"),
         (3, "https://github.com/acme/app"),
     ])
