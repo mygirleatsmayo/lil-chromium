@@ -5,7 +5,7 @@ import { fixture } from "./fixture.js";
 
 // The hoverbar follows the palette's URL-intent contract (#39, PROTOCOL.md
 // *URL intent*): the Swift suite runs the same fixture.
-const { cases, home } = fixture("url-intent");
+const { cases, search, home } = fixture("url-intent");
 
 async function lilWithKagi() {
   const env = await boot();
@@ -16,10 +16,11 @@ async function lilWithKagi() {
   return { env, lil, navigate };
 }
 
+// Fixture search inputs carry no surrounding whitespace, so each is its query.
 function assertSearched(reply, query) {
   const url = new URL(reply.url);
   assert.equal(url.origin + url.pathname, "https://kagi.com/search", `${query} searches`);
-  assert.equal(url.searchParams.get("q"), query.trim());
+  assert.equal(url.searchParams.get("q"), query);
 }
 
 test("Return in the address field opens what the shared fixture resolves, else searches", async () => {
@@ -47,6 +48,15 @@ test("Return in the address field opens what the shared fixture resolves, else s
 test("a home-directory path searches: an extension cannot know the home directory", async () => {
   const { navigate } = await lilWithKagi();
   for (const c of home.cases) assertSearched(await navigate({ input: c.input }), c.input);
+});
+
+test("searches build the URL the shared fixture names: the typed text is one query value", async () => {
+  const { env, navigate } = await lilWithKagi();
+  for (const c of search.cases) {
+    const template = c.template ?? search.template;
+    await env.deliver({ ...fixture("message-context"), searchEngine: { name: "Engine", template } });
+    assert.equal((await navigate({ search: c.input })).url, c.url, `${c.input} with ${template}`);
+  }
 });
 
 test("the Search row searches even for text that names a destination", async () => {

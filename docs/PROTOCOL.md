@@ -166,14 +166,14 @@ As v1: host queues `open` (max 20 FIFO) while the port is down; `history-query` 
 
 ## URL intent (issue #39)
 
-One contract for typed text in the palette and the hoverbar address field: does it name a destination to open, or a query to search for? Trim the input, then take the first rule that matches.
+One contract for typed text in the palette and the hoverbar address field: does it name a destination to open, or a query to search for? Trim whitespace from the input, then take the first rule that matches. Whitespace, for trimming and for rule 6, is Chrome's set (`base/strings/whitespace_constants.h`; Unicode's White_Space property): ASCII whitespace plus U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F, U+3000. U+FEFF and U+200B are not whitespace.
 
 | # | Input | Result |
 |---|---|---|
 | 1 | Empty | No destination |
 | 2 | Starts with `scheme://` (`[A-Za-z][A-Za-z0-9+.-]*://`) | Open as typed. Spaces allowed |
 | 3 | Starts with `about:` (any case) | Open as typed |
-| 4 | Starts with `/` | Open the `file://` URL for that absolute path. Spaces allowed |
+| 4 | Starts with `/` | Open the `file://` URL for the file at exactly that absolute path. Spaces allowed. `%`, `;`, `#` and `?` are escaped as well, so `/tmp/report#1.txt` → `file:///tmp/report%231.txt` and `/tmp/a%20b` names a file called `a%20b` (Chrome's `FilePathToFileURL`) |
 | 5 | `~` or starts with `~/` | Palette: expand `~` to the user's home directory, then rule 4. Hoverbar: Search (an extension cannot know the home directory) |
 | 6 | Contains whitespace | Search |
 | 7 | Host (text before the first `/`, `?`, or `#`, less a `:port`) is `localhost`, ends in `.localhost`, is a dotted IPv4 address, or is a single label (`[A-Za-z0-9-]+`) with a numeric port (`devbox:8080`). A port, path, and query may follow. A non-numeric port never matches | Open with `http://` |
@@ -181,9 +181,9 @@ One contract for typed text in the palette and the hoverbar address field: does 
 | 9 | Anything else | Search |
 
 - Every resolved URL is percent-encoded as UTF-8: every character outside RFC 3986's unreserved and reserved sets, except `%`, so text already encoded stays as typed (`My Report.html` → `My%20Report.html`).
-- A search sends the trimmed input to config `searchEngine.template`.
+- A search puts the trimmed input, as one query value, in place of every `%s` in config `searchEngine.template`; a template without `%s` uses the default (Startpage) template. The value is percent-encoded as UTF-8 except `A–Z a–z 0–9 - _ . ! ~ * ' ( )` (JavaScript's `encodeURIComponent`), so `R&D` → `R%26D`, `C++` → `C%2B%2B`, a space → `%20`. Every search builds its URL this way: the palette's Search row, Tab and ⇧Return; the hoverbar's Search row and Return.
 - Out of scope: IPv6 literals; schemes without `//` other than `about:` (`mailto:`, `javascript:`, `data:`, `view-source:`) fall through to rules 6–9; file paths are not checked for existence.
-- Shared fixture: `fixtures/url-intent.json`. Both suites run `cases`; `home.cases` open under `home.directory` in the app suite and search in the extension suite.
+- Shared fixture: `fixtures/url-intent.json`. Both suites run `cases` and `search.cases`; `home.cases` open under `home.directory` in the app suite and search in the extension suite.
 
 ## Extension behavior contract (v2 changes)
 

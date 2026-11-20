@@ -60,6 +60,7 @@ struct PaletteRowsTests {
     ])
     func urlInputLeadsWithAnOpenRow(_ typed: String, _ url: String) throws {
         let rows = try makeModel().rows(for: typed)
+        try #require(rows.count >= 2)
 
         #expect(rows[0].kind == .openURL)
         #expect(rows[0].title == "Open \(typed)")
@@ -758,7 +759,7 @@ struct PaletteActionTests {
         ))
 
         #expect(action.kind == .search)
-        #expect(action.url == "https://www.startpage.com/sp/search?query=example.com/pricing")
+        #expect(action.url == "https://www.startpage.com/sp/search?query=example.com%2Fpricing")
         #expect(action.incognito == false)
         #expect(action.hint == "⏎ Search")
     }
@@ -986,6 +987,14 @@ struct PaletteCompletionTests {
             palette.action(for: input.typed, selectedRow: rows[selected], chord: chord)
         }
 
+        /// A history refresh lands: the typed text ranks against the new
+        /// history and a displayed completion is worked out again from it.
+        mutating func refresh(with items: [HistoryItem]) {
+            palette.install(Ranking.buildIndex(items: items, nowMs: PaletteCompletionTests.nowMs),
+                            from: palette.beginRefresh())
+            if input.completion != nil { input = palette.completing(input, with: palette.results(for: input.typed)) }
+        }
+
         private var textBeforeSelection: String {
             (display.text as NSString).substring(to: display.selection.location)
         }
@@ -1027,6 +1036,31 @@ struct PaletteCompletionTests {
         #expect(action.kind == .open)
         #expect(action.url == "https://github.com")
         #expect(action.hint == "⏎ Open")
+    }
+
+    /// A history refresh works the completion out again from the new
+    /// history, as Chrome re-applies the default match's completion when
+    /// results change (`OmniboxEditModel::OnCurrentMatchChanged`): one it
+    /// doesn't offer is dropped, and Return opens what the new rows lead with.
+    @Test(.bug(id: 41)) func aRefreshDropsACompletionTheNewHistoryDoesNotOffer() throws {
+        var field = field(typing: "g")
+        try #require(field.input.text == "github.com")
+
+        field.refresh(with: [Self.visit("https://example.com/", "Example")])
+
+        #expect(field.input.text == "g")
+        #expect(field.rows.contains { $0.actionURL == "https://github.com" } == false)
+        #expect(try #require(field.pressReturn()).kind == .search)
+    }
+
+    @Test(.bug(id: 41)) func aRefreshCompletesToTheHostTheNewHistoryOffers() throws {
+        var field = field(typing: "g")
+        try #require(field.input.text == "github.com")
+
+        field.refresh(with: [Self.visit("https://gitlab.com/", "GitLab")])
+
+        #expect(field.input.text == "gitlab.com")
+        #expect(try #require(field.pressReturn()).url == "https://gitlab.com")
     }
 
     /// Dotted and URL-like typed text still opens the completed host, not a

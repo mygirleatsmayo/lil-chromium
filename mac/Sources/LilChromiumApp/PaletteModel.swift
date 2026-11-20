@@ -180,7 +180,8 @@ final class PaletteModel {
 
     /// An independent copy of the snapshot and engine, so a keystroke can be
     /// ranked off the main thread while the original keeps changing (issue #41).
-    func copy() -> PaletteModel {
+    /// `sending`: the copy shares no state, so it can move to another task.
+    func copy() -> sending PaletteModel {
         let copy = PaletteModel()
         copy.index = index
         copy.searchEngine = searchEngine
@@ -239,7 +240,7 @@ final class PaletteModel {
         if chord == [.shift] || chord == [.command, .shift] {
             let incognito = chord == [.command, .shift]
             return searchAction(
-                for: query.trimmingCharacters(in: .whitespacesAndNewlines),
+                for: query.trimmingWhitespace(),
                 incognito: incognito,
                 hint: incognito ? "⇧⌘⏎ Search Incognito" : "⇧⏎ Search"
             )
@@ -294,7 +295,7 @@ final class PaletteModel {
     /// the input row's trailing `Search ⇥` label; nil (no action, no hint)
     /// for an empty query.
     func tabAction(for query: String) -> PaletteAction? {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = query.trimmingWhitespace()
         guard !trimmed.isEmpty else { return nil }
         return searchAction(for: trimmed, incognito: false, hint: "Search ⇥")
     }
@@ -316,12 +317,17 @@ final class PaletteModel {
     }
 
     /// The ranking of `input.typed` landed: complete the field to its
-    /// type-ahead host when the typed text strictly prefixes that host.
+    /// type-ahead host when the typed text strictly prefixes that host. The
+    /// completion is worked out afresh, so after a history refresh one the
+    /// new history doesn't offer is dropped, as Chrome re-applies the default
+    /// match's completion whenever results change
+    /// (`OmniboxEditModel::OnCurrentMatchChanged`).
     func completing(_ input: PaletteInput, with results: PaletteResults) -> PaletteInput {
+        var next = input
+        next.completion = nil
         guard !input.typed.isEmpty, let host = results.autocompleteHost,
               host.lowercased().hasPrefix(input.typed.lowercased()),
-              host.count > input.typed.count else { return input }
-        var next = input
+              host.count > input.typed.count else { return next }
         next.completion = originRow(host: host)
         return next
     }
@@ -361,7 +367,7 @@ final class PaletteModel {
     /// row sits above Search, that is the host Enter opens — ghost text must
     /// name it too. Otherwise the best history match's host, else nil.
     func results(for query: String) -> PaletteResults {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = query.trimmingWhitespace()
 
         if trimmed.isEmpty {
             let matches = Ranking.rank(query: "", index: index, limit: maxRows)

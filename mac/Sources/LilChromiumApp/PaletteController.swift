@@ -32,13 +32,11 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// didChangeSelection with the caret at the end — an apparent acceptance.
     private var isWritingField = false
 
-    /// Typed queries rank off the main thread: across a full history window
+    /// Typed queries rank off the main actor: across a full history window
     /// (20,000 items) one keystroke takes ~100 ms in a release build (issue
-    /// #41). Serial, so a newer query never races an older one; each edit
-    /// cancels the queued one and takes a new model ranking ticket, so a
-    /// result that lands after a newer edit is dropped.
-    private let rankQueue = DispatchQueue(label: "com.lilchromium.palette.rank", qos: .userInteractive)
-    private var pendingRank: DispatchWorkItem?
+    /// #41). Each edit cancels the ranking in flight and takes a new model
+    /// ranking ticket, so a result that lands after a newer edit is dropped.
+    private var pendingRank: Task<Void, Never>?
 
     /// Anchor read fresh at each show() (a cheap file read, always fresh) and
     /// cached for the session so per-keystroke repositioning doesn't re-read the
@@ -333,24 +331,29 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
 
     // MARK: - Data flow
 
+    /// Read the history window off the main actor: the relay read blocks
+    /// until the reply lands, and parsing every URL in the window is the
+    /// expensive part (done once here, not per keystroke).
     private func refreshHistory() {
         let ticket = model.beginRefresh()
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        Task { @concurrent [weak self] in
             // A failed or timed-out refresh keeps the snapshot the palette has.
             guard let items = try? RelayClient.historyWindow() else { return }
-            // Build the index off the main thread (parsing every URL in the
-            // window is the expensive part; do it once here, not per keystroke).
             let index = Ranking.buildIndex(items: items)
-            DispatchQueue.main.async {
-                guard let self, self.model.install(index, from: ticket) else { return }
-                // Re-render with whatever is currently typed. `render` clamps
-                // rather than resets: the user may already have arrowed down.
-                self.reload()
-            }
+            await self?.install(index, from: ticket)
         }
     }
 
-    /// Recompute rows for the typed text off the main thread, then render them
+    /// Install a refreshed snapshot, unless a newer refresh began since.
+    private func install(_ index: Ranking.HistoryIndex, from ticket: PaletteModel.RefreshTicket) {
+        guard model.install(index, from: ticket) else { return }
+        // Re-render with whatever is currently typed, working its completion
+        // out again from the new history. `render` clamps rather than
+        // resets: the user may already have arrowed down.
+        reload()
+    }
+
+    /// Recompute rows for the typed text off the main actor, then render them
     /// if no newer edit arrived meanwhile. `autocomplete` also offers inline
     /// type-ahead for the top hit once the rows land.
     private func reload(autocomplete: Bool = false) {
@@ -358,23 +361,22 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         let ticket = model.beginRanking()
         let worker = model.copy()
         let query = input.typed
-        let work = DispatchWorkItem { [weak self] in
+        // Nonisolated, so `worker` moves into the task rather than staying
+        // shared with the main actor.
+        pendingRank = Task { @concurrent [weak self] in
+            // A newer edit may have cancelled this ranking before it began.
+            guard !Task.isCancelled else { return }
             let ranked = worker.results(for: query)
-            DispatchQueue.main.async {
-                guard let self, let results = self.model.land(ranked, from: ticket) else { return }
-                self.pendingRank = nil
-                // Rows depend on the text alone; a completion also needs the
-                // caret and selection it was ranked for.
-                if autocomplete, let field = self.inputField, let editor = field.fieldText,
-                   Self.completionApplies(rankedFor: query, text: field.stringValue, selection: editor.selectedRange) {
-                    self.input = self.model.completing(self.input, with: results)
-                }
-                self.render(self.model.rows(for: self.input, typedRows: results.rows))
-                self.showSelection()
-            }
+            await self?.land(ranked, from: ticket, rankedFor: query, offeringCompletion: autocomplete)
         }
-        pendingRank = work
-        rankQueue.async(execute: work)
+    }
+
+    /// Render a ranking that landed, unless a newer edit outdated it.
+    private func land(_ ranked: PaletteResults, from ticket: PaletteModel.RankingTicket,
+                      rankedFor query: String, offeringCompletion autocomplete: Bool) {
+        guard let results = model.land(ranked, from: ticket) else { return }
+        pendingRank = nil
+        renderResults(results, offeringCompletion: autocomplete && fieldStillShows(query))
     }
 
     /// Drop the queued or in-flight ranking; its result will not render.
@@ -391,13 +393,29 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         text == query && selection == NSRange(location: (query as NSString).length, length: 0)
     }
 
+    /// Whether the field is still in the state `query` was ranked for.
+    private func fieldStillShows(_ query: String) -> Bool {
+        guard let field = inputField, let editor = field.fieldText else { return false }
+        return Self.completionApplies(rankedFor: query, text: field.stringValue, selection: editor.selectedRange)
+    }
+
+    /// Render `results`, ranked for the typed text. Rows depend on the text
+    /// alone. A displayed completion is worked out again from them, so after
+    /// a history refresh one the new history doesn't offer is dropped;
+    /// `offeringCompletion` lets them add one.
+    private func renderResults(_ results: PaletteResults, offeringCompletion: Bool) {
+        if offeringCompletion || input.completion != nil { input = model.completing(input, with: results) }
+        render(model.rows(for: input, typedRows: results.rows))
+        showSelection()
+    }
+
     /// Keyboard selection and Return act on the rows for what is typed now:
     /// if they are still being ranked, rank them here instead of acting on the
     /// previous query's rows. Clicks and hover act on the rows on screen.
     private func settleRows() {
         guard pendingRank != nil else { return }
         cancelPendingRank()
-        render(model.rows(for: input))
+        renderResults(model.results(for: input.typed), offeringCompletion: false)
     }
 
     /// Show `rows` and rebuild the stacked row views. A fresh open sends the

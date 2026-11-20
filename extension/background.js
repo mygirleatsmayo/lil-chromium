@@ -926,8 +926,8 @@ async function restorePriorContext(priorContext, at) {
   await focusWindow(prior.windowId);
 }
 
-// Lils still being created, each `{windowId, done}`; `windowId` is filled in
-// once windows.create returns. A lil's page can load and ask `isEphemeral`
+// Lils still being created, each `{windowId}`; `windowId` is filled in once
+// windows.create returns. A lil's page can load and ask `isEphemeral`
 // before its window is registered (a local file loads that fast), so that
 // answer waits while the sender's window could still be a lil being created.
 const lilCreations = new Set();
@@ -978,10 +978,9 @@ async function lilCreationSettled(windowId) {
  */
 async function openLil(spec) {
   const creation = { windowId: undefined };
-  creation.done = createLil(spec, creation);
   lilCreations.add(creation);
   try {
-    return await creation.done;
+    return await createLil(spec, creation);
   } finally {
     lilCreations.delete(creation);
     signalCreationChange();
@@ -2354,14 +2353,21 @@ async function omniboxSuggest(rawQuery) {
 // empty input, { url } to open, or { query } to search. A `~` path searches:
 // an extension cannot know the home directory.
 function urlIntent(input) {
-  const text = typeof input === "string" ? input.trim() : "";
+  const text = typeof input === "string" ? trimWhitespace(input) : "";
   if (!text) return null;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text) || /^about:/i.test(text)) return { url: percentEncoded(text) };
-  if (text.startsWith("/")) return { url: percentEncoded("file://" + text) };
-  if (text === "~" || text.startsWith("~/") || /\s/.test(text)) return { query: text };
+  if (text.startsWith("/")) return { url: fileURL(text) };
+  if (text === "~" || text.startsWith("~/") || /\p{White_Space}/u.test(text)) return { query: text };
   if (namesLocalHost(text)) return { url: percentEncoded("http://" + text) };
   if (text.slice(1, -1).includes(".")) return { url: percentEncoded("https://" + text) };
   return { query: text };
+}
+
+// Whitespace as Chrome counts it (`base/strings/whitespace_constants.h`):
+// Unicode's White_Space property. JavaScript's `trim()` and `\s` differ: they
+// count U+FEFF and miss U+0085. Mirrors `String.trimmingWhitespace()` in the app.
+function trimWhitespace(text) {
+  return text.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
 }
 
 // Rule 7: the host is `localhost`, a `.localhost` name, a dotted IPv4 address,
@@ -2383,15 +2389,26 @@ function percentEncoded(url) {
   return url.toWellFormed().replace(/[^A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]/gu, (c) => encodeURIComponent(c));
 }
 
+// Rule 4: the `file://` URL for the file at exactly `path`, as Chrome's
+// `FilePathToFileURL` builds it (`net/base/filename_util.cc`): `%`, `;`, `#`
+// and `?` are escaped too, so they stay part of the file name. Mirrors
+// `URLIntent.fileURL(path:)` in the app.
+function fileURL(path) {
+  return "file://" + percentEncoded(path.replace(/[%;#?]/g, (c) => encodeURIComponent(c)));
+}
+
 // Resolves address-field input, or an explicit search from the Search row, to
 // the URL to navigate; null when there is nowhere to go.
 async function resolveNavigation({ input, search }) {
-  const intent = typeof search === "string" ? { query: search.trim() } : urlIntent(input);
+  const intent = typeof search === "string" ? { query: trimWhitespace(search) } : urlIntent(input);
   if (!intent || intent.query === "") return null;
   if (intent.url) return intent.url;
+  // The query, as one query value, replaces every `%s`; a template without
+  // one falls back to the default. Mirrors `SearchEngineConfig.searchURL(for:)`.
   const ctx = await getContext();
-  const template = (ctx.searchEngine && ctx.searchEngine.template) || DEFAULT_SEARCH.template;
-  return template.replace("%s", encodeURIComponent(intent.query));
+  const template = ctx.searchEngine && ctx.searchEngine.template;
+  const usable = typeof template === "string" && template.includes("%s") ? template : DEFAULT_SEARCH.template;
+  return usable.replaceAll("%s", encodeURIComponent(intent.query.toWellFormed()));
 }
 
 // ===========================================================================
