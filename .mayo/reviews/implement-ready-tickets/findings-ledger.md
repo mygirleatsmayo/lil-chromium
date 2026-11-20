@@ -83,3 +83,18 @@ Verdicts pending Lucas; the orchestrator's recommendation follows each.
 - P8 · #38 "The text in the field, the top row, and plain Return must always agree": with `http://localhost:3000` history, `localhos` completes and Return opens `https://localhost`, but accepting the completion first opens `http://localhost`. Cause, on `main`: an origin row always opens `https://<host>`, dropping the history's scheme and port · recommend **new ticket** (port-aware origins need a ranking decision).
 - P9 · #39 "the same answer in the palette and in the hoverbar address field": `localhost/` + U+0301 + `path` searches in Swift, opens in the hoverbar · same cause as S8 · recommend **fix**.
 - P10 · #40: an edit resets the selection to the top at once, but the highlight and hint stay on the old row until ranking lands; Return already acts on the top row · recommend **fix**: the highlight follows the selection when it resets.
+
+### Lucas's rulings on final review 1
+
+Lucas asked that review weigh how likely a defect is to reach a user, as a senior engineer would, so rounds don't chase unreachable cases.
+
+- S8/P9 · **won't-fix** (Lucas): only malformed text puts a combining mark right after a delimiter; typed and NFD text put marks after letters.
+- S9 · **won't-fix** (Lucas): needs an explicit `http://` URL with non-ASCII text, the Open row selected below the top, and then an edit of the previewed text. Return on the row itself opens the right URL.
+- P7 · **won't-fix** (Lucas): only the first open after launch has no snapshot, and only Return before history lands misses the completion.
+- S10 · **won't-fix** (Lucas): the model's rule is tested; only the controller's one-line hookup isn't.
+- P10 · **won't-fix** (Lucas): the lag lasts as long as ranking (well under 100 ms), and Return already acts on the top row.
+- S11 · **fix**, `promotedRowAndTypeAheadNameTheSameHost` only: require the row count before indexing. The relay test's force-try of a fixed fixture stays (orchestrator's call: it can't fail).
+- S12 · **fix**.
+- S13 · **won't-fix** (Lucas).
+- P6 · filed as #53 (`needs-triage`). Code reading suggests promote leaves a hidden hoverbar in the normal window; Lucas has never seen one on `main`, so #53 starts by confirming it live.
+- P8 · pending Lucas: this branch or its own ticket. Chrome's rule settles the design: the site-level suggestion is the best history URL with its path removed (`ConvertToHostOnly` → `GURL::GetWithEmptyPath()`, `components/omnibox/browser/history_url_provider.cc`), so it keeps that URL's scheme and port.
