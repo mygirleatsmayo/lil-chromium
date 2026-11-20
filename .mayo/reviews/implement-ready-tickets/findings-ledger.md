@@ -27,3 +27,11 @@ Initial reviewed point: `0db3180`
 
 - Built on `fix/implement-review-findings` (`1bc6096...07c09cc`): S1/P3, S2/P1, S4/P4, P2, S5, S6, S7. Not yet reviewed.
 - Skill departures the fixer reported, pending Lucas's sign-off: the relay's blocking history read now runs on the Swift concurrency pool (S5; the read has socket timeouts, so it ends on its own); one P2 test passed before the fix and was kept for the other half of the rule; no new test for the S7 refactor.
+
+## Remediation 1 (`0db3180...8432791`)
+
+- Resolved: S1/P3, S2/P1, S4/P4, S5, S6, S7, P2.
+- N1 · `overlay.js` `queryOmni`: an emptied field (now also U+0085-only text) returns before `++omniSeq`, so a pending reply reopens suggestions for the old query. On `main` a cleared field did the same · pending Lucas.
+- N2 · `PaletteController.swift` history refresh: `RelayClient.historyWindow()` blocks a Swift concurrency worker up to 15 s per socket read (`SO_RCVTIMEO`), per routed socket; Apple advises keeping blocking work off that pool (WWDC22 110350) · pending Lucas (this is the first fixer-reported skill departure).
+- N3 · `RelayHistoryTests.swift`: the new `#require` on `write` can throw before `close(fds[1])`, leaking a descriptor · pending Lucas.
+- N4 · `docs/PROTOCOL.md` URL intent: "Every resolved URL … except `%`" contradicts rules 4–5, which now escape `%` · pending Lucas.
