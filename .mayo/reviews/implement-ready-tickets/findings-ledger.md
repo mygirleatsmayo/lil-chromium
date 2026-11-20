@@ -31,7 +31,8 @@ Initial reviewed point: `0db3180`
 ## Remediation 1 (`0db3180...8432791`)
 
 - Resolved: S1/P3, S2/P1, S4/P4, S5, S6, S7, P2.
-- N1 · `overlay.js` `queryOmni`: an emptied field (now also U+0085-only text) returns before `++omniSeq`, so a pending reply reopens suggestions for the old query. On `main` a cleared field did the same · pending Lucas.
-- N2 · `PaletteController.swift` history refresh: `RelayClient.historyWindow()` blocks a Swift concurrency worker up to 15 s per socket read (`SO_RCVTIMEO`), per routed socket; Apple advises keeping blocking work off that pool (WWDC22 110350) · pending Lucas (this is the first fixer-reported skill departure).
-- N3 · `RelayHistoryTests.swift`: the new `#require` on `write` can throw before `close(fds[1])`, leaking a descriptor · pending Lucas.
-- N4 · `docs/PROTOCOL.md` URL intent: "Every resolved URL … except `%`" contradicts rules 4–5, which now escape `%` · pending Lucas.
+- N1 · `overlay.js` `queryOmni`: an emptied field (now also U+0085-only text) returns before `++omniSeq`, so a pending reply reopens suggestions for the old query. On `main` a cleared field did the same · **fix** · Settled (Lucas): emptying the field, or leaving only whitespace, drops any suggestions reply still pending.
+- N2 · `PaletteController.swift` history refresh: `RelayClient.historyWindow()` blocks a Swift concurrency worker up to 15 s per socket read (`SO_RCVTIMEO`), per routed socket; Apple advises keeping blocking work off that pool (WWDC22 110350) · **fix** · Settled (Lucas): the blocking history read runs off the Swift concurrency pool, as Apple advises. GCD for that one read is allowed (Lucas signs off on the swiftui-pro departure for Apple's documented reason). Ranking stays on Swift concurrency.
+- N3 · `RelayHistoryTests.swift`: the new `#require` on `write` can throw before `close(fds[1])`, leaking a descriptor · **fix**.
+- N4 · `docs/PROTOCOL.md` URL intent: "Every resolved URL … except `%`" contradicts rules 4–5, which now escape `%` · **fix**: the doc states the rule the code follows.
+- Lucas approved the other two fix-round-1 skill departures: the P2 test that passed before the fix, and no new test for the S7 refactor.
