@@ -46,3 +46,9 @@ Initial reviewed point: `0db3180`
 - C2 · `RelayClient.swift`: the blocking and async history reads share the name `historyWindow()`; only the async one calls the blocking one · **fix** (Lucas): the blocking read gets its own private name; only the async read is callable from outside.
 - Lucas accepted N1 closing suggestions at once when the field is emptied, and approved no new test for N2.
 - C1, C2 built on `fix/integration-ledger-round-2-c1-c2` (`d294059`, `b2c4857`). Not yet reviewed. C1 also cancels a debounced query not yet sent when suggestions close: same cause, so within the settled rule (pending work never reopens closed suggestions). `queryOmni` keeps its empty-text guard, now unreachable from the input handler. No test for the C2 rename.
+
+## Remediation 2 (`8432791...fdb6747`)
+
+- Resolved: N1, N2, N3, N4, C1, C2; earlier fixes intact.
+- N5 · `overlay.js` input handler: the new whitespace-only check runs the trim regex `/^\p{White_Space}+|\p{White_Space}+$/gu`, which is quadratic on a long whitespace run; pasting `a` + 60,000 spaces + `b` took 1.4 s (0.1 ms at `8432791`). The same regex trims in `queryOmni` and in `background.js` `trimWhitespace` · pending Lucas.
+- N6 · `RelayClient.swift`: the type comment "All methods are synchronous" is stale since the async `historyWindow()`; the wrapper comment says the 15 s timeout is per socket, but it applies per read · pending Lucas.
