@@ -86,6 +86,20 @@ test("arrow keys still navigate suggestions without leaking to the page", async 
   assert.equal(back.defaultPrevented, false);
 });
 
+test("clicking the Search row searches for the typed text, even when it names a destination (#39)", async () => {
+  const page = await mountOverlay();
+  page.key(page.window, "l", { metaKey: true });
+  page.addr.value = "localhost";
+  page.addr.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 150));
+  await page.flush();
+
+  const rows = page.omni.querySelectorAll(".orow");
+  rows[rows.length - 1].dispatchEvent(new page.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  // Spread: the message is built in the overlay's realm.
+  assert.deepEqual({ ...page.chrome.messages.at(-1) }, { action: "navigate", search: "localhost" });
+});
+
 test("keyboard isolation keeps address labels, pointer-transparent chrome, and Settings", async () => {
   const page = await mountOverlay();
   assert.equal(page.addr.getAttribute("aria-label"), "Address");

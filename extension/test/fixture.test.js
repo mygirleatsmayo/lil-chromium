@@ -18,6 +18,7 @@ const SHARED = [
   "message-open-settings",
   "message-pong-legacy",
   "message-restore-focus",
+  "url-intent",
 ];
 
 test("fixture directory is repo-root fixtures, resolved from this file", () => {
