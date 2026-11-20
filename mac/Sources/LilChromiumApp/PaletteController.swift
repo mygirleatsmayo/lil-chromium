@@ -73,6 +73,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         // Reset input + autocomplete state each open.
         inputField.stringValue = ""
         committedQuery = ""
+        refreshTabHint()
         currentReturnChord = .plain
 
         // Read config fresh at each show() (always current), cache for the
@@ -391,7 +392,6 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         currentRows = Array(rows.prefix(maxResultRows))
         selection.rowsChanged(count: currentRows.count, resetSelection: resetSelection)
         rebuildRowViews()
-        refreshTabHint()
         positionPanel()
         // Rows (and the panel) moved under a possibly parked pointer, which
         // fires no tracking event; hit-test it directly.
@@ -595,6 +595,9 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         // autocomplete was active, typing over the selected completion yields
         // exactly the new typed text here (the selection was replaced).
         committedQuery = newText
+        // The hint depends on the typed text alone: update it now, not when
+        // this query's rows land.
+        refreshTabHint()
 
         // Reset selection to the top on each edit so Enter opens the best match.
         // Reset now, while the new rows still rank: Return settles them first,
