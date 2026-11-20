@@ -53,3 +53,8 @@ Initial reviewed point: `0db3180`
 - N5 · `overlay.js` input handler: the new whitespace-only check runs the trim regex `/^\p{White_Space}+|\p{White_Space}+$/gu`, which is quadratic on a long whitespace run; pasting `a` + 60,000 spaces + `b` took 1.4 s (0.1 ms at `8432791`). The same regex trims in `queryOmni` and in `background.js` `trimWhitespace` · **fix** · Settled (Lucas: fix the cause): every trim and whitespace check of typed text, in `overlay.js` and `background.js`, runs in time linear in the text's length. The whitespace set (S4) and every result stay the same.
 - N6 · `RelayClient.swift`: the type comment "All methods are synchronous" is stale since the async `historyWindow()`; the wrapper comment says the 15 s timeout is per socket, but it applies per read · **fix**: the comments state what the code does.
 - Lucas delegated test-seam decisions to the orchestrator. The seams used so far (the shared `fixtures/url-intent.json`, `PaletteModel`, the service-worker and overlay harnesses, including `holdOmnibox`) live in test code and stay.
+
+## Fix round 3
+
+- Built on `fix/review-remediation-n5-n6` (`3c9e5f1`, `8dd0249`): N5, N6. Not yet reviewed.
+- Orchestrator's calls (Lucas delegated seams and disputes): the two N5 tests' 100 ms time limit stays (the old code took ~4 s, a 40× margin); the overlay keeps its own copy of the linear trim, since the content script can't import from the service worker and each copy has its own test.
