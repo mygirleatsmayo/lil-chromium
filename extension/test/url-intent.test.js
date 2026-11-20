@@ -63,3 +63,14 @@ test("the Search row searches even for text that names a destination", async () 
   const { navigate } = await lilWithKagi();
   assertSearched(await navigate({ search: "localhost" }), "localhost");
 });
+
+// N5: a quadratic trim took 1.4 s on 60,000 spaces; linear takes well under 1 ms.
+test("a long whitespace run in typed text resolves in linear time", async () => {
+  const { navigate } = await lilWithKagi();
+  const typed = "a" + " ".repeat(100_000) + "b";
+  for (const msg of [{ input: ` ${typed}\u3000` }, { search: ` ${typed}\u3000` }]) {
+    const start = performance.now();
+    assertSearched(await navigate(msg), typed);
+    assert.ok(performance.now() - start < 100, `${Object.keys(msg)[0]} resolves at once`);
+  }
+});
