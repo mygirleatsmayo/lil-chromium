@@ -62,3 +62,24 @@ Initial reviewed point: `0db3180`
 ## Remediation 3 (`fdb6747...902306b`)
 
 - Resolved: N5, N6; every earlier fix intact. No new findings. The ledger is fully resolved; next is the final full review.
+
+## Final review 1 (`main...5bd505c`)
+
+Verdicts pending Lucas; the orchestrator's recommendation follows each.
+
+### Standards
+
+- S8 · `URLIntent.swift` `intent(of:)` matches delimiters by `Character`, so a combining mark fuses with `/`: `/` + U+0301 + `notes` searches in Swift but opens `file:///%CC%81notes` in the worker (PROTOCOL.md URL intent, rule 4) · same cause as P9 · recommend **fix**.
+- S9 · `URLIntent.swift` `fieldText(forOpenURL:typed:)`: typed `http://example.com/é` previews as `example.com/é`, because the typed term is compared with the encoded URL; editing the preview then resolves to `https://` (issue-38 ledger, P2 Open row: the preview shows a scheme only when the typed text has one) · recommend **fix**.
+- S10 · `PaletteTests.swift` `Field.refresh` repeats the controller's `if input.completion != nil`, so the refresh tests pass even if production stops working the completion out again (AGENTS.md: each test guards live behavior) · same area as P7 · recommend **fix**.
+- S11 · Test preconditions: `promotedRowAndTypeAheadNameTheSameHost` indexes `rows[2]` after a nonfatal `#expect`; `RelayHistoryTests` force-tries the fixture encoding and checks its size inside the server callback (swift-testing-pro: `#require` preconditions) · recommend **fix**.
+- S12 · `PaletteTests.swift` `#expect(!model.install(...))` (swift-testing-pro core rules: never `!` in `#expect`) · recommend **fix**.
+- S13 · `autocompleteHostValue` returns `host` (possible Middle Man) · recommend **won't-fix**: the helper is on `main`; the branch only calls it (as #40 S10).
+
+### Spec
+
+- P6 · #47 "A lil showing a `file://` page has the full hoverbar": Send to lil on a normal tab gives no hoverbar, because the overlay already exited in the normal window and adoption doesn't mount it. On `main` the same happens for every scheme · recommend **new ticket** (outside #47, whose cause was the manifest).
+- P7 · #41 "Rows refresh when it lands": on the first open, text typed before history arrives gets no completion when history lands, since a refresh only reworks a completion already shown · recommend **fix**: the settled P2 rule ("worked out again from the new history") also offers one the field state allows.
+- P8 · #38 "The text in the field, the top row, and plain Return must always agree": with `http://localhost:3000` history, `localhos` completes and Return opens `https://localhost`, but accepting the completion first opens `http://localhost`. Cause, on `main`: an origin row always opens `https://<host>`, dropping the history's scheme and port · recommend **new ticket** (port-aware origins need a ranking decision).
+- P9 · #39 "the same answer in the palette and in the hoverbar address field": `localhost/` + U+0301 + `path` searches in Swift, opens in the hoverbar · same cause as S8 · recommend **fix**.
+- P10 · #40: an edit resets the selection to the top at once, but the highlight and hint stay on the old row until ranking lands; Return already acts on the top row · recommend **fix**: the highlight follows the selection when it resets.
