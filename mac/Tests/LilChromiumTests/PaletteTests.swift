@@ -51,14 +51,19 @@ struct PaletteRowsTests {
         #expect(rows[0].actionURL == "https://kagi.com/search?q=quarterly%20budget%20review")
     }
 
-    /// URL-ish input replaces the top hit with an explicit "Open …" row, with the
-    /// scheme filled in.
-    @Test func urlInputLeadsWithAnOpenRow() throws {
-        let rows = try makeModel().rows(for: "docs.swift.org/guide")
+    /// URL-ish input replaces the top hit with an explicit "Open …" row that
+    /// opens the URL the URL-intent contract resolves (#39).
+    @Test(arguments: [
+        ("docs.swift.org/guide", "https://docs.swift.org/guide"),
+        ("localhost:3000", "http://localhost:3000"),
+        ("/Users/me/My Report.html", "file:///Users/me/My%20Report.html"),
+    ])
+    func urlInputLeadsWithAnOpenRow(_ typed: String, _ url: String) throws {
+        let rows = try makeModel().rows(for: typed)
 
         #expect(rows[0].kind == .openURL)
-        #expect(rows[0].title == "Open docs.swift.org/guide")
-        #expect(rows[0].actionURL == "https://docs.swift.org/guide")
+        #expect(rows[0].title == "Open \(typed)")
+        #expect(rows[0].actionURL == url)
         #expect(rows[1].kind == .search, "search stays available for URL-ish input")
     }
 
