@@ -827,7 +827,11 @@
     let omniDebounce = null;
     let omniSeq = 0;
 
+    // Closing suggestions, by any path, drops any reply still pending and any
+    // query still waiting out the debounce.
     function closeOmni() {
+      clearTimeout(omniDebounce);
+      omniSeq++;
       omni.classList.remove("open");
       omni.innerHTML = "";
       suggestions = [];
@@ -902,14 +906,13 @@
 
     async function queryOmni() {
       const q = typedQuery();
-      // Every query supersedes a reply still pending, an empty one too.
-      const seq = ++omniSeq;
       if (!q) {
         closeOmni();
         return;
       }
+      const seq = ++omniSeq; // supersedes any reply still pending
       const resp = await send({ action: "omnibox", query: q });
-      if (seq !== omniSeq) return; // a newer query superseded this one
+      if (seq !== omniSeq) return; // a newer query or a close superseded this one
       if (!addrFocused()) return;
       const hist = (resp && resp.suggestions) || [];
       suggestions = hist.map((h) => ({ type: "history", url: h.url, title: h.title, host: h.host }));
@@ -936,7 +939,7 @@
       // Only a relay query waits out the debounce. An emptied field closes
       // suggestions now, so no reply still pending can reopen them.
       if (typedQuery()) omniDebounce = setTimeout(queryOmni, OMNIBOX_DEBOUNCE_MS);
-      else queryOmni();
+      else closeOmni();
     });
 
     // Issue #19: while the address field or suggestions own the event, consume

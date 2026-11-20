@@ -124,6 +124,45 @@ for (const [label, emptied] of [
   });
 }
 
+test("Escape drops a suggestions reply still pending", async () => {
+  const page = await mountOverlay({ holdOmnibox: true });
+  page.key(page.window, "l", { metaKey: true });
+  page.addr.value = "git";
+  page.addr.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 150));
+  page.chrome.releaseOmnibox();
+  await page.flush();
+  assert.equal(page.omni.classList.contains("open"), true, "suggestions for git are open");
+
+  page.addr.value = "gith";
+  page.addr.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(page.chrome.messages.at(-1).query, "gith", "the query for gith is pending");
+
+  page.key(page.addr, "Escape");
+  assert.equal(page.root.activeElement === page.addr, true, "the first Escape only closes suggestions");
+  page.chrome.releaseOmnibox();
+  await page.flush();
+  assert.equal(page.omni.classList.contains("open"), false, "the reply for gith does not reopen them");
+});
+
+test("Escape drops a suggestions query still waiting out the debounce", async () => {
+  const page = await mountOverlay();
+  page.key(page.window, "l", { metaKey: true });
+  page.addr.value = "git";
+  page.addr.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 150));
+  await page.flush();
+  assert.equal(page.omni.classList.contains("open"), true, "suggestions for git are open");
+
+  page.addr.value = "gith";
+  page.addr.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+  page.key(page.addr, "Escape");
+  await new Promise((r) => setTimeout(r, 150));
+  await page.flush();
+  assert.equal(page.omni.classList.contains("open"), false, "the query for gith does not reopen them");
+});
+
 test("keyboard isolation keeps address labels, pointer-transparent chrome, and Settings", async () => {
   const page = await mountOverlay();
   assert.equal(page.addr.getAttribute("aria-label"), "Address");

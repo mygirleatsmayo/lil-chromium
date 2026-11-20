@@ -258,8 +258,9 @@ enum RelayClient {
     /// Ask for the palette's history snapshot (the whole history window).
     /// Tries routed sockets in order (steps 1–3, no browser launch) and
     /// returns the first reply. Throws when no socket answers, so the caller
-    /// can keep the snapshot it has.
-    static func historyWindow() throws -> [HistoryItem] {
+    /// can keep the snapshot it has. Blocks; callers use the async
+    /// `historyWindow()`.
+    private static func blockingHistoryWindow() throws -> [HistoryItem] {
         let message = HistoryQueryMessage.historyWindow(id: UUID().uuidString)
         var lastError: Error = RelayError.connectFailed
         for target in routedSockets() {
@@ -274,7 +275,7 @@ enum RelayClient {
         throw lastError
     }
 
-    /// `historyWindow()` for async callers, which suspend instead of blocking.
+    /// `blockingHistoryWindow()` for async callers, which suspend instead of blocking.
     /// The read can block for 15 s per routed socket (`SO_RCVTIMEO`), so it
     /// runs on a GCD thread: blocking work stays off Swift concurrency's
     /// pool, which has one thread per core (WWDC22 110350, "Visualize and
@@ -282,7 +283,7 @@ enum RelayClient {
     static func historyWindow() async throws -> [HistoryItem] {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(with: Result { try historyWindow() })
+                continuation.resume(with: Result { try blockingHistoryWindow() })
             }
         }
     }
