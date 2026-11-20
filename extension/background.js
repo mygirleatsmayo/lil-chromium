@@ -30,7 +30,7 @@ const LAST_SIZE_KEY = "lastSize"; // {width, height} — last user-resized lil s
 const CONTEXT_KEY = "hostContext"; // cached `context` reply (stale-but-usable)
 const CONTEXT_TS_KEY = "hostContextTs"; // when the cache was last refreshed
 const DEFAULT_SIZE = { width: 1100, height: 800 };
-const HISTORY_WINDOW_MS = 90 * 24 * 3600 * 1000; // 90 days
+const DAY_MS = 24 * 3600 * 1000;
 const CASCADE_OFFSET = 32;
 
 // Context handshake: how long a clickHint is considered a match for a nav target.
@@ -78,6 +78,7 @@ const DEFAULT_SLEEP = {
 };
 const DEFAULT_SEARCH = { name: "Startpage", template: "https://www.startpage.com/sp/search?query=%s" };
 const DEFAULT_HOVERBAR = { style: "glass", tint: null, revealHeight: 15 };
+const DEFAULT_HISTORY = { windowDays: 90 };
 const DEFAULT_CONTEXT = {
   browser: "chrome",
   browserName: "Chrome",
@@ -89,6 +90,7 @@ const DEFAULT_CONTEXT = {
   sleep: DEFAULT_SLEEP,
   searchEngine: DEFAULT_SEARCH,
   hoverBar: DEFAULT_HOVERBAR,
+  history: DEFAULT_HISTORY,
   knownBrowsers: [],
 };
 
@@ -128,6 +130,7 @@ function normalizeContext(msg) {
   const sleep = src.sleep && typeof src.sleep === "object" ? src.sleep : {};
   const searchEngine = src.searchEngine && typeof src.searchEngine === "object" ? src.searchEngine : {};
   const hoverBar = src.hoverBar && typeof src.hoverBar === "object" ? src.hoverBar : {};
+  const history = src.history && typeof src.history === "object" ? src.history : {};
   return {
     browser: src.browser || DEFAULT_CONTEXT.browser,
     browserName: src.browserName || DEFAULT_CONTEXT.browserName,
@@ -161,6 +164,14 @@ function normalizeContext(msg) {
         typeof hoverBar.revealHeight === "number" && Number.isFinite(hoverBar.revealHeight)
           ? hoverBar.revealHeight
           : DEFAULT_HOVERBAR.revealHeight,
+    },
+    // `palette` is the app's alone; the worker keeps only the history window.
+    history: {
+      // Whole days; 0 = everything the browser retains (PROTOCOL.md).
+      windowDays:
+        Number.isInteger(history.windowDays) && history.windowDays >= 0
+          ? history.windowDays
+          : DEFAULT_HISTORY.windowDays,
     },
     knownBrowsers: Array.isArray(src.knownBrowsers) ? src.knownBrowsers : [],
   };
@@ -631,6 +642,14 @@ async function broadcastContextToLils() {
   }
 }
 
+// The oldest visit `history.search` may return under the configured window.
+// 0 ("All") must pass startTime 0 explicitly: an omitted startTime means
+// "the last 24 hours" to chrome.history.search.
+async function historyStartTime() {
+  const { windowDays } = (await getContext()).history;
+  return windowDays === 0 ? 0 : Date.now() - windowDays * DAY_MS;
+}
+
 async function answerHistoryQuery(msg) {
   // A rejected search is a failure, never an empty history (PROTOCOL.md
   // history-query): the palette keeps the snapshot it has.
@@ -642,7 +661,7 @@ async function answerHistoryQuery(msg) {
       // maxResults 0 and 100000 both returned the same 12,403 items reaching
       // back 90 days; 3000 reached 19 days.
       maxResults: typeof msg.maxResults === "number" ? msg.maxResults : 100,
-      startTime: Date.now() - HISTORY_WINDOW_MS,
+      startTime: await historyStartTime(),
     }),
     "history.search"
   );
@@ -2267,7 +2286,7 @@ async function omniboxSuggest(rawQuery) {
   if (!q) return [];
 
   const results = await safe(
-    chrome.history.search({ text: q, maxResults: 200, startTime: Date.now() - HISTORY_WINDOW_MS }),
+    chrome.history.search({ text: q, maxResults: 200, startTime: await historyStartTime() }),
     "omnibox history.search"
   );
   const items = results || [];

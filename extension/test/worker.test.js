@@ -89,6 +89,7 @@ test("context fixture lands as host identity plus config objects, with no bundle
   assert.equal(context.searchEngine.template, "https://kagi.com/search?q=%s");
   assert.equal(context.hoverBar.style, "solid");
   assert.equal(context.hoverBar.tint, "#112233");
+  assert.equal(context.history.windowDays, 30);
   assert.deepEqual(
     context.knownBrowsers.map((b) => b.slug),
     ["helium", "brave"]
@@ -103,10 +104,12 @@ test("context fixture lands as host identity plus config objects, with no bundle
     "browserName",
     "ephemeralDefault",
     "fallbackBrowser",
+    "history",
     "hoverBar",
     "id",
     "knownBrowsers",
     "linkBehavior",
+    "palette",
     "primaryBrowser",
     "primaryBrowserName",
     "searchEngine",
@@ -539,6 +542,76 @@ test("a rejected history search replies as a failure, not an empty history (#41)
   await env.deliver({ ...fixture("message-history-query-window"), id: expected.id });
   const reply = env.outgoing().filter((m) => m.type === "history-result").at(-1);
   assert.deepEqual(reply, expected);
+});
+
+// Palette settings (issue #43): `history.windowDays` bounds both history
+// paths — the palette's snapshot and the hoverbar's address suggestions — and
+// a change applies to the next query without a reload. 0 means everything.
+function datedHistory() {
+  const day = 24 * 3600 * 1000;
+  const now = Date.now();
+  return [3, 20, 60, 200].map((age) => ({
+    url: `https://news${age}.example/`,
+    title: `News ${age} days ago`,
+    lastVisitTime: now - age * day,
+    visitCount: 1,
+    typedCount: 0,
+  }));
+}
+
+async function windowQueryUrls(env, id) {
+  await env.deliver({ ...fixture("message-history-query-window"), id });
+  const reply = env.outgoing().filter((m) => m.type === "history-result" && m.id === id).at(-1);
+  return Array.from(reply.items, (i) => i.url).sort();
+}
+
+async function suggestionUrls(env) {
+  const { suggestions } = await env.message({ action: "omnibox", query: "news" });
+  // Array.from: the reply is built in the worker's realm.
+  return Array.from(suggestions, (s) => s.url).sort();
+}
+
+test("history reaches back 90 days until the config says otherwise (#43)", async () => {
+  const env = await boot({ history: datedHistory() });
+  const within90 = ["https://news20.example/", "https://news3.example/", "https://news60.example/"];
+  assert.deepEqual(await windowQueryUrls(env, "q-default"), within90);
+  assert.deepEqual(await suggestionUrls(env), within90);
+});
+
+test("the context's history window bounds the palette snapshot and the suggestions (#43)", async () => {
+  const env = await boot({ history: datedHistory() });
+  await env.deliver(fixture("message-context")); // windowDays 30
+  const within30 = ["https://news20.example/", "https://news3.example/"];
+  assert.deepEqual(await windowQueryUrls(env, "q-30"), within30);
+  assert.deepEqual(await suggestionUrls(env), within30);
+});
+
+test("a config-update's history window applies to the next query without a reload (#43)", async () => {
+  const env = await boot({ history: datedHistory() });
+  await env.deliver(fixture("message-context")); // windowDays 30
+  await env.deliver(fixture("message-config-update")); // windowDays 7
+  assert.deepEqual(await windowQueryUrls(env, "q-7"), ["https://news3.example/"]);
+  assert.deepEqual(await suggestionUrls(env), ["https://news3.example/"]);
+
+  await env.deliver({ ...fixture("message-config-update"), history: { windowDays: 0 } });
+  const everything = [
+    "https://news20.example/",
+    "https://news200.example/",
+    "https://news3.example/",
+    "https://news60.example/",
+  ];
+  assert.deepEqual(await windowQueryUrls(env, "q-all"), everything, "0 means all the browser keeps");
+  assert.deepEqual(await suggestionUrls(env), everything);
+});
+
+test("an unusable history window degrades to the 90-day default (#43)", async () => {
+  const env = await boot({ history: datedHistory() });
+  await env.deliver({ ...fixture("message-config-update"), history: { windowDays: -3 } });
+  assert.deepEqual(await windowQueryUrls(env, "q-bad"), [
+    "https://news20.example/",
+    "https://news3.example/",
+    "https://news60.example/",
+  ]);
 });
 
 test("promote to another browser posts open-external and removes the lil", async () => {

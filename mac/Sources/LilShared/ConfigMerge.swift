@@ -33,6 +33,8 @@ public enum ConfigMerge {
         "sleep",
         "searchEngine",
         "hoverBar",
+        "history",
+        "palette",
         "knownBrowsers",
     ]
 
@@ -41,7 +43,7 @@ public enum ConfigMerge {
     /// matching the host's whitelist-op. Only safe for objects that always
     /// encode every field they own: `hoverBar` omits an absent `tint`, so a
     /// merge there would resurrect a tint the user cleared.
-    static let fieldMergedKeys: Set<String> = ["sleep"]
+    static let fieldMergedKeys: Set<String> = ["sleep", "history", "palette"]
 
     /// Produce the merged JSON bytes for writing: start from `existing` (the raw
     /// bytes currently on disk, or nil), overlay the owned keys computed from

@@ -62,7 +62,11 @@ struct PaletteReturnChord: OptionSet, Equatable, Sendable {
 final class PaletteModel {
 
     private(set) var index: Ranking.HistoryIndex = .empty
-    let maxRows = 8
+
+    /// Row budget and word matching (issue #43). Cached per palette open like
+    /// `searchEngine`. `maxResults` counts every row and arrives clamped.
+    var config: PaletteConfig = .defaults
+    private var maxRows: Int { config.maxResults }
 
     /// The search engine used to build the "Search {name} for …" row and its
     /// action URL. Cached per palette open (set by the controller in show()) so
@@ -76,6 +80,7 @@ final class PaletteModel {
         let copy = PaletteModel()
         copy.index = index
         copy.searchEngine = searchEngine
+        copy.config = config
         return copy
     }
 
@@ -218,7 +223,7 @@ final class PaletteModel {
     ///   3. every remaining history match, best-first
     /// URL-like input instead leads with "Open <url>" and puts Search directly
     /// after it, so navigation is never mistaken for search.
-    /// Empty query: top-8 by frecency, no search row.
+    /// Empty query: top `maxRows` by frecency, no search row.
     ///
     /// The autocomplete host comes from the same ranking pass: when a history
     /// row sits above Search, that is the host Enter opens — ghost text must
@@ -243,7 +248,8 @@ final class PaletteModel {
         var matches = Ranking.rank(
             query: trimmed,
             index: index,
-            limit: max(maxRows, index.pages.count + index.origins.count)
+            limit: max(maxRows, index.pages.count + index.origins.count),
+            wordMatch: config.wordMatch
         )
         let bestMatchHost = matches.first?.autocompleteHostValue
 

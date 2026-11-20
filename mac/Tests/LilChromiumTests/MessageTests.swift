@@ -97,7 +97,7 @@ struct MessageTests {
 
         #expect(wire.keys.sorted() == [
             "browser", "browserName", "ephemeralDefault", "fallbackBrowser",
-            "hoverBar", "id", "knownBrowsers", "linkBehavior",
+            "history", "hoverBar", "id", "knownBrowsers", "linkBehavior", "palette",
             "primaryBrowser", "primaryBrowserName", "searchEngine", "sleep", "type",
         ])
 
@@ -121,6 +121,9 @@ struct MessageTests {
         #expect(ctx.searchEngine.template == "https://kagi.com/search?q=%s")
         #expect(ctx.hoverBar.style == "solid")
         #expect(ctx.hoverBar.tint == "#112233")
+        #expect(ctx.history.windowDays == 30)
+        #expect(ctx.palette.maxResults == 10)
+        #expect(ctx.palette.wordMatch == .phrase)
         // Browsers are the trimmed context shape: no bundle ids.
         #expect(ctx.knownBrowsers.map(\.slug) == ["helium", "brave"])
         #expect(ctx.knownBrowsers.map(\.name) == ["Helium", "Brave"])
@@ -164,6 +167,10 @@ struct MessageTests {
         #expect(ctx.searchEngine.name == update.searchEngine.name)
         #expect(ctx.hoverBar.revealHeight == 48, "both messages carry the clamped value")
         #expect(ctx.hoverBar.revealHeight == update.hoverBar.revealHeight)
+        #expect(ctx.history == config.history)
+        #expect(ctx.history == update.history)
+        #expect(ctx.palette == config.palette)
+        #expect(ctx.palette == update.palette)
         #expect(ctx.knownBrowsers.map(\.slug) == ["helium", "chrome", "vivaldi"])
         #expect(ctx.knownBrowsers.map(\.slug) == update.knownBrowsers.map(\.slug))
         #expect(ctx.knownBrowsers.map(\.name) == update.knownBrowsers.map(\.name))
@@ -188,8 +195,8 @@ struct MessageTests {
         let msg = try Fixture.decode(ConfigUpdateMessage.self, from: "message-config-update")
 
         #expect(wire.keys.sorted() == [
-            "ephemeralDefault", "fallbackBrowser", "hoverBar", "knownBrowsers",
-            "linkBehavior", "primaryBrowser", "primaryBrowserName", "searchEngine",
+            "ephemeralDefault", "fallbackBrowser", "history", "hoverBar", "knownBrowsers",
+            "linkBehavior", "palette", "primaryBrowser", "primaryBrowserName", "searchEngine",
             "sleep", "type",
         ])
         #expect(msg.type == "config-update")
@@ -206,6 +213,9 @@ struct MessageTests {
         #expect(msg.hoverBar.style == "glass")
         #expect(msg.hoverBar.tint == "#4455ff")
         #expect(msg.hoverBar.revealHeight == 8)
+        #expect(msg.history.windowDays == 7)
+        #expect(msg.palette.maxResults == 6)
+        #expect(msg.palette.wordMatch == .anyOrder)
         #expect(msg.knownBrowsers.map(\.slug) == ["vivaldi", "chrome"])
         let wireText = try #require(String(data: bytes, encoding: .utf8))
         #expect(wireText.contains("bundleId") == false, "config-update wires never carry bundle ids")
@@ -232,6 +242,9 @@ struct MessageTests {
         #expect(msg.hoverBar.style == "solid")
         #expect(msg.hoverBar.tint == "#112233")
         #expect(msg.hoverBar.revealHeight == 48, "the broadcast carries the clamped value")
+        #expect(msg.history.windowDays == 30)
+        #expect(msg.palette.maxResults == 10)
+        #expect(msg.palette.wordMatch == .phrase)
         #expect(msg.knownBrowsers.map(\.slug) == ["helium", "chrome", "vivaldi"])
         #expect(msg.knownBrowsers.map(\.installed) == [true, true, false])
         #expect(wireText.contains("bundleId") == false)

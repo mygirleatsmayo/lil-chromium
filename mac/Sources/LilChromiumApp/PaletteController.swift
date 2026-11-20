@@ -45,7 +45,6 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     private let panelWidth: CGFloat = 620
     private let inputRowHeight: CGFloat = 56
     private let resultRowHeight: CGFloat = 44
-    private let maxResultRows = 8
     private let cornerRadius = PaletteGlass.cornerRadius
 
     /// The palette's two functional controls (Settings, Close) share one symbol
@@ -79,10 +78,12 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
         // Read config fresh at each show() (always current), cache for the
         // session so per-keystroke reposition/row-building doesn't re-hit the
         // config file. Anchor drives positioning; searchEngine drives the
-        // "Search {name} for …" row.
+        // "Search {name} for …" row; palette sets the row budget and word
+        // matching (issue #43).
         let cfg = LilConfig.load()
         currentAnchor = cfg.paletteAnchor
         model.searchEngine = cfg.searchEngine
+        model.config = cfg.palette
 
         // Refresh history cache on open (async) then re-render.
         refreshHistory()
@@ -314,7 +315,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     }
 
     private func currentPanelHeight() -> CGFloat {
-        // `render` already caps rows at maxResultRows.
+        // The model caps rows at `palette.maxResults`, so the height follows it.
         inputRowHeight + CGFloat(currentRows.count) * resultRowHeight
     }
 
@@ -389,7 +390,7 @@ final class PaletteController: NSObject, NSTextFieldDelegate {
     /// Show `rows` and rebuild the stacked row views. A fresh open sends the
     /// selection back to the top; otherwise it is clamped to the new rows.
     private func render(_ rows: [PaletteRow], resetSelection: Bool = false) {
-        currentRows = Array(rows.prefix(maxResultRows))
+        currentRows = rows
         selection.rowsChanged(count: currentRows.count, resetSelection: resetSelection)
         rebuildRowViews()
         positionPanel()
