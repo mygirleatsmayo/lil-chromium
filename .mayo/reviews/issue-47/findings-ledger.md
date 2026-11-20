@@ -12,7 +12,7 @@ Initial reviewed point: `438f7db`
 
 ## Spec
 
-- P1 · "If the browser denies the extension access to file URLs … the lil still opens and works" · **needs adjudication (Lucas)**: Chromium rejects `windows.create` with a file URL when file access is off, so no lil can open. Not sent for fixing until decided.
+- P1 · "If the browser denies the extension access to file URLs … the lil still opens and works" · **needs adjudication (Lucas)**: Chromium rejects `windows.create` with a file URL when file access is off, so no lil can open. **won't-fix** · Settled (Lucas): with file access off, Chromium refuses the file URL (`Cannot navigate to a file URL without local file access.`, r04 §5); no lil opens, the worker logs the error, and there is no error loop. The ticket's criterion is amended to say so. Telling the user is a separate ticket under #29.
 - P2 · "promote to Primary (⌘O), and the caret menu" on a file lil · **fix** · Settled: promote and the caret menu's other-browser actions must never close a file lil without opening its page. Cross-browser opens carry the file URL to the target browser; the relay accepts `file:` in addition to `http`/`https` and nothing else. Contract change: PROTOCOL.md, host and extension in step. Amended after remediation 1: this means a file lil takes the same `open-external` path as a web lil and closes on the same terms. The existing contract (close once `open-external` is posted to the host; fire-and-forget after that) stands for every lil. Confirming the target browser actually opened the page is a cross-cutting change outside #47 (follow-up candidate). Remediation 1's residual P2 report is resolved on this basis.
 - P3 · "Checked live: reload the unpacked extension, open a local `.html` file as a lil" · **verification obligation, not code**: Lucas runs it after the fix round.
 
@@ -33,7 +33,7 @@ Initial reviewed point: `438f7db`
 ### Spec
 
 - P4 · "A lil showing a `file://` page has the full hoverbar": the worker registers a new lil only after refocusing it; a page that asks `isEphemeral` before registration gets `false`, and the overlay stops for good. Local files load fast enough to hit this. The ordering predates #47 · **fix** · Settled: a lil's page always gets the hoverbar, however fast it loads; the worker must answer `isEphemeral` truthfully for a lil it is still creating. Fix the root cause in the worker's lil creation, not with an overlay retry.
-- P1 · still **needs adjudication (Lucas)**.
+- P1 · settled by Lucas (see Spec P1).
 - P3 · still Lucas's live check.
 
 ## Remediation 3
@@ -60,3 +60,4 @@ Initial reviewed point: `438f7db`
 - Remediation 4 (`796ff02...e12cd54`): N2 unresolved (fix); no other new defects. P1 pending Lucas; P3 live check.
 - Remediation 5 (`e12cd54...95d223e`): N2, C1 resolved; 1 new test gap (N3, fix). P1 pending Lucas; P3 live check.
 - Remediation 6 (`95d223e...b9a2e41`): N3 resolved; earlier items still resolved; no new defects. Ready to integrate. P1 pending Lucas; P3 live check.
+- Lucas adjudicated P1 (won't-fix, criterion amended). Ready to integrate; P3 live check.
