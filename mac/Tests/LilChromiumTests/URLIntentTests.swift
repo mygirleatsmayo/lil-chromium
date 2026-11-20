@@ -70,6 +70,27 @@ struct URLIntentTests {
                 == "file:///Users/me/notes.txt")
     }
 
+    /// Field text decodes percent-escapes as Chrome's `FormatUrl` does with
+    /// `UnescapeRule::SPACES` (#38 P2 unescaping, `base/strings/escape.cc`):
+    /// space, the `kUrlUnescape` ASCII characters, and UTF-8 characters
+    /// `ShouldUnescapeCodePoint` allows. Each component decodes on its own and
+    /// stays escaped when its bytes aren't UTF-8. Hosts stay ASCII.
+    @Test(.bug(id: 38), arguments: [
+        ("https://example.com/caf%C3%A9?q=%E6%97%A5#%F0%9F%A6%86", "https://example.com/café?q=日#🦆"),
+        ("https://example.com/%41%2d%7e%22%3C%3E%5F", "https://example.com/A-~\"<>_"),
+        ("https://example.com/a%2Fb%3Fc%23d%25e%26f%2Bg%3Dh%2E", "https://example.com/a%2Fb%3Fc%23d%25e%26f%2Bg%3Dh%2E"),
+        ("https://example.com/%00%0A%7F", "https://example.com/%00%0A%7F"),
+        ("https://example.com/a%E2%80%AEb%C2%A0c%F0%9F%94%92d%E2%80%8B", "https://example.com/a%E2%80%AEb%C2%A0c%F0%9F%94%92d%E2%80%8B"),
+        ("https://example.com/caf%C3%A9%FF?q=caf%C3%A9", "https://example.com/caf%C3%A9%FF?q=café"),
+        ("https://example.com/%E2%82?q=%ED%A0%80", "https://example.com/%E2%82?q=%ED%A0%80"),
+        ("https://xn--caf-dma.com/caf%C3%A9", "https://xn--caf-dma.com/café"),
+        ("file:///Users/me/My%20Report%C3%A9.html", "file:///Users/me/My Reporté.html"),
+    ])
+    func fieldTextDecodesEscapesLikeChrome(_ url: String, _ shown: String) {
+        #expect(URLIntent.fieldText(forHistoryURL: url, typed: "x") == shown)
+        #expect(URLIntent.fieldText(forOpenURL: url, typed: url) == shown)
+    }
+
     // MARK: - Search templates
 
     /// `%s` is where the query goes, percent-encoded.
