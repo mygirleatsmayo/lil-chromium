@@ -58,3 +58,7 @@ Initial reviewed point: `0db3180`
 
 - Built on `fix/review-remediation-n5-n6` (`3c9e5f1`, `8dd0249`): N5, N6. Not yet reviewed.
 - Orchestrator's calls (Lucas delegated seams and disputes): the two N5 tests' 100 ms time limit stays (the old code took ~4 s, a 40× margin); the overlay keeps its own copy of the linear trim, since the content script can't import from the service worker and each copy has its own test.
+
+## Remediation 3 (`fdb6747...902306b`)
+
+- Resolved: N5, N6; every earlier fix intact. No new findings. The ledger is fully resolved; next is the final full review.
