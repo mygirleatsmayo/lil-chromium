@@ -926,8 +926,8 @@ async function restorePriorContext(priorContext, at) {
   await focusWindow(prior.windowId);
 }
 
-// Lils still being created, each `{windowId, done}`; `windowId` is filled in
-// once windows.create returns. A lil's page can load and ask `isEphemeral`
+// Lils still being created, each `{windowId}`; `windowId` is filled in once
+// windows.create returns. A lil's page can load and ask `isEphemeral`
 // before its window is registered (a local file loads that fast), so that
 // answer waits while the sender's window could still be a lil being created.
 const lilCreations = new Set();
@@ -978,10 +978,9 @@ async function lilCreationSettled(windowId) {
  */
 async function openLil(spec) {
   const creation = { windowId: undefined };
-  creation.done = createLil(spec, creation);
   lilCreations.add(creation);
   try {
-    return await creation.done;
+    return await createLil(spec, creation);
   } finally {
     lilCreations.delete(creation);
     signalCreationChange();
