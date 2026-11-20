@@ -24,6 +24,13 @@
     "tint": "#4455ff",
     "revealHeight": 8
   },
+  "history": {
+    "windowDays": 7
+  },
+  "palette": {
+    "maxResults": 6,
+    "wordMatch": "any-order"
+  },
   "knownBrowsers": [
     {"slug": "vivaldi", "name": "Vivaldi", "installed": true},
     {"slug": "chrome", "name": "Google Chrome", "installed": true}

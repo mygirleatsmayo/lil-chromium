@@ -319,8 +319,8 @@ public struct ContextBrowser: Codable, Sendable {
 /// freshly-read config for the rest.
 ///
 /// v3: the context now carries the FULL config objects verbatim from config.json
-/// (`ephemeralDefault`, `sleep`, `searchEngine`, `hoverBar`) alongside the host's
-/// browser identity. Sub-structs are the same Codable types LilConfig uses.
+/// (`ephemeralDefault`, `sleep`, `searchEngine`, `hoverBar`; v4 adds `history`
+/// and `palette`, issue #43) alongside the host's browser identity. Sub-structs are the same Codable types LilConfig uses.
 public struct ContextMessage: Codable, Sendable {
     public let type: String
     public let id: String
@@ -334,6 +334,8 @@ public struct ContextMessage: Codable, Sendable {
     public let sleep: SleepConfig
     public let searchEngine: SearchEngineConfig
     public let hoverBar: HoverBarConfig
+    public let history: HistoryConfig
+    public let palette: PaletteConfig
     public let knownBrowsers: [ContextBrowser]
 
     public init(
@@ -348,6 +350,8 @@ public struct ContextMessage: Codable, Sendable {
         sleep: SleepConfig,
         searchEngine: SearchEngineConfig,
         hoverBar: HoverBarConfig,
+        history: HistoryConfig,
+        palette: PaletteConfig,
         knownBrowsers: [ContextBrowser]
     ) {
         self.type = MessageType.context.rawValue
@@ -362,6 +366,8 @@ public struct ContextMessage: Codable, Sendable {
         self.sleep = sleep
         self.searchEngine = searchEngine
         self.hoverBar = hoverBar
+        self.history = history
+        self.palette = palette
         self.knownBrowsers = knownBrowsers
     }
 
@@ -380,6 +386,8 @@ public struct ContextMessage: Codable, Sendable {
             sleep: config.sleep,
             searchEngine: config.searchEngine,
             hoverBar: config.hoverBar,
+            history: config.history,
+            palette: config.palette,
             knownBrowsers: ContextPayload.browsers(from: config)
         )
     }
@@ -432,6 +440,8 @@ public struct ConfigUpdateMessage: Codable, Sendable {
     public let sleep: SleepConfig
     public let searchEngine: SearchEngineConfig
     public let hoverBar: HoverBarConfig
+    public let history: HistoryConfig
+    public let palette: PaletteConfig
     public let knownBrowsers: [ContextBrowser]
 
     /// The broadcast for the config the app just persisted. Values arrive
@@ -446,6 +456,8 @@ public struct ConfigUpdateMessage: Codable, Sendable {
         self.sleep = config.sleep
         self.searchEngine = config.searchEngine
         self.hoverBar = config.hoverBar
+        self.history = config.history
+        self.palette = config.palette
         self.knownBrowsers = ContextPayload.browsers(from: config)
     }
 }

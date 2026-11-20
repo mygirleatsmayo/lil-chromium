@@ -26,6 +26,13 @@
     "tint": "#112233",
     "revealHeight": 24
   },
+  "history": {
+    "windowDays": 30
+  },
+  "palette": {
+    "maxResults": 10,
+    "wordMatch": "phrase"
+  },
   "knownBrowsers": [
     {"slug": "helium", "name": "Helium", "installed": true},
     {"slug": "brave", "name": "Brave", "installed": true}
