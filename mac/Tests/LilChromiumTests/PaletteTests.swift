@@ -939,6 +939,19 @@ struct PaletteCompletionTests {
             for c in characters { edit(to: textBeforeSelection + String(c)) }
         }
 
+        /// ⌘V: `text` replaces the field's selection.
+        mutating func paste(_ text: String) {
+            edit(to: textBeforeSelection + text, pasted: true)
+        }
+
+        /// A click at `location`, then typing `text` there.
+        mutating func insert(_ text: String, at location: Int) {
+            select(NSRange(location: location, length: 0))
+            let shown = display.text as NSString
+            edit(to: shown.replacingCharacters(in: NSRange(location: location, length: 0), with: text),
+                 caret: location + (text as NSString).length)
+        }
+
         /// Backspace deletes the selection, else the last character.
         mutating func backspace() {
             edit(to: display.selection.length > 0 ? textBeforeSelection : String(display.text.dropLast()))
@@ -972,9 +985,11 @@ struct PaletteCompletionTests {
             (display.text as NSString).substring(to: display.selection.location)
         }
 
-        private mutating func edit(to text: String) {
-            select(NSRange(location: (text as NSString).length, length: 0), in: text)
-            if input.edit(to: text) {
+        /// The caret lands at `caret`, by default the end of `text`.
+        private mutating func edit(to text: String, caret: Int? = nil, pasted: Bool = false) {
+            let selection = NSRange(location: caret ?? (text as NSString).length, length: 0)
+            select(selection, in: text)
+            if input.edit(to: text, selection: selection, pasted: pasted) {
                 input = palette.completing(input, with: palette.results(for: text))
             }
             selected = 0
@@ -1216,6 +1231,31 @@ struct PaletteCompletionTests {
         field.type("c")
         #expect(field.input.text == "github.com")
         #expect(field.pressReturn()?.url == "https://github.com")
+    }
+
+    /// Chrome completes only with the caret at the end: typing inside the
+    /// text offers nothing, even when the result still starts with the old
+    /// text.
+    @Test(.bug(id: 38)) func typingInsideTheTextOffersNoCompletion() {
+        var field = field(typing: "goo", in: palette([Self.visit("https://gooo.example/", "Gooo")]))
+        field.backspace()
+        field.insert("o", at: 2)
+
+        #expect(field.input.text == "gooo")
+        #expect(field.input.completionRange == nil)
+    }
+
+    /// Chrome never completes a paste, even at the end; the next typed
+    /// character completes as usual.
+    @Test(.bug(id: 38)) func aPasteOffersNoCompletionUntilTheNextKeystroke() {
+        var field = Field(palette: palette())
+        field.paste("git")
+
+        #expect(field.input.text == "git")
+        #expect(field.input.completionRange == nil)
+
+        field.type("h")
+        #expect(field.input.text == "github.com")
     }
 
     /// With no completion on screen, rows and Return are exactly today's, and
