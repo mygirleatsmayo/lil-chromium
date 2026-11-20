@@ -50,5 +50,6 @@ Initial reviewed point: `0db3180`
 ## Remediation 2 (`8432791...fdb6747`)
 
 - Resolved: N1, N2, N3, N4, C1, C2; earlier fixes intact.
-- N5 · `overlay.js` input handler: the new whitespace-only check runs the trim regex `/^\p{White_Space}+|\p{White_Space}+$/gu`, which is quadratic on a long whitespace run; pasting `a` + 60,000 spaces + `b` took 1.4 s (0.1 ms at `8432791`). The same regex trims in `queryOmni` and in `background.js` `trimWhitespace` · pending Lucas.
-- N6 · `RelayClient.swift`: the type comment "All methods are synchronous" is stale since the async `historyWindow()`; the wrapper comment says the 15 s timeout is per socket, but it applies per read · pending Lucas.
+- N5 · `overlay.js` input handler: the new whitespace-only check runs the trim regex `/^\p{White_Space}+|\p{White_Space}+$/gu`, which is quadratic on a long whitespace run; pasting `a` + 60,000 spaces + `b` took 1.4 s (0.1 ms at `8432791`). The same regex trims in `queryOmni` and in `background.js` `trimWhitespace` · **fix** · Settled (Lucas: fix the cause): every trim and whitespace check of typed text, in `overlay.js` and `background.js`, runs in time linear in the text's length. The whitespace set (S4) and every result stay the same.
+- N6 · `RelayClient.swift`: the type comment "All methods are synchronous" is stale since the async `historyWindow()`; the wrapper comment says the 15 s timeout is per socket, but it applies per read · **fix**: the comments state what the code does.
+- Lucas delegated test-seam decisions to the orchestrator. The seams used so far (the shared `fixtures/url-intent.json`, `PaletteModel`, the service-worker and overlay harnesses, including `holdOmnibox`) live in test code and stay.
