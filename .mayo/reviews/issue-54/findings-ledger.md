@@ -57,3 +57,7 @@ Resolved: S2, S3, S4, P3, R1. S1/P1 is unresolved through N1. Verdicts pending L
 ## Fix round 3 (`7fc4aef...d648c65`)
 
 - N1: `d648c65`. Its test types `INTRANET`: typed lowercase one key at a time, `intrane` already completes to `intranet`, so the last key types through that completion. The live app also reaches N1 lowercase when the ranking for `intranet` lands after the last key.
+
+## Remediation 2 (`7fc4aef...d62370d`)
+
+Resolved: N1, S1, P1; every earlier fix intact. No new findings. The ledger is fully resolved; the branch is ready for its PR.
