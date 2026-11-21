@@ -117,7 +117,7 @@ struct PaletteRowsTests {
     @Test func autocompleteOffersOnlyAPrefixedHost() throws {
         let model = try makeModel()
 
-        #expect(model.results(for: "git").autocompleteSite == "github.com")
+        #expect(model.results(for: "git").autocompleteSite?.text == "github.com")
         #expect(model.results(for: "quarterly budget review").autocompleteSite == nil)
     }
 }
@@ -1362,8 +1362,8 @@ struct PaletteSiteTests: PaletteHistoryFixture {
                 + [visit("http://localhost:5173/e")]
         ).rows(for: "localhost")
 
-        #expect(rows.filter { $0.site == "localhost:3000" }.count == 3)
-        #expect(rows.filter { $0.site == "localhost:5173" }.count == 2)
+        #expect(rows.filter { $0.site?.text == "localhost:3000" }.count == 3)
+        #expect(rows.filter { $0.site?.text == "localhost:5173" }.count == 2)
     }
 
     /// A scheme's default port is no port: those pages join the portless site.

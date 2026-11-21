@@ -19,7 +19,7 @@ struct PaletteRow {
     /// A history row's site: its host plus any non-default port
     /// (`localhost:3000`). Inline completion completes the field to it.
     /// Only history rows carry it.
-    let site: String?
+    let site: Ranking.Site?
 }
 
 /// The fully resolved action produced by pressing Return in the palette.
@@ -39,7 +39,7 @@ struct PaletteAction: Equatable {
 /// One query's rows and inline type-ahead site, from a single ranking pass.
 struct PaletteResults {
     let rows: [PaletteRow]
-    let autocompleteSite: String?
+    let autocompleteSite: Ranking.Site?
 }
 
 /// What the palette field holds (issue #38): the text the user typed and, while
@@ -56,7 +56,7 @@ struct PaletteInput {
     /// The full field text: typed text plus the completed site's remainder,
     /// with the user's casing kept for the typed prefix.
     var text: String {
-        guard let site = completion?.site else { return typed }
+        guard let site = completion?.site?.text else { return typed }
         return typed + site.dropFirst(typed.count)
     }
 
@@ -327,8 +327,8 @@ final class PaletteModel {
         var next = input
         next.completion = nil
         guard !input.typed.isEmpty, let site = results.autocompleteSite,
-              site.lowercased().hasPrefix(input.typed.lowercased()),
-              site.count > input.typed.count else { return next }
+              site.text.lowercased().hasPrefix(input.typed.lowercased()),
+              site.text.count > input.typed.count else { return next }
         next.completion = originRow(site: site)
         return next
     }
@@ -403,7 +403,7 @@ final class PaletteModel {
                 title: "Open \(trimmed)",
                 subtitle: openURL,
                 actionURL: openURL,
-                host: Ranking.URLParts(openURL)?.host,
+                host: Ranking.URLParts(openURL)?.site.host,
                 site: nil
             ))
         } else if let promoted = bestEligibleIndex(in: matches) {
@@ -444,13 +444,13 @@ final class PaletteModel {
             title: r.title.isEmpty ? r.url : r.title,
             subtitle: subtitle,
             actionURL: r.url,
-            host: r.host,
+            host: r.site.host,
             site: r.site
         )
     }
 
     /// The site row for `site`, as ranking would show its origin.
-    private func originRow(site: String) -> PaletteRow? {
+    private func originRow(site: Ranking.Site) -> PaletteRow? {
         guard let origin = index.origins.first(where: { $0.site == site }) else { return nil }
         return historyRow(Ranking.RankedResult(origin: origin))
     }
@@ -483,10 +483,10 @@ final class PaletteModel {
 
     /// Dimmed site for origin rows; shortened site + path for pages.
     private func displaySubtitle(for r: Ranking.RankedResult) -> String {
-        if r.isOrigin { return r.site }
+        if r.isOrigin { return r.site.text }
         if let parts = Ranking.URLParts(r.url) {
-            if parts.path.isEmpty || parts.path == "/" { return parts.site }
-            return parts.site + parts.path
+            if parts.path.isEmpty || parts.path == "/" { return parts.site.text }
+            return parts.site.text + parts.path
         }
         return r.url
     }
