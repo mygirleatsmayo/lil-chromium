@@ -144,11 +144,24 @@ enum Ranking {
         var last = 0.0
         var bestRootTitle = ""
         var bestRootScore = -1.0
-        /// What the site row opens, and the frecency and visit time of the
-        /// page it came from. Every frecency beats the initial -1.
-        var url = ""
-        var urlFrecency = -1.0
-        var urlLastVisit = 0.0
+        /// The page the site row opens so far.
+        var opens: SiteURLCandidate
+    }
+
+    /// A page competing to be what its site row opens: the page's `siteURL`,
+    /// with the signal that ranks it (issue #54).
+    private struct SiteURLCandidate {
+        let url: String
+        let frecency: Double
+        let lastVisit: Double
+
+        /// The more frecent page wins; ties go to the most recent visit, then
+        /// the URL, so history order never decides.
+        func beats(_ other: SiteURLCandidate) -> Bool {
+            if frecency != other.frecency { return frecency > other.frecency }
+            if lastVisit != other.lastVisit { return lastVisit > other.lastVisit }
+            return url < other.url
+        }
     }
 
     /// A page's dedupe key: pages on one site with one path are one row.
@@ -196,8 +209,11 @@ enum Ranking {
                 bestByKey[key] = page
             }
 
-            // Origin aggregation.
-            var acc = originAcc[site] ?? OriginAccumulator()
+            // Origin aggregation. The site row opens the most frecent page with
+            // its path removed, so its scheme, host and port come from
+            // history, never assumed (issue #54).
+            let candidate = SiteURLCandidate(url: parts.siteURL, frecency: fr, lastVisit: item.lastVisitTime)
+            var acc = originAcc[site] ?? OriginAccumulator(opens: candidate)
             acc.visit += item.visitCount
             acc.typed += item.typedCount
             acc.last = max(acc.last, item.lastVisitTime)
@@ -212,15 +228,7 @@ enum Ranking {
                 acc.bestRootScore = titleScore
                 acc.bestRootTitle = item.title
             }
-            // The site row opens the most frecent page with its path removed,
-            // so its scheme and port come from history, never assumed (issue
-            // #54). Ties go to the most recent visit, then the URL, so history
-            // order never decides.
-            let opens = (frecency: fr, lastVisit: item.lastVisitTime)
-            let best = (frecency: acc.urlFrecency, lastVisit: acc.urlLastVisit)
-            if opens > best || (opens == best && parts.siteURL < acc.url) {
-                (acc.url, acc.urlFrecency, acc.urlLastVisit) = (parts.siteURL, fr, item.lastVisitTime)
-            }
+            if candidate.beats(acc.opens) { acc.opens = candidate }
             originAcc[site] = acc
         }
 
@@ -234,7 +242,7 @@ enum Ranking {
                 site: site,
                 registrableDomain: registrableDomain(site.host),
                 displayTitle: display,
-                url: acc.url,
+                url: acc.opens.url,
                 visitCount: acc.visit,
                 typedCount: acc.typed,
                 lastVisitTime: acc.last,
