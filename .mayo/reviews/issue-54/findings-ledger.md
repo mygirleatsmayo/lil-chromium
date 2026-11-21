@@ -35,3 +35,9 @@ Verdicts pending Lucas; the orchestrator's recommendation follows each.
 
 - S1, P1: **fix**. Field text that names an origin in history, as that origin's completion shows it, opens that origin's URL from history, so Return opens the same URL whether the text was typed or accepted. The URL-intent rules (PROTOCOL.md *URL intent*) and the hoverbar stay as they are; Chrome's history provider resolves typed text against visited URLs on top of URL reading (`HistoryURLProvider::VisitClassifier`). Out of scope: page URLs typed out in full; the hoverbar.
 - R1 · **rename**: the palette's *site* (a host plus its port; http and https, with or without `www.`, count as one) is an *origin* in code, matching the existing "origin row" name and Firefox's origin autofill (`moz_origins` holds host and port; `UrlbarProviderAutofill` totals frecency across prefixes and `www.`). The web's *site* ignores ports and subdomains. The glossary entry is proposed on #37.
+
+## Fix round 2 (`20123f4...7e58c4c`, plus the orchestrator's PROTOCOL.md line)
+
+- R1: `7639af8`. S1, P1: `7e58c4c`. PROTOCOL.md's palette line now says text naming a history origin opens that origin's URL.
+- Accepted, as Chrome does it: typed `example.com` with only `http://example.com` in history opens http (`VisitClassifier` tries the `http://` prefix against visited URLs); this supersedes #54's out-of-scope line on rule 8 for text that names an origin. A single-label origin typed in full (`intranet`) leads with its Open row (Chrome promotes the what-you-typed match when the input is a visited URL).
+- Accepted as is: after accepting, the Open row and the origin row below Search open the same URL, as typed URLs such as `github.com` already do. Pre-#54 names that use "site" in plain English (`oneSiteCannotFloodTheList`) stay.
