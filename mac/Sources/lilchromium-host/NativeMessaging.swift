@@ -1,4 +1,5 @@
 import Foundation
+import LilShared
 
 #if canImport(Glibc)
 import Glibc
@@ -26,7 +27,7 @@ final class NativeMessaging {
     private var stopped = false
 
     // Reject absurd frame sizes to avoid unbounded allocation on a corrupt pipe.
-    private let maxFrameBytes: UInt32 = 64 * 1024 * 1024 // 64 MB
+    private let maxFrameBytes = UInt32(LilCodec.maxMessageBytes)
 
     func start() {
         readQueue.async { [weak self] in

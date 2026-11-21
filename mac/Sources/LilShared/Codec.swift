@@ -6,6 +6,12 @@ import Foundation
 /// line, no pretty-printing). These helpers keep that contract in one place.
 public enum LilCodec {
 
+    /// The largest message the relay path carries: Chrome's own cap on a
+    /// message an extension sends to its native host (64 MiB, per Chrome's
+    /// native messaging docs). A full history-window reply (issue #41) is
+    /// several MB; nothing larger can reach the host, so neither hop cuts lower.
+    public static let maxMessageBytes = 64 * 1024 * 1024
+
     /// A single encoder configured to emit compact JSON with no stray newlines.
     /// (JSONEncoder never inserts newlines unless `.prettyPrinted` is set, so
     /// the encoded bytes are safe to frame with a trailing '\n'.)
@@ -45,14 +51,18 @@ public final class LineBuffer {
 
     /// Append newly read bytes and return every complete line contained so far.
     /// The trailing partial line (no newline yet) stays buffered.
+    /// Only the incoming bytes are scanned: the buffered partial line already
+    /// holds no newline, so a multi-MB line reassembles in linear time.
     public func append(_ data: Data) -> [Data] {
+        var searchFrom = buffer.endIndex
         buffer.append(data)
         var lines: [Data] = []
-        while let nl = buffer.firstIndex(of: 0x0A) {
+        while let nl = buffer[searchFrom...].firstIndex(of: 0x0A) {
             let line = buffer.subdata(in: buffer.startIndex..<nl)
             lines.append(line)
-            // Advance past the newline.
+            // Advance past the newline; what remains is unscanned.
             buffer.removeSubrange(buffer.startIndex...nl)
+            searchFrom = buffer.startIndex
         }
         return lines
     }

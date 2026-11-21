@@ -1,0 +1,70 @@
+{
+  "cases": [
+    { "input": "", "none": true },
+    { "input": "   ", "none": true },
+
+    { "input": "https://example.com/docs", "open": "https://example.com/docs" },
+    { "input": "https://example.com/a b", "open": "https://example.com/a%20b" },
+    { "input": "https://example.com/a%20b", "open": "https://example.com/a%20b" },
+    { "input": "file:///Users/me/My Report.html", "open": "file:///Users/me/My%20Report.html" },
+    { "input": "file:///tmp/report#1.txt", "open": "file:///tmp/report#1.txt" },
+    { "input": "about:blank", "open": "about:blank" },
+
+    { "input": "/Users/me/report.html", "open": "file:///Users/me/report.html" },
+    { "input": "/Users/me/My Report.html", "open": "file:///Users/me/My%20Report.html" },
+    { "input": "/tmp/report#1.txt", "open": "file:///tmp/report%231.txt" },
+    { "input": "/tmp/a%20b", "open": "file:///tmp/a%2520b" },
+    { "input": "/tmp/why?;not\\here", "open": "file:///tmp/why%3F%3Bnot%5Chere" },
+    { "input": "/tmp/a\u0001b", "open": "file:///tmp/a%01b" },
+
+    { "input": "localhost", "open": "http://localhost" },
+    { "input": "localhost:3000", "open": "http://localhost:3000" },
+    { "input": "localhost:3000/a?b=1", "open": "http://localhost:3000/a?b=1" },
+    { "input": "app.localhost:5173", "open": "http://app.localhost:5173" },
+    { "input": "127.0.0.1:8000", "open": "http://127.0.0.1:8000" },
+    { "input": "192.168.1.1", "open": "http://192.168.1.1" },
+    { "input": "devbox:8080", "open": "http://devbox:8080" },
+
+    { "input": "example.com", "open": "https://example.com" },
+    { "input": "  example.com  ", "open": "https://example.com" },
+    { "input": "sub.domain.co/path?q=1", "open": "https://sub.domain.co/path?q=1" },
+    { "input": "example.com/café", "open": "https://example.com/caf%C3%A9" },
+
+    { "input": "hacker news", "search": true },
+    { "input": "what is 2.5 in binary", "search": true },
+    { "input": "note: buy milk", "search": true },
+    { "input": "swift", "search": true },
+    { "input": "foo:bar", "search": true },
+    { "input": ".com", "search": true },
+    { "input": "example.", "search": true },
+
+    { "input": "\u0085example.com\u3000", "open": "https://example.com" },
+    { "input": "a\u0085b.com", "search": true },
+    { "input": "\uFEFF", "search": true },
+    { "input": "a\uFEFFb.com", "open": "https://a%EF%BB%BFb.com" },
+    { "input": "\u200Bexample.com", "open": "https://%E2%80%8Bexample.com" }
+  ],
+  "search": {
+    "template": "https://kagi.com/search?q=%s",
+    "cases": [
+      { "input": "lil chromium", "url": "https://kagi.com/search?q=lil%20chromium" },
+      { "input": "R&D", "url": "https://kagi.com/search?q=R%26D" },
+      { "input": "C++", "url": "https://kagi.com/search?q=C%2B%2B" },
+      { "input": "a=b;c/d?e#f@g:h,i$j", "url": "https://kagi.com/search?q=a%3Db%3Bc%2Fd%3Fe%23f%40g%3Ah%2Ci%24j" },
+      { "input": "100% café", "url": "https://kagi.com/search?q=100%25%20caf%C3%A9" },
+      { "input": "it's (fine)!*~-_.", "url": "https://kagi.com/search?q=it's%20(fine)!*~-_." },
+      { "input": "\u0085 swift \u3000", "url": "https://kagi.com/search?q=swift" },
+      { "input": "R&D", "template": "https://x.example/?q=%s&echo=%s", "url": "https://x.example/?q=R%26D&echo=R%26D" },
+      { "input": "swift", "template": "https://x.example/search", "url": "https://www.startpage.com/sp/search?query=swift" }
+    ]
+  },
+  "home": {
+    "directory": "/Users/me",
+    "cases": [
+      { "input": "~", "open": "file:///Users/me" },
+      { "input": "~/report.html", "open": "file:///Users/me/report.html" },
+      { "input": "~/My Report.html", "open": "file:///Users/me/My%20Report.html" },
+      { "input": "~/report#1.txt", "open": "file:///Users/me/report%231.txt" }
+    ]
+  }
+}

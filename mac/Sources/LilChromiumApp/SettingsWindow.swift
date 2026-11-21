@@ -194,13 +194,15 @@ struct SettingsRoot: View {
     @ScaledMetric(relativeTo: .body) private var rowControlSide = 22.0
 
     var body: some View {
-        // Three sections, in the order the parent spec fixes them: General
-        // (what Lil Chromium itself does), Lils (what a lil does), Hoverbar
-        // (how a lil's overlay looks). Version sits under the Form so it is a
-        // window footer, not a fourth settings group.
+        // Four sections: General (what Lil Chromium itself does), Palette
+        // (issue #43: where it sits, what history it searches, how it
+        // matches), Lils (what a lil does), Hoverbar (how a lil's overlay
+        // looks). Version sits under the Form so it is a window footer, not a
+        // settings group.
         VStack(spacing: 0) {
             Form {
                 generalSection
+                paletteSection
                 lilsSection
                 hoverbarSection
             }
@@ -266,15 +268,54 @@ struct SettingsRoot: View {
                 }
             }
 
+            SettingsSearchControls(store: store)
+
+            Toggle("Launch at Login", isOn: launchAtLoginBinding)
+        }
+    }
+
+    // MARK: Palette
+
+    private var paletteSection: some View {
+        Section("Palette") {
             Picker("Palette position", selection: paletteAnchorBinding) {
                 Text("Centered near top").tag("top-center")
                 Text("Top right").tag("top-right")
             }
 
-            SettingsSearchControls(store: store)
+            Picker("Search history from", selection: $store.config.history.windowDays) {
+                ForEach(historyWindowChoices, id: \.self) { days in
+                    Text(days == 0 ? "All history" : "Past \(days) days").tag(days)
+                }
+            }
+            Text("Also limits hoverbar suggestions. Most Chromium browsers keep about 90 days of history.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
-            Toggle("Launch at Login", isOn: launchAtLoginBinding)
+            Picker("Match words", selection: $store.config.palette.wordMatch) {
+                Text("In any order").tag(PaletteWordMatch.anyOrder)
+                Text("As one phrase").tag(PaletteWordMatch.phrase)
+            }
+
+            // Same value-beside-control layout as the reveal-zone slider.
+            LabeledContent("Rows shown") {
+                HStack {
+                    Text("\(store.config.palette.maxResults)")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                    Stepper("Rows shown", value: $store.config.palette.maxResults,
+                            in: PaletteConfig.maxResultsRange)
+                        .labelsHidden()
+                        .accessibilityValue("\(store.config.palette.maxResults) rows")
+                }
+            }
         }
+    }
+
+    /// The offered windows, shortest first and All (0) last, plus any
+    /// hand-edited value so the picker never shows a blank selection.
+    private var historyWindowChoices: [Int] {
+        Set([7, 30, 90, store.config.history.windowDays]).subtracting([0]).sorted() + [0]
     }
 
     // MARK: Lils
@@ -324,6 +365,7 @@ struct SettingsRoot: View {
             }
             Toggle("Don’t nap lils playing audio", isOn: audioGuardBinding)
             Toggle("Don’t nap lils with unsaved form input", isOn: formGuardBinding)
+            Toggle("Don’t nap files on this Mac or localhost pages", isOn: localGuardBinding)
 
             TintEditor(
                 committed: sleepTintBinding,
@@ -460,6 +502,10 @@ struct SettingsRoot: View {
     private var formGuardBinding: Binding<Bool> {
         Binding(get: { store.config.sleep.formGuard },
                 set: { store.config.sleep.formGuard = $0 })
+    }
+    private var localGuardBinding: Binding<Bool> {
+        Binding(get: { store.config.sleep.localGuard },
+                set: { store.config.sleep.localGuard = $0 })
     }
 
     /// Hex for the shared editor. Named PROTOCOL tokens display as chips; a

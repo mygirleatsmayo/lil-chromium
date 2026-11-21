@@ -179,6 +179,12 @@ public struct HistoryQueryMessage: Codable, Sendable {
         self.text = text
         self.maxResults = maxResults
     }
+
+    /// Every item in the extension's history window (issue #41): `maxResults`
+    /// 0 is the protocol's "no cap" (docs/PROTOCOL.md history-query).
+    public static func historyWindow(id: String) -> HistoryQueryMessage {
+        HistoryQueryMessage(id: id, text: "", maxResults: 0)
+    }
 }
 
 /// One history entry as returned by the extension.
@@ -209,16 +215,38 @@ public struct HistoryItem: Codable, Sendable, Equatable {
     }
 }
 
-/// extension -> app: reply to a history-query, matched by `id`.
+/// Why a history-query got no history (issue #41). Present only on failure.
+public enum HistoryResultError: String, Codable, Sendable {
+    /// The host had no extension port to ask.
+    case extensionDisconnected = "extension-disconnected"
+    /// The browser's history search rejected.
+    case historySearchFailed = "history-search-failed"
+}
+
+/// extension -> app: reply to a history-query, matched by `id`. A reply with
+/// `error` is a failure, never an empty history: its `items` are empty.
 public struct HistoryResultMessage: Codable, Sendable {
     public let type: String
     public let id: String
     public let items: [HistoryItem]
+    public let error: HistoryResultError?
 
     public init(id: String, items: [HistoryItem]) {
         self.type = MessageType.historyResult.rawValue
         self.id = id
         self.items = items
+        self.error = nil
+    }
+
+    private init(id: String, error: HistoryResultError) {
+        self.type = MessageType.historyResult.rawValue
+        self.id = id
+        self.items = []
+        self.error = error
+    }
+
+    public static func failed(id: String, _ error: HistoryResultError) -> HistoryResultMessage {
+        HistoryResultMessage(id: id, error: error)
     }
 }
 
@@ -291,8 +319,8 @@ public struct ContextBrowser: Codable, Sendable {
 /// freshly-read config for the rest.
 ///
 /// v3: the context now carries the FULL config objects verbatim from config.json
-/// (`ephemeralDefault`, `sleep`, `searchEngine`, `hoverBar`) alongside the host's
-/// browser identity. Sub-structs are the same Codable types LilConfig uses.
+/// (`ephemeralDefault`, `sleep`, `searchEngine`, `hoverBar`; v4 adds `history`
+/// and `palette`, issue #43) alongside the host's browser identity. Sub-structs are the same Codable types LilConfig uses.
 public struct ContextMessage: Codable, Sendable {
     public let type: String
     public let id: String
@@ -306,6 +334,8 @@ public struct ContextMessage: Codable, Sendable {
     public let sleep: SleepConfig
     public let searchEngine: SearchEngineConfig
     public let hoverBar: HoverBarConfig
+    public let history: HistoryConfig
+    public let palette: PaletteConfig
     public let knownBrowsers: [ContextBrowser]
 
     public init(
@@ -320,6 +350,8 @@ public struct ContextMessage: Codable, Sendable {
         sleep: SleepConfig,
         searchEngine: SearchEngineConfig,
         hoverBar: HoverBarConfig,
+        history: HistoryConfig,
+        palette: PaletteConfig,
         knownBrowsers: [ContextBrowser]
     ) {
         self.type = MessageType.context.rawValue
@@ -334,6 +366,8 @@ public struct ContextMessage: Codable, Sendable {
         self.sleep = sleep
         self.searchEngine = searchEngine
         self.hoverBar = hoverBar
+        self.history = history
+        self.palette = palette
         self.knownBrowsers = knownBrowsers
     }
 
@@ -352,6 +386,8 @@ public struct ContextMessage: Codable, Sendable {
             sleep: config.sleep,
             searchEngine: config.searchEngine,
             hoverBar: config.hoverBar,
+            history: config.history,
+            palette: config.palette,
             knownBrowsers: ContextPayload.browsers(from: config)
         )
     }
@@ -404,6 +440,8 @@ public struct ConfigUpdateMessage: Codable, Sendable {
     public let sleep: SleepConfig
     public let searchEngine: SearchEngineConfig
     public let hoverBar: HoverBarConfig
+    public let history: HistoryConfig
+    public let palette: PaletteConfig
     public let knownBrowsers: [ContextBrowser]
 
     /// The broadcast for the config the app just persisted. Values arrive
@@ -418,6 +456,8 @@ public struct ConfigUpdateMessage: Codable, Sendable {
         self.sleep = config.sleep
         self.searchEngine = config.searchEngine
         self.hoverBar = config.hoverBar
+        self.history = config.history
+        self.palette = config.palette
         self.knownBrowsers = ContextPayload.browsers(from: config)
     }
 }
@@ -478,5 +518,12 @@ public struct OpenExternalMessage: Codable, Sendable {
         self.type = (try? c.decode(String.self, forKey: .type)) ?? MessageType.openExternal.rawValue
         self.browser = (try? c.decode(String.self, forKey: .browser)) ?? ""
         self.url = (try? c.decode(String.self, forKey: .url)) ?? ""
+    }
+
+    /// The host launches only web pages and local files (#47); any other
+    /// scheme (browser-internal pages, `javascript:`) is refused.
+    public var isLaunchable: Bool {
+        let lower = url.lowercased()
+        return ["http://", "https://", "file://"].contains { lower.hasPrefix($0) }
     }
 }

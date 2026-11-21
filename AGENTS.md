@@ -7,6 +7,7 @@ lil chromium: a macOS menu-bar agent (the system default browser) that opens lin
 - Annotate AppKit-touching classes `@MainActor`. The Swift 6.4 toolchain (Xcode beta) makes isolation violations hard errors even in Swift 5 mode.
 - Mark API/OS behavior you have confirmed on a real system with a `verified:` comment; keep existing ones accurate when changing the code they describe.
 - Validate with `swift test` in `mac/` (behavior tests for config, messages, routing, URL intent, and the palette) and `pnpm test` (extension suite: production service worker in Node, no browser). Fixtures live in the repo-root `fixtures/`, shared by both suites. `make app` is the release build. `make install` goes further: it replaces the live app in /Applications and rewrites every browser's native-host manifest.
+- Write JavaScript for maintained Node only; `engines.node` in `package.json` is the floor. When code needs an API above the floor, raise the floor if every release below that API is end of life; else ask Lucas.
 - Never overwrite Lucas's human-facing prose.
 
 ## mayo SDLC

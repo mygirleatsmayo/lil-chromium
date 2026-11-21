@@ -417,8 +417,8 @@
           white-space: nowrap;
           box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.05);
         }
-        .url .host { font-weight: 600; }
-        .url .path { opacity: 0.5; overflow: hidden; text-overflow: ellipsis; }
+        .url .strong { font-weight: 600; }
+        .url .muted { opacity: 0.5; overflow: hidden; text-overflow: ellipsis; }
 
         .hidden { display: none !important; }
 
@@ -749,26 +749,48 @@
       if (href === lastRenderedHref) return;
       lastRenderedHref = href;
       urlDisplay.innerHTML = "";
-      let hostText = href;
-      let pathText = "";
+      for (const [role, text] of displaySegments(href)) {
+        if (!text) continue;
+        const span = document.createElement("span");
+        span.className = role;
+        span.textContent = text;
+        urlDisplay.appendChild(span);
+      }
+    }
+
+    // The compact address as [class, text] spans: "strong" for the part that
+    // names the page, "muted" for the rest.
+    function displaySegments(href) {
+      let u;
       try {
-        const u = new URL(href);
-        hostText = u.host || u.protocol;
-        pathText = (u.pathname || "") + (u.search || "") + (u.hash || "");
-        if (pathText === "/") pathText = "";
+        u = new URL(href);
       } catch (_) {
-        /* non-URL href — show raw */
+        return [["strong", href]]; // non-URL href — show raw
       }
-      const h = document.createElement("span");
-      h.className = "host";
-      h.textContent = hostText;
-      urlDisplay.appendChild(h);
-      if (pathText) {
-        const p = document.createElement("span");
-        p.className = "path";
-        p.textContent = pathText;
-        urlDisplay.appendChild(p);
+      if (u.protocol === "file:") return fileSegments(u.pathname);
+      const rest = u.pathname + u.search + u.hash;
+      return [
+        ["strong", u.host || u.protocol],
+        ["muted", rest === "/" ? "" : rest],
+      ];
+    }
+
+    // A file has no host, so its name is strong and its folder leads, muted.
+    // The folder comes first so a long one truncates with an ellipsis while
+    // the file name stays visible. A folder URL shows whole, strong.
+    function fileSegments(pathname) {
+      let readable = pathname;
+      try {
+        readable = decodeURIComponent(pathname);
+      } catch (_) {
+        /* malformed escape — show it encoded */
       }
+      if (readable.endsWith("/")) return [["strong", readable]];
+      const cut = readable.lastIndexOf("/") + 1;
+      return [
+        ["muted", readable.slice(0, cut)],
+        ["strong", readable.slice(cut)],
+      ];
     }
 
     function focusAddress() {
@@ -805,7 +827,11 @@
     let omniDebounce = null;
     let omniSeq = 0;
 
+    // Closing suggestions, by any path, drops any reply still pending and any
+    // query still waiting out the debounce.
     function closeOmni() {
+      clearTimeout(omniDebounce);
+      omniSeq++;
       omni.classList.remove("open");
       omni.innerHTML = "";
       suggestions = [];
@@ -873,15 +899,27 @@
       return { type: "search", title: `Search ${name} for “${query}”`, query };
     }
 
+    // Trimmed as the service worker trims typed text (`trimWhitespace`), in
+    // linear time: a `\p{White_Space}+$` regex is quadratic on a long run.
+    function typedQuery() {
+      const text = addr.value;
+      const space = /\p{White_Space}/u;
+      let start = 0;
+      let end = text.length;
+      while (start < end && space.test(text[start])) start++;
+      while (end > start && space.test(text[end - 1])) end--;
+      return text.slice(start, end);
+    }
+
     async function queryOmni() {
-      const q = addr.value.trim();
+      const q = typedQuery();
       if (!q) {
         closeOmni();
         return;
       }
-      const seq = ++omniSeq;
+      const seq = ++omniSeq; // supersedes any reply still pending
       const resp = await send({ action: "omnibox", query: q });
-      if (seq !== omniSeq) return; // a newer query superseded this one
+      if (seq !== omniSeq) return; // a newer query or a close superseded this one
       if (!addrFocused()) return;
       const hist = (resp && resp.suggestions) || [];
       suggestions = hist.map((h) => ({ type: "history", url: h.url, title: h.title, host: h.host }));
@@ -897,7 +935,7 @@
       addr.blur();
       blurAddress();
       if (s.type === "search") {
-        send({ action: "navigate", input: s.query });
+        send({ action: "navigate", search: s.query });
       } else {
         send({ action: "navigate", url: s.url, input: s.url });
       }
@@ -905,7 +943,10 @@
 
     addr.addEventListener("input", () => {
       clearTimeout(omniDebounce);
-      omniDebounce = setTimeout(queryOmni, OMNIBOX_DEBOUNCE_MS);
+      // Only a relay query waits out the debounce. An emptied field closes
+      // suggestions now, so no reply still pending can reopen them.
+      if (typedQuery()) omniDebounce = setTimeout(queryOmni, OMNIBOX_DEBOUNCE_MS);
+      else closeOmni();
     });
 
     // Issue #19: while the address field or suggestions own the event, consume
@@ -937,7 +978,7 @@
         if (selIndex >= 0 && suggestions[selIndex]) {
           chooseSuggestion(selIndex);
         } else {
-          // No selection: current behavior — URL-ish navigate else search.
+          // No selection: the worker resolves the text by URL intent.
           const input = addr.value;
           closeOmni();
           addr.blur();

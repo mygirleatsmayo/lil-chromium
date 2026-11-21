@@ -4,7 +4,9 @@
  * run as microtasks so callers can assign `onsuccess` / `oncomplete` after
  * the call, matching IDB.
  */
-export function createIndexedDB() {
+// `deleteGate`: when it returns a promise, a transaction that deletes waits for
+// it before completing — a capture deletion that has not come back yet.
+export function createIndexedDB({ deleteGate = () => null } = {}) {
   const dbs = new Map();
 
   function wrapDb(rec) {
@@ -18,6 +20,7 @@ export function createIndexedDB() {
       transaction(storeName) {
         const store = rec.stores.get(storeName);
         if (!store) throw new Error(`no object store ${storeName}`);
+        let deleted = false;
         const tx = {
           error: null,
           oncomplete: null,
@@ -34,6 +37,7 @@ export function createIndexedDB() {
               },
               delete(key) {
                 store.delete(key);
+                deleted = true;
               },
               getAllKeys() {
                 const request = { result: [...store.keys()], onsuccess: null, onerror: null };
@@ -43,7 +47,12 @@ export function createIndexedDB() {
             };
           },
         };
-        queueMicrotask(() => tx.oncomplete && tx.oncomplete());
+        queueMicrotask(() => {
+          const complete = () => tx.oncomplete && tx.oncomplete();
+          const gate = deleted && deleteGate();
+          if (gate) gate.then(complete);
+          else complete();
+        });
         return tx;
       },
       close() {},

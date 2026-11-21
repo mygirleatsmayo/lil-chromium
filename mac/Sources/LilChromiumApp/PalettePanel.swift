@@ -12,6 +12,7 @@ import AppKit
 ///
 /// It CAN become key (so the search field is typeable) without activating the
 /// app, via `.nonactivatingPanel` + `canBecomeKey = true` + orderFrontRegardless.
+@MainActor
 final class PalettePanel: NSPanel {
 
     /// The controller owns close(); we forward Esc to it.
@@ -21,10 +22,47 @@ final class PalettePanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     override func sendEvent(_ event: NSEvent) {
-        if event.type == .flagsChanged {
+        switch event.type {
+        case .flagsChanged:
             paletteDelegate?.modifierFlagsDidChange(event.modifierFlags)
+        case .leftMouseDown:
+            trackingPointerDuringPress { super.sendEvent(event) }
+            return
+        default:
+            break
         }
         super.sendEvent(event)
+    }
+
+    /// A press runs its control's own tracking loop inside `sendEvent` (e.g.
+    /// the field editor's drag-select), and that loop dequeues the drag events
+    /// itself, so no tracking area sees the pointer cross the results (#40).
+    /// Poll the pointer on a timer the loop's run-loop mode still services,
+    /// only for the press's duration, then sync once more on release.
+    private func trackingPointerDuringPress(_ dispatch: () -> Void) {
+        let poll = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.paletteDelegate?.syncHoverToPointer() }
+        }
+        RunLoop.current.add(poll, forMode: .common)
+        defer {
+            poll.invalidate()
+            paletteDelegate?.syncHoverToPointer()
+        }
+        dispatch()
+    }
+
+    /// The search field edits through a `PaletteFieldEditor`, so the
+    /// palette can tell a paste from typing.
+    /// verified: macOS 27.0.1, 2026-11-20 probe — the field's `currentEditor()`
+    /// is the editor this returns once the field is first responder.
+    private lazy var searchFieldEditor: PaletteFieldEditor = {
+        let editor = PaletteFieldEditor()
+        editor.isFieldEditor = true
+        return editor
+    }()
+
+    override func fieldEditor(_ createFlag: Bool, for object: Any?) -> NSText? {
+        object is PaletteSearchField ? searchFieldEditor : super.fieldEditor(createFlag, for: object)
     }
 
     /// Esc at the panel level (also reached from the search field's

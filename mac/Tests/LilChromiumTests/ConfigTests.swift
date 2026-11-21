@@ -35,6 +35,7 @@ struct ConfigDecodingTests {
         #expect(cfg.sleep.afterMinutes == 30)
         #expect(cfg.sleep.audioGuard)
         #expect(cfg.sleep.formGuard)
+        #expect(cfg.sleep.localGuard)
         #expect(cfg.sleep.tint == "purple")
         #expect(cfg.sleep.whitelist == [])
         #expect(cfg.searchEngine.name == "Startpage")
@@ -75,8 +76,26 @@ struct ConfigDecodingTests {
         #expect(cfg.primaryBrowser == "helium")
         #expect(cfg.fallbackBrowser == "chrome")
         #expect(cfg.searchEngine.provider == "kagi")
+        #expect(cfg.sleep.localGuard == false)
         #expect(cfg.hoverBar.revealHeight == 24)
         #expect(cfg.knownBrowsers.map(\.slug) == ["helium", "chrome", "vivaldi"])
+    }
+}
+
+/// The Lil Nap local guard (issue #46): an additive field that defaults ON
+/// and survives every write.
+struct LocalGuardTests {
+
+    /// An off guard is a real user setting: it must survive encode/decode, so
+    /// a Settings save never silently turns it back on.
+    @Test func offLocalGuardRoundTrips() throws {
+        var sleep = SleepConfig()
+        #expect(sleep.localGuard)
+
+        sleep.localGuard = false
+        let decoded = try LilCodec.decode(SleepConfig.self, from: LilCodec.encode(sleep))
+
+        #expect(decoded.localGuard == false)
     }
 }
 
@@ -132,5 +151,96 @@ struct RevealHeightTests {
         let decoded = try LilCodec.decode(HoverBarConfig.self, from: LilCodec.encode(hoverBar))
 
         #expect(decoded.revealHeight == 0)
+    }
+}
+
+/// Palette history settings (issue #43): the history window, word matching,
+/// and the palette's row budget. Additive fields; existing files need no
+/// migration, and the config model is the single clamp site for `maxResults`.
+struct PaletteSettingsTests {
+
+    /// Files written before these settings existed decode to the defaults.
+    @Test(.bug(id: 43)) func absentPaletteSettingsDecodeToDefaults() throws {
+        for name in ["config-v1-legacy", "config-with-unknown-fields"] {
+            let cfg = try Fixture.decode(LilConfig.self, from: name)
+            #expect(cfg.history.windowDays == 90)
+            #expect(cfg.palette.maxResults == 8)
+            #expect(cfg.palette.wordMatch == .anyOrder)
+        }
+    }
+
+    @Test(.bug(id: 43)) func canonicalFileDecodesPaletteSettingsVerbatim() throws {
+        let cfg = try Fixture.decode(LilConfig.self, from: "config-v3-complete")
+
+        #expect(cfg.history.windowDays == 30)
+        #expect(cfg.palette.maxResults == 10)
+        #expect(cfg.palette.wordMatch == .phrase)
+    }
+
+    /// Bytes on disk the model cannot honor fall back field by field: a
+    /// negative or fractional window and an unknown match mode take the
+    /// defaults; `windowDays` 0 ("All") is a real value.
+    @Test(.bug(id: 43), arguments: [
+        (#"{"history":{"windowDays":0}}"#, 0),
+        (#"{"history":{"windowDays":-7}}"#, 90),
+        (#"{"history":{"windowDays":7.5}}"#, 90),
+        (#"{"history":{"windowDays":"7"}}"#, 90),
+    ])
+    func windowDaysDecodes(json: String, expected: Int) throws {
+        let cfg = try LilCodec.decode(LilConfig.self, from: Data(json.utf8))
+        #expect(cfg.history.windowDays == expected)
+    }
+
+    @Test(.bug(id: 43)) func unknownWordMatchDecodesToAnyOrder() throws {
+        let json = #"{"palette":{"wordMatch":"fuzzy","maxResults":5}}"#
+        let cfg = try LilCodec.decode(LilConfig.self, from: Data(json.utf8))
+
+        #expect(cfg.palette.wordMatch == .anyOrder)
+        #expect(cfg.palette.maxResults == 5, "a bad sibling field keeps the good one")
+    }
+
+    @Test(.bug(id: 43)) func maxResultsClampsIntoRangeOnDecode() throws {
+        let high = try LilCodec.decode(LilConfig.self, from: Data(#"{"palette":{"maxResults":40}}"#.utf8))
+        #expect(high.palette.maxResults == 12)
+
+        let low = try LilCodec.decode(LilConfig.self, from: Data(#"{"palette":{"maxResults":1}}"#.utf8))
+        #expect(low.palette.maxResults == 4)
+    }
+
+    @Test(.bug(id: 43)) func maxResultsClampsOnWrite() {
+        var palette = PaletteConfig()
+        palette.maxResults = 99
+        #expect(palette.maxResults == 12)
+        palette.maxResults = 0
+        #expect(palette.maxResults == 4)
+        palette.maxResults = 6
+        #expect(palette.maxResults == 6)
+        #expect(PaletteConfig(maxResults: 2).maxResults == 4)
+    }
+
+    @Test(.bug(id: 43)) func paletteSettingsRoundTrip() throws {
+        var cfg = LilConfig.defaults
+        cfg.history.windowDays = 0
+        cfg.palette.maxResults = 12
+        cfg.palette.wordMatch = .phrase
+
+        let decoded = try LilCodec.decode(LilConfig.self, from: LilCodec.encode(cfg))
+
+        #expect(decoded.history.windowDays == 0)
+        #expect(decoded.palette.maxResults == 12)
+        #expect(decoded.palette.wordMatch == .phrase)
+    }
+
+    /// The wire spelling is the contract all three components read.
+    @Test(.bug(id: 43)) func paletteSettingsEncodeWithContractNames() throws {
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: LilCodec.encode(LilConfig.defaults)) as? [String: Any]
+        )
+        let history = try #require(object["history"] as? [String: Any])
+        let palette = try #require(object["palette"] as? [String: Any])
+
+        #expect(history["windowDays"] as? Int == 90)
+        #expect(palette["maxResults"] as? Int == 8)
+        #expect(palette["wordMatch"] as? String == "any-order")
     }
 }
