@@ -507,23 +507,26 @@ enum Ranking {
         let path: String     // lowercased, no query/fragment or trailing "/"
 
         /// What a site row opens when this page is its site's most frecent:
-        /// the page with its path, query and fragment removed.
-        /// verified: `URLComponents.host` keeps an IPv6 literal's brackets
-        /// (`http://[::1]:3000/` → `[::1]`), so this stays a parseable URL.
-        var siteURL: String { "\(scheme)://\(site)" }
+        /// the page with its path, query and fragment removed. Its host keeps
+        /// `www.`, as Chrome's does; only the site drops it.
+        let siteURL: String
 
         /// Nil without a scheme and host.
         init?(_ urlString: String) {
             guard let comps = URLComponents(string: urlString),
-                  let scheme = comps.scheme, let rawHost = comps.host else { return nil }
-            var host = rawHost.lowercased()
-            if host.hasPrefix("www.") { host = String(host.dropFirst(4)) }
+                  let scheme = comps.scheme?.lowercased(), let rawHost = comps.host else { return nil }
+            let fullHost = rawHost.lowercased()
+            let host = fullHost.hasPrefix("www.") ? String(fullHost.dropFirst(4)) : fullHost
+            let port = significantPort(comps).map { ":\($0)" } ?? ""
             var path = comps.path.lowercased()
             if path.count > 1 && path.hasSuffix("/") { path = String(path.dropLast()) }
-            self.scheme = scheme.lowercased()
+            self.scheme = scheme
             self.host = host
-            self.site = significantPort(comps).map { "\(host):\($0)" } ?? host
+            self.site = host + port
             self.path = path
+            // verified: `URLComponents.host` keeps an IPv6 literal's brackets
+            // (`http://[::1]:3000/` → `[::1]`), so this stays a parseable URL.
+            self.siteURL = "\(scheme)://\(fullHost)\(port)"
         }
     }
 

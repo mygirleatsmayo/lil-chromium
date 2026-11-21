@@ -1319,12 +1319,20 @@ struct PaletteCompletionTests {
 /// removed, as Chrome's site suggestion does (`ConvertToHostOnly`).
 struct PaletteSiteTests: PaletteHistoryFixture {
 
-    @Test(.bug(id: 54)) func siteRowOpensTheSchemeAndPortFromHistory() {
-        let rows = model(visit("http://intranet.example:8080/x", title: "Wiki")).rows(for: "intranet")
+    /// The row opens the page's own scheme, host (`www.` too) and port; the
+    /// subtitle names the site, which drops `www.`.
+    @Test(.bug(id: 54), arguments: [
+        (history: "http://intranet.example:8080/x?tab=2#top", typed: "intranet",
+         opens: "http://intranet.example:8080", shows: "intranet.example:8080"),
+        (history: "https://www.example.com:8443/wiki?page=1#intro", typed: "example",
+         opens: "https://www.example.com:8443", shows: "example.com:8443"),
+    ])
+    func siteRowOpensTheSchemeHostAndPortFromHistory(history: String, typed: String, opens: String, shows: String) {
+        let rows = model(visit(history, title: "Wiki")).rows(for: typed)
 
         #expect(rows.first?.kind == .history)
-        #expect(rows.first?.actionURL == "http://intranet.example:8080")
-        #expect(rows.first?.subtitle == "intranet.example:8080")
+        #expect(rows.first?.actionURL == opens)
+        #expect(rows.first?.subtitle == shows)
     }
 
     // MARK: - Site identity
