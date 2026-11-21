@@ -508,6 +508,8 @@ enum Ranking {
 
         /// What a site row opens when this page is its site's most frecent:
         /// the page with its path, query and fragment removed.
+        /// verified: `URLComponents.host` keeps an IPv6 literal's brackets
+        /// (`http://[::1]:3000/` → `[::1]`), so this stays a parseable URL.
         var siteURL: String { "\(scheme)://\(site)" }
 
         /// Nil without a scheme and host.
