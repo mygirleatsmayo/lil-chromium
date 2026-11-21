@@ -1441,6 +1441,45 @@ struct PaletteOriginTests: PaletteHistoryFixture {
         #expect(try #require(field.pressReturn()).url == "http://localhost:3000")
     }
 
+    /// Origins whose URL-intent reading of the completed text differs from
+    /// history: rule 8's `https`, `localhost`'s `http`, and an IPv6 literal
+    /// that reads as search.
+    static let originsURLIntentMisreads = [
+        (history: "http://intranet.example:8080/x", typed: "intranet",
+         completes: "intranet.example:8080", opens: "http://intranet.example:8080"),
+        (history: "https://localhost:3000/app", typed: "localhos",
+         completes: "localhost:3000", opens: "https://localhost:3000"),
+        (history: "http://[::1]:3000/app", typed: "[::1",
+         completes: "[::1]:3000", opens: "http://[::1]:3000"),
+    ]
+
+    /// Field text that names an origin opens it from history, as Chrome's
+    /// history provider resolves typed text (`HistoryURLProvider::VisitClassifier`).
+    @Test(.bug(id: 54), arguments: originsURLIntentMisreads, PaletteCompletionTests.Acceptance.allCases)
+    func acceptingAnyCompletionThenReturnOpensItsOriginFromHistory(
+        _ origin: (history: String, typed: String, completes: String, opens: String),
+        _ key: PaletteCompletionTests.Acceptance
+    ) throws {
+        var field = field(typing: origin.typed, in: model(visit(origin.history)))
+        try #require(field.input.text == origin.completes)
+        #expect(try #require(field.pressReturn()).url == origin.opens, "before accepting")
+
+        field.accept(by: key)
+
+        try #require(field.input.completionRange == nil)
+        #expect(try #require(field.pressReturn()).url == origin.opens, "after accepting")
+    }
+
+    @Test(.bug(id: 54), arguments: originsURLIntentMisreads)
+    func typingAnOriginOutInFullOpensItFromHistory(
+        _ origin: (history: String, typed: String, completes: String, opens: String)
+    ) throws {
+        let field = field(typing: origin.completes.uppercased(), in: model(visit(origin.history)))
+
+        try #require(field.input.completionRange == nil)
+        #expect(try #require(field.pressReturn()).url == origin.opens)
+    }
+
     @Test(.bug(id: 54), arguments: [
         (visits3000: 40, visits5173: 5, completes: "localhost:3000"),
         (visits3000: 5, visits5173: 40, completes: "localhost:5173"),

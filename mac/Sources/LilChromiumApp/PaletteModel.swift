@@ -361,7 +361,8 @@ final class PaletteModel {
     ///   2. "Search {engine} for '<query>'"
     ///   3. every remaining history match, best-first
     /// URL-like input instead leads with "Open <url>" and puts Search directly
-    /// after it, so navigation is never mistaken for search.
+    /// after it, so navigation is never mistaken for search. Text that names
+    /// an origin in history is URL-like and opens that origin's URL.
     /// Empty query: top `maxRows` by frecency, no search row.
     ///
     /// The autocomplete origin comes from the same ranking pass: when a history
@@ -379,7 +380,7 @@ final class PaletteModel {
         }
 
         var rows: [PaletteRow] = []
-        let openURL = URLIntent.intent(of: trimmed).url
+        let openURL = originURL(named: trimmed) ?? URLIntent.intent(of: trimmed).url
 
         // Rank the full candidate set before spending the display budget, so an
         // eligible registrable-label match cannot be evicted by ineligible
@@ -416,6 +417,17 @@ final class PaletteModel {
 
         let topHistoryOrigin = rows.first.flatMap { openURL == nil && $0.kind == .history ? $0.origin : nil }
         return PaletteResults(rows: rows, autocompleteOrigin: topHistoryOrigin ?? bestMatchOrigin)
+    }
+
+    /// The URL of the origin `text` names as its completion shows it
+    /// (`localhost:3000`), so Return opens the same URL whether the text was
+    /// typed or accepted (issue #54). Read alone, the text would lose
+    /// history's scheme (URL-intent rule 8's `https`, `localhost`'s `http`)
+    /// or search (`[::1]:3000`). Chrome's history provider resolves typed text
+    /// against visited URLs the same way (`HistoryURLProvider::VisitClassifier`).
+    private func originURL(named text: String) -> String? {
+        let text = text.lowercased()
+        return index.origins.first { $0.origin.text == text }?.url
     }
 
     /// Among eligible registrable-label matches, frecency is the tie-breaker
