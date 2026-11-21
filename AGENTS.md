@@ -13,15 +13,15 @@ lil chromium: a macOS menu-bar agent (the system default browser) that opens lin
 
 ## mayo SDLC
 
-This project uses the mayo spec-driven development workflow. The settings below tell the skills where to read and write.
+This project uses the mayo dev workflow. 
 
 ### Issue tracker
 
-Issues live in GitHub Issues on this repo, managed via the `gh` CLI. See `.mayo/agents/issue-tracker.md`.
+See `.mayo/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) plus capability marks (`high-context`, `high-intelligence`). See `.mayo/agents/triage-labels.md`.
+See `.mayo/agents/triage-labels.md`.
 
 ### Domain docs
 
