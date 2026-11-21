@@ -18,3 +18,10 @@ Verdicts pending Lucas; the orchestrator's recommendation follows each.
 - P2 · "`localhost:5` completes to `localhost:5173`": a frecent `:3000` page titled `localhost:5173 migration` can outrank the `:5173` site, so no completion · recommend **won't-fix**: needs a title that names another port; frecency outranking match tier among eligible rows is the #13 ranking rule.
 - P3 · "`swift test` covers each criterion above": the site-row fixture has no query or fragment · recommend **fix**.
 - P4 · Page subtitles show the port; a bare `3000` matches the `localhost:3000` site row below Search · recommend **accept**: both follow from a site being a host plus port; Chrome shows ports and matches URL text; Search stays on top.
+
+## Lucas's rulings on full review 1
+
+- S2, S3, S4, P3: **fix**, as recommended.
+- P2: **won't-fix**, as recommended.
+- P4: **accept**, as recommended.
+- S1, P1: **open**. Lucas asked why it can't land in this PR. Chrome resolves typed text that names a visited URL to that URL in its history provider, on top of URL reading (`HistoryURLProvider::VisitClassifier`, which tries the input under each URL prefix against the URL database), so the URL-intent rules and the hoverbar stay as they are. The orchestrator now recommends fixing it here.
