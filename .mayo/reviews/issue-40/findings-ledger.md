@@ -27,7 +27,7 @@ Initial reviewed point: `1e09f76`
 - S5 · Edited `FaviconCache` creates `NSImage`s and holds main-thread state without `@MainActor` (AGENTS.md: annotate AppKit-touching classes) · **fix**: annotate it; keep the main-thread hops compiling under the Swift 6.4 toolchain.
 - S6 · Edited `PalettePanel` lacks the explicit `@MainActor` (AGENTS.md) · **fix**: annotate it, as S1 did for the edited views.
 - S7 · `clickRow` calls `selection.click(idx)`, which ignores an out-of-range index, then `activateSelection()` opens the previously selected row; `bf45a2f` returned early · **fix**: an invalid click opens nothing.
-- S8 · Favicon coalescing (several rows waiting on one fetch) has no runnable check (global rules: non-trivial logic leaves one runnable check) · **fix**: same as question K to Lucas (a fake-fetch seam plus one focused test: a caller joining an in-flight fetch gets the image, and only one fetch runs). Acted on as yes under Lucas's test rule; reverted if he answers no.
+- S8 · Favicon coalescing (several rows waiting on one fetch) has no runnable check (global rules: non-trivial logic leaves one runnable check) · **fix**: same as question K to mygirleatsmayo (a fake-fetch seam plus one focused test: a caller joining an in-flight fetch gets the image, and only one fetch runs). Acted on as yes under mygirleatsmayo's test rule; reverted if he answers no.
 - S9 · `Array(model.rows(for: query).prefix(maxResultRows))` repeats the model's row cap (possible Duplicated Code) · **won't-fix**: the controller cap predates #40 (`bf45a2f` had `currentRows.prefix(maxResultRows)`); #43 (max results setting) owns where the limit lives.
 - S10 · `refreshHighlights()` walks `stack.arrangedSubviews.enumerated()` (possible Feature Envy) · **won't-fix**: that loop predates #40; #40 only changed what each row is told.
 
@@ -47,4 +47,4 @@ Initial reviewed point: `1e09f76`
 - Remediation 2 (`b5a33fc...27ebd4f`): N1 resolved, no new defects.
 - Final review 1 (`bf45a2f...033ae4a`): Standards S5–S8 fix, S9, S10 won't-fix; Spec P5 fix, P4 settled won't-fix.
 - Remediation 3 (`033ae4a...2b16ff1`): S5–S8, P5 resolved; earlier items still resolved; 1 new defect (N2, fix).
-- Remediation 4 (`2b16ff1...993a073`): N2 resolved, no new defects. Ledger resolved; ready to integrate once Lucas approves the merge flow (K: S8 reverted if he answers no).
+- Remediation 4 (`2b16ff1...993a073`): N2 resolved, no new defects. Ledger resolved; ready to integrate once mygirleatsmayo approves the merge flow (K: S8 reverted if he answers no).

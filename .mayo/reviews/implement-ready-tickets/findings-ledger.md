@@ -7,9 +7,9 @@ Initial reviewed point: `0db3180`
 
 ## Standards
 
-- S1 · The palette's search URL leaves `&`, `+`, `=` unencoded (`Config.swift` `searchURL(for:)`, used by Tab, the Search row and ⇧Return); `R&D` searches for `R`. The hoverbar encodes them · **fix** · Settled (Lucas: share the search logic): the palette and the hoverbar build the same search URL for the same text and engine, with the typed text as one query value (`R&D` → `R%26D`, `C++` → `C%2B%2B`). The rule is stated once in `docs/PROTOCOL.md` and checked by one shared fixture that both suites run, as URL intent is.
+- S1 · The palette's search URL leaves `&`, `+`, `=` unencoded (`Config.swift` `searchURL(for:)`, used by Tab, the Search row and ⇧Return); `R&D` searches for `R`. The hoverbar encodes them · **fix** · Settled (mygirleatsmayo: share the search logic): the palette and the hoverbar build the same search URL for the same text and engine, with the typed text as one query value (`R&D` → `R%26D`, `C++` → `C%2B%2B`). The rule is stated once in `docs/PROTOCOL.md` and checked by one shared fixture that both suites run, as URL intent is.
 - S2 · A typed absolute path is not escaped as a path: `/tmp/report#1.txt` opens `/tmp/report` (`URLIntent.swift` rule 4, `background.js` `urlIntent`) · **fix** · Settled (match Chrome): a typed path (rule 4, and rule 5's expanded `~` path) opens the file at exactly that path. `%`, `;`, `#`, `?`, `\`, space and control characters are escaped before the path becomes a `file://` URL, so `/tmp/a%20b` names a file called `a%20b`. A typed `scheme://` URL is unchanged. Source: Chromium `net/base/filename_util.cc` `FilePathToFileURL` (chromium.googlesource.com, `main`).
-- S3 · Twelve rows can extend below a ~700-point visible frame (`PaletteController.swift` panel height) · **won't-fix** (Lucas): no real screen is that small, and the row count is a setting.
+- S3 · Twelve rows can extend below a ~700-point visible frame (`PaletteController.swift` panel height) · **won't-fix** (mygirleatsmayo): no real screen is that small, and the row count is a setting.
 - S4 · Swift and the extension disagree on whitespace (U+0085 counts in Swift only; U+FEFF in JavaScript only), so trim and rule 6 differ across surfaces · **fix** · Settled (match Chrome): both sides trim and detect whitespace with Chrome's set: ASCII whitespace plus U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F, U+3000; not U+FEFF. The shared fixture covers U+0085 and U+FEFF. Source: Chromium `base/strings/whitespace_constants.h`.
 - S5 · Palette ranking and history refresh use GCD (`DispatchQueue`, `DispatchWorkItem` in `PaletteController.swift`); swiftui-pro `references/swift.md`: never use GCD · **fix**: both palette paths use Swift concurrency. #41's behavior stays: ranking off the main thread; out-of-date refreshes and rankings dropped. The GCD uses outside the palette predate the branch and are out of scope.
 - S6 · Setup conditions checked with `#expect`: the parameterized Open-row test indexes `rows[1]` unrequired (`PaletteTests.swift`); two relay tests don't require the socket to bind (`RelayHistoryTests.swift`); swift-testing-pro: `#require` for preconditions · **fix**.
@@ -26,38 +26,38 @@ Initial reviewed point: `0db3180`
 ## Fix round 1
 
 - Built on `fix/implement-review-findings` (`1bc6096...07c09cc`): S1/P3, S2/P1, S4/P4, P2, S5, S6, S7. Not yet reviewed.
-- Skill departures the fixer reported, pending Lucas's sign-off: the relay's blocking history read now runs on the Swift concurrency pool (S5; the read has socket timeouts, so it ends on its own); one P2 test passed before the fix and was kept for the other half of the rule; no new test for the S7 refactor.
+- Skill departures the fixer reported, pending mygirleatsmayo's sign-off: the relay's blocking history read now runs on the Swift concurrency pool (S5; the read has socket timeouts, so it ends on its own); one P2 test passed before the fix and was kept for the other half of the rule; no new test for the S7 refactor.
 
 ## Remediation 1 (`0db3180...8432791`)
 
 - Resolved: S1/P3, S2/P1, S4/P4, S5, S6, S7, P2.
-- N1 · `overlay.js` `queryOmni`: an emptied field (now also U+0085-only text) returns before `++omniSeq`, so a pending reply reopens suggestions for the old query. On `main` a cleared field did the same · **fix** · Settled (Lucas): emptying the field, or leaving only whitespace, drops any suggestions reply still pending.
-- N2 · `PaletteController.swift` history refresh: `RelayClient.historyWindow()` blocks a Swift concurrency worker up to 15 s per socket read (`SO_RCVTIMEO`), per routed socket; Apple advises keeping blocking work off that pool (WWDC22 110350) · **fix** · Settled (Lucas): the blocking history read runs off the Swift concurrency pool, as Apple advises. GCD for that one read is allowed (Lucas signs off on the swiftui-pro departure for Apple's documented reason). Ranking stays on Swift concurrency.
+- N1 · `overlay.js` `queryOmni`: an emptied field (now also U+0085-only text) returns before `++omniSeq`, so a pending reply reopens suggestions for the old query. On `main` a cleared field did the same · **fix** · Settled (mygirleatsmayo): emptying the field, or leaving only whitespace, drops any suggestions reply still pending.
+- N2 · `PaletteController.swift` history refresh: `RelayClient.historyWindow()` blocks a Swift concurrency worker up to 15 s per socket read (`SO_RCVTIMEO`), per routed socket; Apple advises keeping blocking work off that pool (WWDC22 110350) · **fix** · Settled (mygirleatsmayo): the blocking history read runs off the Swift concurrency pool, as Apple advises. GCD for that one read is allowed (mygirleatsmayo signs off on the swiftui-pro departure for Apple's documented reason). Ranking stays on Swift concurrency.
 - N3 · `RelayHistoryTests.swift`: the new `#require` on `write` can throw before `close(fds[1])`, leaking a descriptor · **fix**.
 - N4 · `docs/PROTOCOL.md` URL intent: "Every resolved URL … except `%`" contradicts rules 4–5, which now escape `%` · **fix**: the doc states the rule the code follows.
-- Lucas approved the other two fix-round-1 skill departures: the P2 test that passed before the fix, and no new test for the S7 refactor.
+- mygirleatsmayo approved the other two fix-round-1 skill departures: the P2 test that passed before the fix, and no new test for the S7 refactor.
 
 ## Fix round 2
 
 - Built on `fix/remediation-1-review-findings` (`cb3f82c...ad68ab9`): N1, N2, N3, N4. Not yet reviewed. N1 also closes suggestions at once when the field is emptied, not after the 120 ms debounce.
-- Skill departures the fixer reported: N2's GCD for the one blocking read (Lucas approved in advance); no new test for N2 (it would depend on filling the pool and on real timeouts).
-- The fixer raised two more items; Lucas ruled them as C1 and C2 below.
-- C1 · `overlay.js`: Escape while a suggestions reply is pending lets that reply reopen suggestions (same cause as N1) · **fix** · Settled (Lucas): closing suggestions, by any path, drops any reply still pending.
-- C2 · `RelayClient.swift`: the blocking and async history reads share the name `historyWindow()`; only the async one calls the blocking one · **fix** (Lucas): the blocking read gets its own private name; only the async read is callable from outside.
-- Lucas accepted N1 closing suggestions at once when the field is emptied, and approved no new test for N2.
+- Skill departures the fixer reported: N2's GCD for the one blocking read (mygirleatsmayo approved in advance); no new test for N2 (it would depend on filling the pool and on real timeouts).
+- The fixer raised two more items; mygirleatsmayo ruled them as C1 and C2 below.
+- C1 · `overlay.js`: Escape while a suggestions reply is pending lets that reply reopen suggestions (same cause as N1) · **fix** · Settled (mygirleatsmayo): closing suggestions, by any path, drops any reply still pending.
+- C2 · `RelayClient.swift`: the blocking and async history reads share the name `historyWindow()`; only the async one calls the blocking one · **fix** (mygirleatsmayo): the blocking read gets its own private name; only the async read is callable from outside.
+- mygirleatsmayo accepted N1 closing suggestions at once when the field is emptied, and approved no new test for N2.
 - C1, C2 built on `fix/integration-ledger-round-2-c1-c2` (`d294059`, `b2c4857`). Not yet reviewed. C1 also cancels a debounced query not yet sent when suggestions close: same cause, so within the settled rule (pending work never reopens closed suggestions). `queryOmni` keeps its empty-text guard, now unreachable from the input handler. No test for the C2 rename.
 
 ## Remediation 2 (`8432791...fdb6747`)
 
 - Resolved: N1, N2, N3, N4, C1, C2; earlier fixes intact.
-- N5 · `overlay.js` input handler: the new whitespace-only check runs the trim regex `/^\p{White_Space}+|\p{White_Space}+$/gu`, which is quadratic on a long whitespace run; pasting `a` + 60,000 spaces + `b` took 1.4 s (0.1 ms at `8432791`). The same regex trims in `queryOmni` and in `background.js` `trimWhitespace` · **fix** · Settled (Lucas: fix the cause): every trim and whitespace check of typed text, in `overlay.js` and `background.js`, runs in time linear in the text's length. The whitespace set (S4) and every result stay the same.
+- N5 · `overlay.js` input handler: the new whitespace-only check runs the trim regex `/^\p{White_Space}+|\p{White_Space}+$/gu`, which is quadratic on a long whitespace run; pasting `a` + 60,000 spaces + `b` took 1.4 s (0.1 ms at `8432791`). The same regex trims in `queryOmni` and in `background.js` `trimWhitespace` · **fix** · Settled (mygirleatsmayo: fix the cause): every trim and whitespace check of typed text, in `overlay.js` and `background.js`, runs in time linear in the text's length. The whitespace set (S4) and every result stay the same.
 - N6 · `RelayClient.swift`: the type comment "All methods are synchronous" is stale since the async `historyWindow()`; the wrapper comment says the 15 s timeout is per socket, but it applies per read · **fix**: the comments state what the code does.
-- Lucas delegated test-seam decisions to the orchestrator. The seams used so far (the shared `fixtures/url-intent.json`, `PaletteModel`, the service-worker and overlay harnesses, including `holdOmnibox`) live in test code and stay.
+- mygirleatsmayo delegated test-seam decisions to the orchestrator. The seams used so far (the shared `fixtures/url-intent.json`, `PaletteModel`, the service-worker and overlay harnesses, including `holdOmnibox`) live in test code and stay.
 
 ## Fix round 3
 
 - Built on `fix/review-remediation-n5-n6` (`3c9e5f1`, `8dd0249`): N5, N6. Not yet reviewed.
-- Orchestrator's calls (Lucas delegated seams and disputes): the two N5 tests' 100 ms time limit stays (the old code took ~4 s, a 40× margin); the overlay keeps its own copy of the linear trim, since the content script can't import from the service worker and each copy has its own test.
+- Orchestrator's calls (mygirleatsmayo delegated seams and disputes): the two N5 tests' 100 ms time limit stays (the old code took ~4 s, a 40× margin); the overlay keeps its own copy of the linear trim, since the content script can't import from the service worker and each copy has its own test.
 
 ## Remediation 3 (`fdb6747...902306b`)
 
@@ -65,7 +65,7 @@ Initial reviewed point: `0db3180`
 
 ## Final review 1 (`main...5bd505c`)
 
-Verdicts pending Lucas; the orchestrator's recommendation follows each.
+Verdicts pending mygirleatsmayo; the orchestrator's recommendation follows each.
 
 ### Standards
 
@@ -84,24 +84,24 @@ Verdicts pending Lucas; the orchestrator's recommendation follows each.
 - P9 · #39 "the same answer in the palette and in the hoverbar address field": `localhost/` + U+0301 + `path` searches in Swift, opens in the hoverbar · same cause as S8 · recommend **fix**.
 - P10 · #40: an edit resets the selection to the top at once, but the highlight and hint stay on the old row until ranking lands; Return already acts on the top row · recommend **fix**: the highlight follows the selection when it resets.
 
-### Lucas's rulings on final review 1
+### mygirleatsmayo's rulings on final review 1
 
-Lucas asked that review weigh how likely a defect is to reach a user, as a senior engineer would, so rounds don't chase unreachable cases.
+mygirleatsmayo asked that review weigh how likely a defect is to reach a user, as a senior engineer would, so rounds don't chase unreachable cases.
 
-- S8/P9 · **won't-fix** (Lucas): only malformed text puts a combining mark right after a delimiter; typed and NFD text put marks after letters.
-- S9 · **won't-fix** (Lucas): needs an explicit `http://` URL with non-ASCII text, the Open row selected below the top, and then an edit of the previewed text. Return on the row itself opens the right URL.
-- P7 · **won't-fix** (Lucas): only the first open after launch has no snapshot, and only Return before history lands misses the completion.
-- S10 · **won't-fix** (Lucas): the model's rule is tested; only the controller's one-line hookup isn't.
-- P10 · **won't-fix** (Lucas): the lag lasts as long as ranking (well under 100 ms), and Return already acts on the top row.
+- S8/P9 · **won't-fix** (mygirleatsmayo): only malformed text puts a combining mark right after a delimiter; typed and NFD text put marks after letters.
+- S9 · **won't-fix** (mygirleatsmayo): needs an explicit `http://` URL with non-ASCII text, the Open row selected below the top, and then an edit of the previewed text. Return on the row itself opens the right URL.
+- P7 · **won't-fix** (mygirleatsmayo): only the first open after launch has no snapshot, and only Return before history lands misses the completion.
+- S10 · **won't-fix** (mygirleatsmayo): the model's rule is tested; only the controller's one-line hookup isn't.
+- P10 · **won't-fix** (mygirleatsmayo): the lag lasts as long as ranking (well under 100 ms), and Return already acts on the top row.
 - S11 · **fix**, `promotedRowAndTypeAheadNameTheSameHost` only: require the row count before indexing. The relay test's force-try of a fixed fixture stays (orchestrator's call: it can't fail).
 - S12 · **fix**.
-- S13 · **won't-fix** (Lucas).
-- P6 · filed as #53 (`needs-triage`). It also covers the reverse case, which Lucas confirmed live on `main`: promote leaves a hidden hoverbar in the normal window, shown when the pointer enters the reveal zone.
-- P8 · filed as #54, its own PR (Lucas). Chrome's rule settles the design: the site-level suggestion is the best history URL with its path removed (`ConvertToHostOnly` → `GURL::GetWithEmptyPath()`, `components/omnibox/browser/history_url_provider.cc`), so it keeps that URL's scheme and port.
+- S13 · **won't-fix** (mygirleatsmayo).
+- P6 · filed as #53 (`needs-triage`). It also covers the reverse case, which mygirleatsmayo confirmed live on `main`: promote leaves a hidden hoverbar in the normal window, shown when the pointer enters the reveal zone.
+- P8 · filed as #54, its own PR (mygirleatsmayo). Chrome's rule settles the design: the site-level suggestion is the best history URL with its path removed (`ConvertToHostOnly` → `GURL::GetWithEmptyPath()`, `components/omnibox/browser/history_url_provider.cc`), so it keeps that URL's scheme and port.
 
 ## Fix round 4
 
-- S11, S12 built on the integration branch (`b7249ca`) by the orchestrator: two test lines, so no fixer agent (Lucas approved). Not yet reviewed.
+- S11, S12 built on the integration branch (`b7249ca`) by the orchestrator: two test lines, so no fixer agent (mygirleatsmayo approved). Not yet reviewed.
 
 ## Remediation 4 (`96cebee...1bd4995`)
 

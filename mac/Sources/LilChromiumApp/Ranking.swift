@@ -46,23 +46,42 @@ enum Ranking {
 
     // MARK: - Indexed snapshot
 
+    /// A host plus its port: what the palette groups history by (issue #54).
+    /// `localhost:3000` and `localhost:5173` are two origins; `http` and
+    /// `https` pages, with or without `www.`, share one. Unlike a web origin
+    /// it has no scheme, as Firefox's origin autofill groups history
+    /// (`moz_origins`).
+    struct Origin: Hashable {
+        /// Lowercased, `www.` stripped.
+        let host: String
+        /// `host`, plus `:port` unless it is the scheme's default
+        /// (`localhost:3000`). Ranking matches it; the palette shows it and
+        /// completes the field to it.
+        let text: String
+
+        init(host: String, port: Int?) {
+            self.host = host
+            self.text = port.map { "\(host):\($0)" } ?? host
+        }
+    }
+
     /// A history page with its lowercased fields precomputed once per snapshot.
     struct IndexedPage {
         let item: HistoryItem
-        let host: String               // lowercased, "www." stripped
-        let registrableDomain: String  // public suffix + one label of `host`
+        let origin: Origin
+        let registrableDomain: String  // public suffix + one label of the origin's host
         let path: String        // lowercased path (no query/fragment)
         let lowerTitle: String
         let lowerURL: String
         let frecency: Double     // frecency × recencyDecay, precomputed
     }
 
-    /// An aggregated origin: one entry per host, summing its pages' signal.
-    struct Origin {
-        let host: String               // lowercased, "www." stripped
-        let registrableDomain: String  // public suffix + one label of `host`
+    /// One origin's history, aggregated: its pages' signal summed.
+    struct IndexedOrigin {
+        let origin: Origin
+        let registrableDomain: String  // public suffix + one label of the origin's host
         let displayTitle: String      // e.g. "GitHub" or best root page title
-        let url: String               // https://<host>
+        let url: String               // the origin's most frecent page, path removed
         let visitCount: Int
         let typedCount: Int
         let lastVisitTime: Double
@@ -71,8 +90,8 @@ enum Ranking {
 
     /// Precomputed snapshot the model rebuilds only when history changes.
     struct HistoryIndex {
-        let pages: [IndexedPage]          // deduped by (host + path), best kept
-        let origins: [Origin]             // aggregated by host
+        let pages: [IndexedPage]          // deduped by (origin + path), best kept
+        let origins: [IndexedOrigin]      // one per origin
         let nowMs: Double
 
         static let empty = HistoryIndex(pages: [], origins: [], nowMs: 0)
@@ -82,7 +101,7 @@ enum Ranking {
     struct RankedResult {
         let title: String
         let url: String
-        let host: String
+        let origin: Origin
         let score: Double
         let isOrigin: Bool
         /// Raw frecency (not multiplied by match tier). Promotion among eligible
@@ -120,32 +139,66 @@ enum Ranking {
 
     // MARK: - Index building
 
+    /// One origin's history, summed while the index is built.
+    private struct OriginAccumulator {
+        var visit = 0
+        var typed = 0
+        var last = 0.0
+        var bestRootTitle = ""
+        var bestRootScore = -1.0
+        /// The page the origin row opens so far.
+        var opens: OriginURLCandidate
+    }
+
+    /// A page competing to be what its origin row opens: the page's `originURL`,
+    /// with the signal that ranks it (issue #54).
+    private struct OriginURLCandidate {
+        let url: String
+        let frecency: Double
+        let lastVisit: Double
+
+        /// The more frecent page wins; ties go to the most recent visit, then
+        /// the URL, so history order never decides.
+        func beats(_ other: OriginURLCandidate) -> Bool {
+            if frecency != other.frecency { return frecency > other.frecency }
+            if lastVisit != other.lastVisit { return lastVisit > other.lastVisit }
+            return url < other.url
+        }
+    }
+
+    /// A page's dedupe key: pages on one origin with one path are one row.
+    private struct PageKey: Hashable {
+        let origin: Origin
+        let path: String
+    }
+
     /// Build the per-snapshot index: parse hosts/paths once, dedupe pages, and
     /// aggregate origins. Called once when the history snapshot changes, NOT per
     /// keystroke.
     static func buildIndex(items: [HistoryItem], nowMs: Double = Date().timeIntervalSince1970 * 1000) -> HistoryIndex {
-        // 1. Dedupe pages by (host + path): keep the single highest-frecency page
+        // 1. Dedupe pages by (origin + path): keep the single highest-frecency page
         //    so "…/posts?q=sys" / "?q=syst" / "?q=syste" collapse to one row.
-        var bestByKey: [String: IndexedPage] = [:]
-        // 2. Aggregate origins by host at the same time.
-        var originAcc: [String: (visit: Int, typed: Int, last: Double, bestRootTitle: String, bestRootScore: Double)] = [:]
+        var bestByKey: [PageKey: IndexedPage] = [:]
+        // 2. Aggregate origins at the same time.
+        var originAcc: [Origin: OriginAccumulator] = [:]
 
         for item in items {
-            guard let (host, path) = hostAndPath(item.url), !host.isEmpty else { continue }
+            guard let parts = URLParts(item.url), !parts.origin.host.isEmpty else { continue }
+            let (origin, path) = (parts.origin, parts.path)
             let fr = frecency(visitCount: item.visitCount, typedCount: item.typedCount,
                               lastVisitTime: item.lastVisitTime, nowMs: nowMs)
 
             let page = IndexedPage(
                 item: item,
-                host: host,
-                registrableDomain: registrableDomain(host),
+                origin: origin,
+                registrableDomain: registrableDomain(origin.host),
                 path: path,
                 lowerTitle: item.title.lowercased(),
                 lowerURL: item.url.lowercased(),
                 frecency: fr
             )
 
-            let key = host + "\u{1}" + path   // unlikely-collision separator
+            let key = PageKey(origin: origin, path: path)
             if let existing = bestByKey[key] {
                 // Ties break on the URL so the surviving page never depends on
                 // the order the browser reported history in.
@@ -158,12 +211,15 @@ enum Ranking {
                 bestByKey[key] = page
             }
 
-            // Origin aggregation.
-            var acc = originAcc[host] ?? (0, 0, 0, "", -1)
+            // Origin aggregation. The origin row opens the most frecent page
+            // with its path removed, so its scheme, host and port come from
+            // history, never assumed (issue #54).
+            let candidate = OriginURLCandidate(url: parts.originURL, frecency: fr, lastVisit: item.lastVisitTime)
+            var acc = originAcc[origin] ?? OriginAccumulator(opens: candidate)
             acc.visit += item.visitCount
             acc.typed += item.typedCount
             acc.last = max(acc.last, item.lastVisitTime)
-            // Prefer the title of the site ROOT (path "" or "/") as the origin
+            // Prefer the title of the origin ROOT (path "" or "/") as the origin
             // label; otherwise fall back to the highest-frecency page's title.
             let isRoot = (path.isEmpty || path == "/")
             let rootBias = isRoot ? 1_000_000.0 : 0.0
@@ -174,20 +230,21 @@ enum Ranking {
                 acc.bestRootScore = titleScore
                 acc.bestRootTitle = item.title
             }
-            originAcc[host] = acc
+            if candidate.beats(acc.opens) { acc.opens = candidate }
+            originAcc[origin] = acc
         }
 
         let pages = Array(bestByKey.values)
 
-        let origins: [Origin] = originAcc.map { (host, acc) in
+        let origins: [IndexedOrigin] = originAcc.map { (origin, acc) in
             let fr = frecency(visitCount: acc.visit, typedCount: acc.typed,
                               lastVisitTime: acc.last, nowMs: nowMs)
-            let display = acc.bestRootTitle.isEmpty ? capitalizedHost(host) : acc.bestRootTitle
-            return Origin(
-                host: host,
-                registrableDomain: registrableDomain(host),
+            let display = acc.bestRootTitle.isEmpty ? capitalizedHost(origin.host) : acc.bestRootTitle
+            return IndexedOrigin(
+                origin: origin,
+                registrableDomain: registrableDomain(origin.host),
                 displayTitle: display,
-                url: "https://\(host)",
+                url: acc.opens.url,
                 visitCount: acc.visit,
                 typedCount: acc.typed,
                 lastVisitTime: acc.last,
@@ -221,32 +278,32 @@ enum Ranking {
         var scored: [RankedResult] = []
 
         // --- Origins: the only source of the host-prefix top hit. ---
-        for origin in index.origins {
-            guard let tier = matchTier(query, host: origin.host,
-                                       title: origin.displayTitle.lowercased(),
-                                       url: origin.url.lowercased(),
+        for entry in index.origins {
+            guard let tier = matchTier(query, origin: entry.origin.text,
+                                       title: entry.displayTitle.lowercased(),
+                                       url: entry.url.lowercased(),
                                        isOrigin: true) else { continue }
             scored.append(RankedResult(
-                title: origin.displayTitle,
-                url: origin.url,
-                host: origin.host,
-                score: tier * (origin.frecency + 0.1),
+                title: entry.displayTitle,
+                url: entry.url,
+                origin: entry.origin,
+                score: tier * (entry.frecency + 0.1),
                 isOrigin: true,
-                frecency: origin.frecency,
-                matchesRegistrableLabel: queryMatchesRegistrableLabel(query.text, in: origin.registrableDomain)
+                frecency: entry.frecency,
+                matchesRegistrableLabel: queryMatchesRegistrableLabel(query.text, in: entry.registrableDomain)
             ))
         }
 
         // --- Pages. ---
         for page in index.pages {
-            guard let tier = matchTier(query, host: page.host,
+            guard let tier = matchTier(query, origin: page.origin.text,
                                        title: page.lowerTitle, url: page.lowerURL,
                                        isOrigin: false) else { continue }
             let title = page.item.title.isEmpty ? page.item.url : page.item.title
             scored.append(RankedResult(
                 title: title,
                 url: page.item.url,
-                host: page.host,
+                origin: page.origin,
                 score: tier * (page.frecency + 0.1),
                 isOrigin: false,
                 frecency: page.frecency,
@@ -260,20 +317,20 @@ enum Ranking {
         // "https://github.com" vs a page for the bare root). Keep first (best).
         scored = dedupeByURL(scored)
 
-        // Cap per host to 3 so one chatty site can't flood the visible list.
-        return capPerHost(scored, perHost: 3, limit: limit)
+        // Cap per origin to 3 so one chatty origin can't flood the visible list.
+        return capPerOrigin(scored, perOrigin: 3, limit: limit)
     }
 
-    /// Empty-query listing: best origins and pages by pure frecency, per-host
-    /// capped, origins preferred so the empty palette shows clean site rows.
+    /// Empty-query listing: best origins and pages by pure frecency, per-origin
+    /// capped, origins preferred so the empty palette shows clean origin rows.
     static func topByFrecency(index: HistoryIndex, limit: Int) -> [RankedResult] {
         var results: [RankedResult] = []
-        for origin in index.origins {
-            results.append(RankedResult(origin: origin))
+        for entry in index.origins {
+            results.append(RankedResult(entry))
         }
         results.sort(by: isBefore)
         results = dedupeByURL(results)
-        return capPerHost(results, perHost: 2, limit: limit)
+        return capPerOrigin(results, perOrigin: 2, limit: limit)
     }
 
     // MARK: - Match tiering
@@ -306,19 +363,19 @@ enum Ranking {
     /// Best tier for a candidate: the whole-query tier or, for a multi-term
     /// query, the any-order tier — whichever is stronger (issue #42). nil → no
     /// match (excluded).
-    static func matchTier(_ query: Query, host: String, title: String, url: String, isOrigin: Bool) -> Double? {
-        let whole = matchTier(query: query.text, host: host, title: title, url: url, isOrigin: isOrigin)
+    static func matchTier(_ query: Query, origin: String, title: String, url: String, isOrigin: Bool) -> Double? {
+        let whole = matchTier(query: query.text, origin: origin, title: title, url: url, isOrigin: isOrigin)
         guard query.terms.count > 1 else { return whole }
-        return maxOptional(whole, anyOrderTier(terms: query.terms, host: host, title: title, url: url))
+        return maxOptional(whole, anyOrderTier(terms: query.terms, origin: origin, title: title, url: url))
     }
 
-    /// Any-order match: every term occurs LITERALLY in host, title, or URL
+    /// Any-order match: every term occurs LITERALLY in origin, title, or URL
     /// (terms may land in different fields); scored by the weakest term's tier.
     /// Never fuzzy — a per-term subsequence would match nearly anything.
-    static func anyOrderTier(terms: [String], host: String, title: String, url: String) -> Double? {
+    static func anyOrderTier(terms: [String], origin: String, title: String, url: String) -> Double? {
         var weakest = Double.infinity
         for term in terms {
-            guard let tier = literalTier(query: term, host: host, title: title, url: url) else { return nil }
+            guard let tier = literalTier(query: term, origin: origin, title: title, url: url) else { return nil }
             weakest = min(weakest, tier)
         }
         return weakest
@@ -326,8 +383,8 @@ enum Ranking {
 
     /// Return the best matching tier's score for a candidate, or nil if it does
     /// not match at all (→ excluded from results). Query is already lowercased.
-    static func matchTier(query: String, host: String, title: String, url: String, isOrigin: Bool) -> Double? {
-        if let tier = literalTier(query: query, host: host, title: title, url: url) {
+    static func matchTier(query: String, origin: String, title: String, url: String, isOrigin: Bool) -> Double? {
+        if let tier = literalTier(query: query, origin: origin, title: title, url: url) {
             return tier
         }
         // Tier 5: dense fuzzy subsequence against the better of title/url.
@@ -341,14 +398,15 @@ enum Ranking {
         return nil
     }
 
-    /// Tiers 1–4: the query occurs literally in host, title, or URL.
-    static func literalTier(query: String, host: String, title: String, url: String) -> Double? {
-        // Tier 1: host prefix (sans www — host is already stripped).
-        if host.hasPrefix(query) {
+    /// Tiers 1–4: the query occurs literally in origin, title, or URL. The host
+    /// tiers match the origin, so `localhost:5` prefixes `localhost:5173`.
+    static func literalTier(query: String, origin: String, title: String, url: String) -> Double? {
+        // Tier 1: host prefix (sans www — the origin's host is already stripped).
+        if origin.hasPrefix(query) {
             return MatchTier.hostPrefix.rawValue
         }
         // Tier 2: host contains.
-        if host.contains(query) {
+        if origin.contains(query) {
             return MatchTier.hostContains.rawValue
         }
         // Tier 3: a title word starts with the query (word-boundary prefix).
@@ -447,13 +505,13 @@ enum Ranking {
         return out
     }
 
-    private static func capPerHost(_ results: [RankedResult], perHost: Int, limit: Int) -> [RankedResult] {
-        var perHostCount: [String: Int] = [:]
+    private static func capPerOrigin(_ results: [RankedResult], perOrigin: Int, limit: Int) -> [RankedResult] {
+        var perOriginCount: [Origin: Int] = [:]
         var out: [RankedResult] = []
         for r in results {
-            let c = perHostCount[r.host, default: 0]
-            if c >= perHost { continue }
-            perHostCount[r.host] = c + 1
+            let c = perOriginCount[r.origin, default: 0]
+            if c >= perOrigin { continue }
+            perOriginCount[r.origin] = c + 1
             out.append(r)
             if out.count >= limit { break }
         }
@@ -462,16 +520,35 @@ enum Ranking {
 
     // MARK: - URL parsing helpers
 
-    /// Lowercased host (sans "www.") + lowercased path (no query/fragment).
-    static func hostAndPath(_ urlString: String) -> (host: String, path: String)? {
-        guard let comps = URLComponents(string: urlString), let rawHost = comps.host else {
-            return nil
+    /// A URL as the palette groups history (issue #54). An origin is a host plus
+    /// its port, as Chrome's host-only suggestion keeps both (`ConvertToHostOnly`
+    /// → `GURL::GetWithEmptyPath`, `history_url_provider.cc`).
+    struct URLParts {
+        let scheme: String   // lowercased
+        let origin: Origin
+        let path: String     // lowercased, no query/fragment or trailing "/"
+
+        /// What an origin row opens when this page is its origin's most frecent:
+        /// the page with its path, query and fragment removed. Its host keeps
+        /// `www.`, as Chrome's does; only the origin drops it.
+        let originURL: String
+
+        /// Nil without a scheme and host.
+        init?(_ urlString: String) {
+            guard let comps = URLComponents(string: urlString),
+                  let scheme = comps.scheme?.lowercased(), let rawHost = comps.host else { return nil }
+            let fullHost = rawHost.lowercased()
+            let host = fullHost.hasPrefix("www.") ? String(fullHost.dropFirst(4)) : fullHost
+            let port = significantPort(comps)
+            var path = comps.path.lowercased()
+            if path.count > 1 && path.hasSuffix("/") { path = String(path.dropLast()) }
+            self.scheme = scheme
+            self.origin = Origin(host: host, port: port)
+            self.path = path
+            // verified: `URLComponents.host` keeps an IPv6 literal's brackets
+            // (`http://[::1]:3000/` → `[::1]`), so this stays a parseable URL.
+            self.originURL = "\(scheme)://\(fullHost)" + (port.map { ":\($0)" } ?? "")
         }
-        var host = rawHost.lowercased()
-        if host.hasPrefix("www.") { host = String(host.dropFirst(4)) }
-        var path = comps.path.lowercased()
-        if path.count > 1 && path.hasSuffix("/") { path = String(path.dropLast()) }
-        return (host, path)
     }
 
     /// Second-level labels that are part of a public suffix under a two-letter
@@ -516,27 +593,26 @@ enum Ranking {
         return labels.suffix(isCountrySuffix ? 3 : 2).joined(separator: ".")
     }
 
-    /// Collapse trivial URL differences for dedupe (scheme, www, trailing slash).
+    /// Collapse trivial URL differences for dedupe (scheme, www, trailing
+    /// slash). The origin keeps a port, so pages on two ports never merge.
     static func normalizeURLKey(_ urlString: String) -> String {
-        guard let (host, path) = hostAndPath(urlString) else { return urlString.lowercased() }
-        return host + (path.isEmpty ? "/" : path)
+        guard let parts = URLParts(urlString) else { return urlString.lowercased() }
+        return parts.origin.text + (parts.path.isEmpty ? "/" : parts.path)
     }
 
     /// Whether two URLs open the same page: `normalizeURLKey` equivalence
-    /// (case, scheme, `www.`, trailing slash) with the port and query kept,
-    /// since either one names a different page.
+    /// (case, scheme, `www.`, trailing slash) with the query kept, since it
+    /// names a different page.
     static func isSameDestination(_ a: String, _ b: String) -> Bool {
-        let (ca, cb) = (URLComponents(string: a), URLComponents(string: b))
-        return normalizeURLKey(a) == normalizeURLKey(b)
-            && significantPort(ca) == significantPort(cb)
-            && ca?.query == cb?.query
+        normalizeURLKey(a) == normalizeURLKey(b)
+            && URLComponents(string: a)?.query == URLComponents(string: b)?.query
     }
 
-    /// The port that names a different page: nil for none, or for the
+    /// The port that names a different origin: nil for none, or for the
     /// scheme's own default (`:80` http, `:443` https), as URL canonicalization
     /// treats them.
-    private static func significantPort(_ url: URLComponents?) -> Int? {
-        switch (url?.scheme?.lowercased(), url?.port) {
+    private static func significantPort(_ url: URLComponents) -> Int? {
+        switch (url.scheme?.lowercased(), url.port) {
         case ("http", 80), ("https", 443): return nil
         case (_, let port): return port
         }
@@ -568,9 +644,9 @@ enum Ranking {
 
 extension Ranking.RankedResult {
     /// An origin ranked by frecency alone, with no query to match.
-    init(origin: Ranking.Origin) {
-        self.init(title: origin.displayTitle, url: origin.url, host: origin.host,
-                  score: origin.frecency, isOrigin: true, frecency: origin.frecency,
+    init(_ entry: Ranking.IndexedOrigin) {
+        self.init(title: entry.displayTitle, url: entry.url, origin: entry.origin,
+                  score: entry.frecency, isOrigin: true, frecency: entry.frecency,
                   matchesRegistrableLabel: false)
     }
 }

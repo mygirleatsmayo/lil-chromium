@@ -12,9 +12,9 @@ Initial reviewed point: `438f7db`
 
 ## Spec
 
-- P1 · "If the browser denies the extension access to file URLs … the lil still opens and works" · **needs adjudication (Lucas)**: Chromium rejects `windows.create` with a file URL when file access is off, so no lil can open. **won't-fix** · Settled (Lucas): with file access off, Chromium refuses the file URL (`Cannot navigate to a file URL without local file access.`, r04 §5); no lil opens, the worker logs the error, and there is no error loop. The ticket's criterion is amended to say so. Telling the user is a separate ticket under #29.
+- P1 · "If the browser denies the extension access to file URLs … the lil still opens and works" · **needs adjudication (mygirleatsmayo)**: Chromium rejects `windows.create` with a file URL when file access is off, so no lil can open. **won't-fix** · Settled (mygirleatsmayo): with file access off, Chromium refuses the file URL (`Cannot navigate to a file URL without local file access.`, r04 §5); no lil opens, the worker logs the error, and there is no error loop. The ticket's criterion is amended to say so. Telling the user is a separate ticket under #29.
 - P2 · "promote to Primary (⌘O), and the caret menu" on a file lil · **fix** · Settled: promote and the caret menu's other-browser actions must never close a file lil without opening its page. Cross-browser opens carry the file URL to the target browser; the relay accepts `file:` in addition to `http`/`https` and nothing else. Contract change: PROTOCOL.md, host and extension in step. Amended after remediation 1: this means a file lil takes the same `open-external` path as a web lil and closes on the same terms. The existing contract (close once `open-external` is posted to the host; fire-and-forget after that) stands for every lil. Confirming the target browser actually opened the page is a cross-cutting change outside #47 (follow-up candidate). Remediation 1's residual P2 report is resolved on this basis.
-- P3 · "Checked live: reload the unpacked extension, open a local `.html` file as a lil" · **verification obligation, not code**: Lucas runs it after the fix round.
+- P3 · "Checked live: reload the unpacked extension, open a local `.html` file as a lil" · **verification obligation, not code**: mygirleatsmayo runs it after the fix round.
 
 ## Remediation 1
 
@@ -33,8 +33,8 @@ Initial reviewed point: `438f7db`
 ### Spec
 
 - P4 · "A lil showing a `file://` page has the full hoverbar": the worker registers a new lil only after refocusing it; a page that asks `isEphemeral` before registration gets `false`, and the overlay stops for good. Local files load fast enough to hit this. The ordering predates #47 · **fix** · Settled: a lil's page always gets the hoverbar, however fast it loads; the worker must answer `isEphemeral` truthfully for a lil it is still creating. Fix the root cause in the worker's lil creation, not with an overlay retry.
-- P1 · settled by Lucas (see Spec P1).
-- P3 · still Lucas's live check.
+- P1 · settled by mygirleatsmayo (see Spec P1).
+- P3 · still mygirleatsmayo's live check.
 
 ## Remediation 3
 
@@ -44,7 +44,7 @@ Initial reviewed point: `438f7db`
 
 - N2 (still unresolved) · `.map((c) => c.done)` then `await Promise.allSettled(pending)` fixes the wait list at request time; a normal window keeps waiting after the unrelated creation learns its window id, and an early request from a lil keeps waiting after its own lil registers · **fix** (N2 not yet met): the Remediation 3 rule holds for the whole wait, not only when the request arrives. The answer comes as soon as the sender's lil is registered or no pending creation can still be the sender's.
 
-- C1 · `Promise.withResolvers()` needs Node 22; `package.json` declares `"node": ">=20"`, so the suite breaks on Node 20–21 (raised by the implementer) · **fix**: stay within the declared engine (`new Promise` covers it); changing the engine floor is Lucas's call, outside #47.
+- C1 · `Promise.withResolvers()` needs Node 22; `package.json` declares `"node": ">=20"`, so the suite breaks on Node 20–21 (raised by the implementer) · **fix**: stay within the declared engine (`new Promise` covers it); changing the engine floor is mygirleatsmayo's call, outside #47.
 
 ## Remediation 5
 
@@ -52,15 +52,15 @@ Initial reviewed point: `438f7db`
 
 ## Review status
 
-- Full review 1: 4 Standards (all fix), 3 Spec (P2 fix, P1 pending Lucas, P3 live check).
+- Full review 1: 4 Standards (all fix), 3 Spec (P2 fix, P1 pending mygirleatsmayo, P3 live check).
 - Remediation 1 (`e85a1d5...2c9a7a9`): S1, S3, S4 resolved; P2 resolved under the amended interpretation; S2 unresolved (fix); 1 new defect (N1, fix).
-- Remediation 2 (`2c9a7a9...32e9d79`): S2 residual and N1 resolved, no new defects. P1 pending Lucas; P3 live check.
-- Final review 1 (`bf45a2f...c846091`): Standards N1 residual, S5, S6 fix; S7 won't-fix. Spec P4 fix; P1 pending Lucas; P3 live check.
-- Remediation 3 (`c846091...796ff02`): N1 residual, S5, S6, P4 resolved; 1 new defect (N2, fix). P1 pending Lucas; P3 live check.
-- Remediation 4 (`796ff02...e12cd54`): N2 unresolved (fix); no other new defects. P1 pending Lucas; P3 live check.
-- Remediation 5 (`e12cd54...95d223e`): N2, C1 resolved; 1 new test gap (N3, fix). P1 pending Lucas; P3 live check.
-- Remediation 6 (`95d223e...b9a2e41`): N3 resolved; earlier items still resolved; no new defects. Ready to integrate. P1 pending Lucas; P3 live check.
-- Lucas adjudicated P1 (won't-fix, criterion amended). Ready to integrate; P3 live check.
-- C1 superseded (Lucas): Node 20 is end of life; the floor is now `>=22` and `Promise.withResolvers` is restored (`f15af41`, AGENTS.md).
-- Lucas dropped the P2 follow-up candidate (no ticket): confirming the target browser opened the page before the lil closes.
+- Remediation 2 (`2c9a7a9...32e9d79`): S2 residual and N1 resolved, no new defects. P1 pending mygirleatsmayo; P3 live check.
+- Final review 1 (`bf45a2f...c846091`): Standards N1 residual, S5, S6 fix; S7 won't-fix. Spec P4 fix; P1 pending mygirleatsmayo; P3 live check.
+- Remediation 3 (`c846091...796ff02`): N1 residual, S5, S6, P4 resolved; 1 new defect (N2, fix). P1 pending mygirleatsmayo; P3 live check.
+- Remediation 4 (`796ff02...e12cd54`): N2 unresolved (fix); no other new defects. P1 pending mygirleatsmayo; P3 live check.
+- Remediation 5 (`e12cd54...95d223e`): N2, C1 resolved; 1 new test gap (N3, fix). P1 pending mygirleatsmayo; P3 live check.
+- Remediation 6 (`95d223e...b9a2e41`): N3 resolved; earlier items still resolved; no new defects. Ready to integrate. P1 pending mygirleatsmayo; P3 live check.
+- mygirleatsmayo adjudicated P1 (won't-fix, criterion amended). Ready to integrate; P3 live check.
+- C1 superseded (mygirleatsmayo): Node 20 is end of life; the floor is now `>=22` and `Promise.withResolvers` is restored (`f15af41`, AGENTS.md).
+- mygirleatsmayo dropped the P2 follow-up candidate (no ticket): confirming the target browser opened the page before the lil closes.
 - Telling the user when file access is off is a separate ticket under #29.
