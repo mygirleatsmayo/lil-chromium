@@ -117,8 +117,8 @@ struct PaletteRowsTests {
     @Test func autocompleteOffersOnlyAPrefixedHost() throws {
         let model = try makeModel()
 
-        #expect(model.results(for: "git").autocompleteHost == "github.com")
-        #expect(model.results(for: "quarterly budget review").autocompleteHost == nil)
+        #expect(model.results(for: "git").autocompleteSite == "github.com")
+        #expect(model.results(for: "quarterly budget review").autocompleteSite == nil)
     }
 }
 
@@ -356,7 +356,7 @@ struct PaletteOrderingTests: PaletteHistoryFixture {
         #expect(rows[0].actionURL == "https://github.com")
         #expect(rows[2].actionURL == "https://hubspot.com")
         #expect(rows[0].host == "github.com")
-        #expect(palette.results(for: "hub").autocompleteHost == rows[0].host)
+        #expect(palette.results(for: "hub").autocompleteSite == rows[0].site)
     }
 
     /// SP2: seven ineligible host-prefix rows would fill the old rank budget
@@ -1311,6 +1311,20 @@ struct PaletteCompletionTests {
         #expect(field.rows.map(\.actionURL) == palette.rows(for: typed).map(\.actionURL))
         let today = palette.action(for: typed, selectedRow: palette.rows(for: typed).first, chord: .plain)
         #expect(field.pressReturn() == today)
+    }
+}
+
+/// A site is a host plus its port (issue #54). A site row opens the site as
+/// history has it: its most frecent page with the path, query and fragment
+/// removed, as Chrome's site suggestion does (`ConvertToHostOnly`).
+struct PaletteSiteTests: PaletteHistoryFixture {
+
+    @Test(.bug(id: 54)) func siteRowOpensTheSchemeAndPortFromHistory() {
+        let rows = model(visit("http://intranet.example:8080/x", title: "Wiki")).rows(for: "intranet")
+
+        #expect(rows.first?.kind == .history)
+        #expect(rows.first?.actionURL == "http://intranet.example:8080")
+        #expect(rows.first?.subtitle == "intranet.example:8080")
     }
 }
 

@@ -16,9 +16,10 @@ struct PaletteRow {
     let actionURL: String    // final URL to open on Enter
     let host: String?        // host for favicon lookup (nil for search/openURL)
 
-    /// The full host of a history top hit, used by inline autocomplete.
-    /// Only origin/history rows carry it.
-    let autocompleteHost: String?
+    /// A history row's site: its host plus any non-default port
+    /// (`localhost:3000`). Inline completion completes the field to it.
+    /// Only history rows carry it.
+    let site: String?
 }
 
 /// The fully resolved action produced by pressing Return in the palette.
@@ -35,10 +36,10 @@ struct PaletteAction: Equatable {
     let hint: String
 }
 
-/// One query's rows and inline type-ahead host, from a single ranking pass.
+/// One query's rows and inline type-ahead site, from a single ranking pass.
 struct PaletteResults {
     let rows: [PaletteRow]
-    let autocompleteHost: String?
+    let autocompleteSite: String?
 }
 
 /// What the palette field holds (issue #38): the text the user typed and, while
@@ -49,14 +50,14 @@ struct PaletteResults {
 struct PaletteInput {
     /// Text the user entered; excludes the auto-appended remainder.
     fileprivate(set) var typed = ""
-    /// The origin row whose host the field is completed to, if any.
+    /// The origin row whose site the field is completed to, if any.
     fileprivate(set) var completion: PaletteRow?
 
-    /// The full field text: typed text plus the completed host's remainder,
+    /// The full field text: typed text plus the completed site's remainder,
     /// with the user's casing kept for the typed prefix.
     var text: String {
-        guard let host = completion?.host else { return typed }
-        return typed + host.dropFirst(typed.count)
+        guard let site = completion?.site else { return typed }
+        return typed + site.dropFirst(typed.count)
     }
 
     /// The selected remainder in UTF-16 units (NSRange), nil with no completion.
@@ -317,7 +318,7 @@ final class PaletteModel {
     }
 
     /// The ranking of `input.typed` landed: complete the field to its
-    /// type-ahead host when the typed text strictly prefixes that host. The
+    /// type-ahead site when the typed text strictly prefixes that site. The
     /// completion is worked out afresh, so after a history refresh one the
     /// new history doesn't offer is dropped, as Chrome re-applies the default
     /// match's completion whenever results change
@@ -325,10 +326,10 @@ final class PaletteModel {
     func completing(_ input: PaletteInput, with results: PaletteResults) -> PaletteInput {
         var next = input
         next.completion = nil
-        guard !input.typed.isEmpty, let host = results.autocompleteHost,
-              host.lowercased().hasPrefix(input.typed.lowercased()),
-              host.count > input.typed.count else { return next }
-        next.completion = originRow(host: host)
+        guard !input.typed.isEmpty, let site = results.autocompleteSite,
+              site.lowercased().hasPrefix(input.typed.lowercased()),
+              site.count > input.typed.count else { return next }
+        next.completion = originRow(site: site)
         return next
     }
 
@@ -363,9 +364,9 @@ final class PaletteModel {
     /// after it, so navigation is never mistaken for search.
     /// Empty query: top `maxRows` by frecency, no search row.
     ///
-    /// The autocomplete host comes from the same ranking pass: when a history
-    /// row sits above Search, that is the host Enter opens — ghost text must
-    /// name it too. Otherwise the best history match's host, else nil.
+    /// The autocomplete site comes from the same ranking pass: when a history
+    /// row sits above Search, that is the site Enter opens — ghost text must
+    /// name it too. Otherwise the best history match's site, else nil.
     func results(for query: String) -> PaletteResults {
         let trimmed = query.trimmingWhitespace()
 
@@ -373,7 +374,7 @@ final class PaletteModel {
             let matches = Ranking.rank(query: "", index: index, limit: maxRows)
             return PaletteResults(
                 rows: matches.map { historyRow($0) },
-                autocompleteHost: matches.first?.autocompleteHostValue
+                autocompleteSite: matches.first?.site
             )
         }
 
@@ -389,7 +390,7 @@ final class PaletteModel {
             limit: max(maxRows, index.pages.count + index.origins.count),
             wordMatch: config.wordMatch
         )
-        let bestMatchHost = matches.first?.autocompleteHostValue
+        let bestMatchSite = matches.first?.site
 
         if SettingsAction.matchesQuery(trimmed) {
             rows.append(settingsRow())
@@ -402,8 +403,8 @@ final class PaletteModel {
                 title: "Open \(trimmed)",
                 subtitle: openURL,
                 actionURL: openURL,
-                host: Ranking.hostAndPath(openURL)?.host,
-                autocompleteHost: nil
+                host: Ranking.URLParts(openURL)?.host,
+                site: nil
             ))
         } else if let promoted = bestEligibleIndex(in: matches) {
             rows.append(historyRow(matches.remove(at: promoted)))
@@ -413,8 +414,8 @@ final class PaletteModel {
         rows.append(contentsOf: matches.map(historyRow))
         rows = Array(rows.prefix(maxRows))
 
-        let topHistoryHost = rows.first.flatMap { openURL == nil && $0.kind == .history ? $0.host : nil }
-        return PaletteResults(rows: rows, autocompleteHost: topHistoryHost ?? bestMatchHost)
+        let topHistorySite = rows.first.flatMap { openURL == nil && $0.kind == .history ? $0.site : nil }
+        return PaletteResults(rows: rows, autocompleteSite: topHistorySite ?? bestMatchSite)
     }
 
     /// Among eligible registrable-label matches, frecency is the tie-breaker
@@ -444,13 +445,13 @@ final class PaletteModel {
             subtitle: subtitle,
             actionURL: r.url,
             host: r.host,
-            autocompleteHost: r.host
+            site: r.site
         )
     }
 
-    /// The site row for `host`, as ranking would show its origin.
-    private func originRow(host: String) -> PaletteRow? {
-        guard let origin = index.origins.first(where: { $0.host == host }) else { return nil }
+    /// The site row for `site`, as ranking would show its origin.
+    private func originRow(site: String) -> PaletteRow? {
+        guard let origin = index.origins.first(where: { $0.site == site }) else { return nil }
         return historyRow(Ranking.RankedResult(origin: origin))
     }
 
@@ -461,7 +462,7 @@ final class PaletteModel {
             subtitle: "Lil Chromium",
             actionURL: SettingsAction.urlString,
             host: nil,
-            autocompleteHost: nil
+            site: nil
         )
     }
 
@@ -476,22 +477,17 @@ final class PaletteModel {
             subtitle: subtitle,
             actionURL: actionURL,
             host: nil,
-            autocompleteHost: nil
+            site: nil
         )
     }
 
-    /// Dimmed domain for origin rows; shortened host + path for pages.
+    /// Dimmed site for origin rows; shortened site + path for pages.
     private func displaySubtitle(for r: Ranking.RankedResult) -> String {
-        if r.isOrigin { return r.host }
-        if let (host, path) = Ranking.hostAndPath(r.url) {
-            if path.isEmpty || path == "/" { return host }
-            return host + path
+        if r.isOrigin { return r.site }
+        if let parts = Ranking.URLParts(r.url) {
+            if parts.path.isEmpty || parts.path == "/" { return parts.site }
+            return parts.site + parts.path
         }
         return r.url
     }
-}
-
-private extension Ranking.RankedResult {
-    /// Host to offer for inline autocomplete — only origin/history rows.
-    var autocompleteHostValue: String? { host }
 }
