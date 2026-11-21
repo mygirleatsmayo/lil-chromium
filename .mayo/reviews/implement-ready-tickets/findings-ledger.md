@@ -102,3 +102,7 @@ Lucas asked that review weigh how likely a defect is to reach a user, as a senio
 ## Fix round 4
 
 - S11, S12 built on the integration branch (`b7249ca`) by the orchestrator: two test lines, so no fixer agent (Lucas approved). Not yet reviewed.
+
+## Remediation 4 (`96cebee...1bd4995`)
+
+- Resolved: S11, S12; every earlier fix intact. No new findings. The ledger is fully resolved; the branch is ready to integrate.
