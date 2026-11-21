@@ -9,7 +9,7 @@ Reports: `REVIEW-STANDARDS.md`, `REVIEW-SPEC.md` (this directory).
 
 I re-ran `swift test` (119 pass, 12 suites) and confirmed the diff is confined to `mac/` plus evidence. I hand-verified both High spec findings in the source before accepting them — `PaletteModel.swift:83` ranks with `limit: budget` and `:96` then picks `firstIndex(where: \.matchesDomain)`, which is exactly the ordering the reviewer describes. Both findings are real.
 
-## Owner decisions (Lucas, this session) — binding
+## Owner decisions (mygirleatsmayo, this session) — binding
 
 **D1. No TLD matching.** The eligibility test matches the query against the **distinctive label only**, not the label plus public suffix. `com` must not promote every `.com` site above Search; `git` must still promote `github.com`; `example` must still promote `example.co.uk`. This settles the ambiguity in criterion 1 that the implementer flagged rather than guessing.
 
@@ -49,7 +49,7 @@ Final. No later round may fail these.
 
 All six fix items (SP1, SP2, SP4, J1, J2, D1) reported resolved with quoted evidence. SP3 correctly still unfixed per D2. No regressions, no new High/Medium defects.
 
-## NA1 — adjudicated (owner: Lucas, this session)
+## NA1 — adjudicated (owner: mygirleatsmayo, this session)
 
 **Finding.** After SP1, `PaletteModel.autocompleteHost(for:)` (`:48`) still derives the inline type-ahead host from its own tier-ordered `Ranking.rank(limit: 1)` call, while `rows(for:)` (`:99`) promotes by frecency. The two can name different hosts: for `hub`, ghost text completes hubspot.com while row 1 and Enter both go to github.com.
 

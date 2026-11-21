@@ -10,7 +10,7 @@ Axis only: documented repo standards + smell baseline (judgement). Not Spec. No 
 
 2. **AGENTS.md — `@MainActor` / `verified:`.** No Swift. No `verified:` in the hunks; tab-context omit and hidden-until-policy are PROTOCOL-specified, not new on-box claims.
 
-3. **AGENTS.md — tests / prose.** Tests boot the production service worker. Lucas-facing README/copy untouched.
+3. **AGENTS.md — tests / prose.** Tests boot the production service worker. mygirleatsmayo-facing README/copy untouched.
 
 4. **PROTOCOL.md / CONTEXT.md.** Titles in `createContextMenus` / `createTabStripSend` match the updated context-menus bullet (`Open link in this lil`, `Send Tab to Lil`, sleep/whitelist strings). Sleep copy still overrides CONTEXT.md **Lil Nap** (pre-existing). Visibility and clicks share `contextActionAllowed`.
 

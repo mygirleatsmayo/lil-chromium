@@ -29,13 +29,13 @@ Every factual claim in the Standards report was checked directly:
 
 ## Settled interpretations
 
-1. The implementer deliberately did not rewrite `docs/PROTOCOL.md`, on the grounds that it is Lucas's human-facing prose and a contract change spans three components. That restraint was correct, not an omission.
+1. The implementer deliberately did not rewrite `docs/PROTOCOL.md`, on the grounds that it is mygirleatsmayo's human-facing prose and a contract change spans three components. That restraint was correct, not an omission.
 2. Provider selection is stored explicit state; inferring it from the current template is a regression and may not be reintroduced.
 3. The Custom draft is separate from the committed template. A round that makes an invalid draft rewrite config or switch provider fails.
 
 ## Owner decision (2026-08-16)
 
-Lucas chose to move the documented default to Startpage rather than revert the code, and confirmed the decision covers every place it reaches: "yes, startpage."
+mygirleatsmayo chose to move the documented default to Startpage rather than revert the code, and confirmed the decision covers every place it reaches: "yes, startpage."
 
 ## Fix rounds
 

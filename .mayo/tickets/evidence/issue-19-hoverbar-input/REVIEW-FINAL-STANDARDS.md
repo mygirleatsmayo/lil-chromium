@@ -6,7 +6,7 @@ Sources: `AGENTS.md`, `CONTEXT.md`, `docs/PROTOCOL.md`, smell baseline. Producti
 
 ## Documented standards (hard)
 
-No new breaches. Ledger-referenced: overlay isolation plus the matching hover-bar sentence is extension-only; no messages, `config.json`, sockets, slugs, routing, or pinned IDs (`AGENTS.md` / `PROTOCOL.md` three-component rule). `mac/` untouched. No user-facing copy or avoided glossary terms (`CONTEXT.md`). No Swift, AppKit, or `verified:` edits (`AGENTS.md`). PROTOCOL hover-bar bullet extended, not rewritten; README/settings copy untouched (Lucas’s prose).
+No new breaches. Ledger-referenced: overlay isolation plus the matching hover-bar sentence is extension-only; no messages, `config.json`, sockets, slugs, routing, or pinned IDs (`AGENTS.md` / `PROTOCOL.md` three-component rule). `mac/` untouched. No user-facing copy or avoided glossary terms (`CONTEXT.md`). No Swift, AppKit, or `verified:` edits (`AGENTS.md`). PROTOCOL hover-bar bullet extended, not rewritten; README/settings copy untouched (mygirleatsmayo’s prose).
 
 ## Baseline smells (judgement)
 

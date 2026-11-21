@@ -12,7 +12,7 @@ Read review-target `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md`, `docs/PROTOCOL.md`, a
 
 1. **AGENTS.md — three-component contract.** Diff is `mac/` + `.mayosdd/` evidence. No messages, `config.json`, sockets, slugs, routing, or pinned IDs. `docs/PROTOCOL.md` and `extension/` untouched. Palette ⌘-Enter still maps to `open.incognito`.
 2. **AGENTS.md — `@MainActor` / `verified:`.** `PaletteController` stays `@MainActor`. Chord translation stays on the controller; `PaletteModel` is Foundation-only. Existing `verified:` on `doCommandBySelector` / `NSApp.currentEvent.modifierFlags` still matches the body. Ledger: no new `verified:` owed for `flagsChanged`.
-3. **AGENTS.md — tests / prose.** New cases live in `PaletteActionTests` inside `PaletteTests.swift`. Lucas-facing copy untouched.
+3. **AGENTS.md — tests / prose.** New cases live in `PaletteActionTests` inside `PaletteTests.swift`. mygirleatsmayo-facing copy untouched.
 4. **CONTEXT.md.** New hint copy (`⏎ Open`, `⌘⏎ Open Incognito`, `⇧⏎ Search`, `⇧⌘⏎ Search Incognito`) uses no avoided synonyms.
 
 ## Ledger (not re-filed)

@@ -18,13 +18,13 @@ One line per finding: `ID · location · verdict · settled interpretation`.
 
 ## Spec
 
-- P1 · palette close scenario (QA addendum) not covered by loop scenarios or deterministic tests · **partial fix** · Mechanism covered deterministically: accessory apps never enter the activation history (`anAccessoryAppActivatingOverTheUsersAppIsPassedOver`); a palette-launched lil's creation-time prior context is the pre-palette app's pid (existing open-fixture tests). A real-Mac loop scenario for the palette is a harness change (`scripts/focus-loop`) and is left to Lucas's manual QA of the live build; settled: not required for #31 to close.
+- P1 · palette close scenario (QA addendum) not covered by loop scenarios or deterministic tests · **partial fix** · Mechanism covered deterministically: accessory apps never enter the activation history (`anAccessoryAppActivatingOverTheUsersAppIsPassedOver`); a palette-launched lil's creation-time prior context is the pre-palette app's pid (existing open-fixture tests). A real-Mac loop scenario for the palette is a harness change (`scripts/focus-loop`) and is left to mygirleatsmayo's manual QA of the live build; settled: not required for #31 to close.
 - P2 · OpenRouter.swift comments say "predecessor" · **fix** · reworded to glossary terms.
 - P3 · no `.mayosdd/tickets/evidence/issue-31-*` directory · **fix** · this ledger creates it; the live-run trace and verdict land here too.
 - P4 (c1) · teardown reading is opt-in per removal site instead of `info.isWindowClosing` · **won't-fix now; needs live evidence** · `isWindowClosing` mirrors `TabStripModel::closing_all()`, which is not set on every close path (close-tab on a single-tab window); reading focus at every `tabs.onRemoved` does not depend on it. Stale entries only arise for normal windows (spawned-tab removal) and are overwritten by that window's own teardown reading before use. The `tab-removed` trace event now records `isWindowClosing` per removal; if the live loop shows it true for every close path, simplify in a follow-up.
 - P5 (c2) · `focusedWindowId` never seeded, so a respawned worker fabricates an external-app context · **fix** · seeded from `windows.getLastFocused` when it reports `focused:true` and no focus event has arrived; harness gains `options.windows` to boot with pre-existing windows; test "a worker that wakes with a normal window focused reads it as the context the user came from".
 - P6 (c3) · `.launchServicesRequested` returned before `openApplication` completes, so `frontmost-after` may sample early · **won't-fix** · The completion handler logs its own LILFOCUS line; the 350 ms settle read is a second sample, and the two together are what the live run needs. Revisit only if the trace shows the request completing later than the settle read.
-- AC1 / AC9 (live half) · `#30 command` red-before / green-after · **pending live run** · Lucas runs `node scripts/focus-loop.mjs run --scenarios close/` from this worktree after `make install` and extension reload.
+- AC1 / AC9 (live half) · `#30 command` red-before / green-after · **pending live run** · mygirleatsmayo runs `node scripts/focus-loop.mjs run --scenarios close/` from this worktree after `make install` and extension reload.
 
 ## Remediation round 1 (pre-fix point `0850be9` → `f44d593`)
 
@@ -43,7 +43,7 @@ Two axes again; ledger passed along. New findings only.
 
 - F1 · `bundleId` accepted without `pid` by the extension normaliser and PROTOCOL, but dropped by the host · **fix** · Contract tightened: `bundleId` accompanies a recorded `pid` and is never sent alone; the normaliser keeps it only with one.
 - F2 · glossary drift: test title "a stale predecessor lil" (in the diff); trace outcome string `no-predecessor` (pre-existing, not in the diff) · **fix the title; won't-fix the string** · A trace outcome string is part of the loop's replay vocabulary and outside this change.
-- F3 · `AGENTS.md` still says "Swift 6.2 toolchain"; the toolchain is 6.4 · **won't-fix here** · `AGENTS.md` is Lucas's prose on `main`; flagged to Lucas.
+- F3 · `AGENTS.md` still says "Swift 6.2 toolchain"; the toolchain is 6.4 · **won't-fix here** · `AGENTS.md` is mygirleatsmayo's prose on `main`; flagged to mygirleatsmayo.
 - F4 · `for app in eligible where app.activate(...)` hides a system mutation in a predicate clause; `first` names its role poorly · **fix** · explicit `guard … else { continue }` loop; `preferred`.
 - F5 · `lastTransfer.written` names a promise of the displaced prior context · **fix** · renamed `displaced`. `setPriorContext` returning the displaced value stays: the revert needs it and the doc comment says so.
 - F6 · the promote path focused normal windows around `focusWindow`, contradicting the "tracked per window in `explicitFocus`" comment · **fix** · both sites route through `focusWindow`; the fallback `windows.create({focused:true})` for a brand-new normal window is not a refocus and is left alone.
@@ -63,7 +63,7 @@ F1–F10 resolved. New in the delta:
 
 ## Live run (`deaf518`, `make install` from this branch, Helium)
 
-Loop: `node scripts/focus-loop.mjs run --scenarios close/` — all three close scenarios green (`LIVE-RUN-2026-09-17.md`, `trace-2026-09-17T23-20-49-256Z.jsonl`). Lucas's manual checks were not: a lil from a Mail link returned to the primary browser window; a palette lil returned to Mail but raised the primary window above the other apps. Both are in the evidence, both are root causes the loop's frontmost-app verdict does not see.
+Loop: `node scripts/focus-loop.mjs run --scenarios close/` — all three close scenarios green (`LIVE-RUN-2026-09-17.md`, `trace-2026-09-17T23-20-49-256Z.jsonl`). mygirleatsmayo's manual checks were not: a lil from a Mail link returned to the primary browser window; a palette lil returned to Mail but raised the primary window above the other apps. Both are in the evidence, both are root causes the loop's frontmost-app verdict does not see.
 
 - L1 · a link clicked in Mail is sent with `appPriorContext=none` (host log `23:23:41Z`, `23:27:46Z`), so the extension records the focused normal window and the close returns to it · **fix** · LaunchServices activates the URL handler before `handleIncomingURL` runs, so `NSWorkspace.frontmostApplication` is Lil Chromium itself at that moment. The app now keeps its own `ActivationHistory` from launch (moved to `LilShared`, exclusion-based; the host excludes its browser, the app excludes nothing) and sends `lastExternal`. Same URL sent from a script (`23:30:08Z`) arrived with Mail frontmost, which is why the scripted loop was green.
 - L2 · after a focused close the restored app is frontmost but the primary browser window has risen one step (probe `afterClose` z-order: Mail 0, Helium 1, cmux 2 where `before` had Helium 2) · **fix** · Chromium's key handoff to the sibling fires 27–32 ms after `tab-removed` and before `window-removed`; the restoration was sent 2 ms after the handoff. The extension now restores at `tabs.onRemoved` when `isWindowClosing && heldFocus` (true in 6/6 closes in the trace), while the lil still holds key; `windows.onRemoved` restores only what teardown did not. Trace `restore-attempt` gains `at`. Test "a focused lil restores its prior context before Chromium hands key to a sibling" (red at `deaf518`).
@@ -78,7 +78,7 @@ L1–L3 resolved. New in the delta:
 - N2 · the teardown path lacked the promotion guard `windows.onRemoved` has · **fix** · one predicate, `unwindsFocus`, used by both.
 - N3 · a two-tab lil (wake swap) restored once per tab · **fix** · same promise, taken once per window; the test now closes a two-tab lil and asserts one restoration.
 - N4 · with restoration earlier, a focus event that records nothing (`onFocusChanged(NONE)` as the restored app comes forward, or the refocus of the prior lil) can land between the handoff and `window-removed`, and both discarded the handoff transfer before `revertHandoffFrom` ran · **fix** · a non-recording focus event keeps a transfer whose source is mid-teardown (`endTransferUnlessHandoff`). Pinned by the existing test "each lil restores its recorded prior context from a nested external-app chain", which went red on the promise-based teardown for exactly this ordering.
-- N5 · `AGENTS.md` toolchain edit contradicts F3's "won't-fix here" · **settled, no action** · Lucas directed it ("AGENTS.md is stale then update it"); F3's disposition is superseded by that instruction.
+- N5 · `AGENTS.md` toolchain edit contradicts F3's "won't-fix here" · **settled, no action** · mygirleatsmayo directed it ("AGENTS.md is stale then update it"); F3's disposition is superseded by that instruction.
 - N6 · `_ = OpenRouter.activationHistory` names nothing · **fix** · `OpenRouter.startActivationHistory()`.
 
 ## Remediation round 4 (pre-fix point `68af155` → `6e59a8e`)
@@ -94,9 +94,9 @@ N7 resolved; no new defects. Two judgement calls, both settled:
 - N8 · `closingWindows` is the fourth window-keyed lifecycle mark S5 named as its revisit trigger · **settled, no action** · folding it into `teardownFocus`'s value would undo N7's one-job rule; the marks stay separate. Revisit only if a fifth appears.
 - N9 · a `closingWindows` entry is cleared only by `windows.onRemoved` · **settled, no action** · the same lifecycle every teardown mark relies on; no new leak class.
 
-Ledger fully resolved at `c4002b7`. The final full review before integration runs after Lucas's live verification, so any live finding is in it.
+Ledger fully resolved at `c4002b7`. The final full review before integration runs after mygirleatsmayo's live verification, so any live finding is in it.
 
-## Live round 2 (build `2ca9c3e`, Lucas's manual checks 2026-09-18 00:09–00:11Z)
+## Live round 2 (build `2ca9c3e`, mygirleatsmayo's manual checks 2026-09-18 00:09–00:11Z)
 
 Reported: a lil from a Mail link still ends on Helium; a palette lil's close raises the Helium primary window for a moment before the app comes back. Host log: the three Mail clicks now carry `appPriorContext=external-app … com.apple.mail` (L1 holds), but no `restore-focus` follows them, so at close those lils held a Helium window as prior context; the palette closes did restore (`activated-exact-pid`) — the flash is the close-time race.
 
@@ -121,9 +121,9 @@ L5–L8 resolved; no new defects (196 node, 178 swift, `swift build` warning-fre
 
 Ledger at `dc272ae`: L1–L8 resolved, L9 pending live evidence. Final full review runs once L9 is closed.
 
-## Live round 3 (build `c6371c3`, Lucas's loop from the worktree scripts, 2026-09-18 11:57Z)
+## Live round 3 (build `c6371c3`, mygirleatsmayo's loop from the worktree scripts, 2026-09-18 11:57Z)
 
-`node <worktree>/scripts/focus-loop.mjs run --scenarios close/` → `trace-2026-09-18T11-57-24-294Z.jsonl`, `verdict-…json` (issue-30 evidence dir). Overall red under the z-order verdict (L6). Lucas mixed gestures, which measured both close paths.
+`node <worktree>/scripts/focus-loop.mjs run --scenarios close/` → `trace-2026-09-18T11-57-24-294Z.jsonl`, `verdict-…json` (issue-30 evidence dir). Overall red under the z-order verdict (L6). mygirleatsmayo mixed gestures, which measured both close paths.
 
 - L9 · Mail-path close landing on Helium · **not reproduced on this build; closed without code** · all 8 activating-open closes carried `appPriorContext=external-app … com.apple.mail` and every focused close posted `restore-focus` to the host (`activated-exact-pid`). The August ordering (`focus-changed(lil)` then `(primary)`) did not appear. Watch, not open.
 - L10 · a ⌘W close never takes the teardown path: Chromium reports the last tab's removal with `isWindowClosing:false` (3/3 ⌘W closes), so the restore fell to `windows.onRemoved`, after the +19–28 ms key handoff · **fix** · a lil whose last tab is removed enters teardown as if flagged; the worker tracks each window's live tab ids so "last tab" is known synchronously (`windowTabs`, seeded at wake). One predicate enters teardown. Two tests (⌘W shape in the fake; two-tab lil restores nothing until its last tab goes). The `verified:` comment and PROTOCOL now name both gestures. Commit `9dd4d1b`.
@@ -157,8 +157,8 @@ Standards: no hard violations; 199 node, 178 swift. Spec: two items for adjudica
 - G6 · AC9 "the unchanged #30 command goes green for every close scenario" not met at HEAD; the last loop run predates L10 · **deferred, #31 stays open** · the z-order half is L11 (no extension fix). Rerun at HEAD after install is the next live step.
 - G7 · AC6's "performs no focus restoration" is scored only at the unit seam; the loop cannot see a restoration that targets the already-active app · **won't-fix here** · the host log the loop drains carries `restore-focus`; a loop assertion on it is a #30 follow-up, not a #31 change.
 - G8 · `close/switch-then-refocus` rep 1 restored Mail (E1) instead of Obsidian (E2); rep 2 and both earlier reps went to Obsidian · **watch** · 32 s untraced gap before the refocus click; the host history is the only path to Mail, so either the observer missed Obsidian or Mail was touched. The HEAD rerun decides.
-- G9 · a palette lil opened while the user is in the browser records the browser itself as the app-supplied external app; the host excludes the browser from its history and history wins (F10), so the close restores the last non-browser app instead of the browser · **needs adjudication (Lucas)** · AC7 says the browser window is restored when it truly preceded the run. Proposed root fix: the app never reports the target browser as an external app, so the extension falls back to its own last focused window. Not in `9a26be7`.
+- G9 · a palette lil opened while the user is in the browser records the browser itself as the app-supplied external app; the host excludes the browser from its history and history wins (F10), so the close restores the last non-browser app instead of the browser · **needs adjudication (mygirleatsmayo)** · AC7 says the browser window is restored when it truly preceded the run. Proposed root fix: the app never reports the target browser as an external app, so the extension falls back to its own last focused window. Not in `9a26be7`.
 
 ## Remediation round 9 (pre-fix point `d5c1b45` → `977b311`)
 
-G1, G2, G4 resolved; no new defects (200 node). Review complete for integration at `977b311`. Open after merge: G6 (AC9, blocked on L11/#32), G8 (watch, HEAD rerun), G9 (Lucas's adjudication).
+G1, G2, G4 resolved; no new defects (200 node). Review complete for integration at `977b311`. Open after merge: G6 (AC9, blocked on L11/#32), G8 (watch, HEAD rerun), G9 (mygirleatsmayo's adjudication).

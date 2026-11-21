@@ -4,7 +4,7 @@
 - **Worktree:** `/Users/mygirleatsmayo/projects/lil-chromium-i3`
 - **Fixed point:** `d1578d5`
 - **HEAD at round 1:** `1f049ae`
-- **Status:** FROZEN — adjudicated by Lucas 2026-08-16. Remediation may act on this file and nothing else.
+- **Status:** FROZEN — adjudicated by mygirleatsmayo 2026-08-16. Remediation may act on this file and nothing else.
 
 ## Rounds
 
@@ -27,7 +27,7 @@
 
 ## Carried, accepted
 
-`OpenRouter.launchBundleIds` drops a `knownBrowsers` entry with an empty `bundleId` when the candidate list is built, instead of attempting it and failing the Launch Services lookup. Same end result, one step earlier. Accepted by Lucas 2026-08-15.
+`OpenRouter.launchBundleIds` drops a `knownBrowsers` entry with an empty `bundleId` when the candidate list is built, instead of attempting it and failing the Launch Services lookup. Same end result, one step earlier. Accepted by mygirleatsmayo 2026-08-15.
 
 ## Raw reports
 
@@ -37,7 +37,7 @@
 
 Ledger rows S1, S2, S4, P2, P3 all confirmed `resolved`. `swift test` 50 pass; clean-`HOME` pass.
 
-## Amendment — adjudicated by Lucas 2026-08-16
+## Amendment — adjudicated by mygirleatsmayo 2026-08-16
 
 | ID | Verdict | Location | Finding | Required outcome |
 |---|---|---|---|---|

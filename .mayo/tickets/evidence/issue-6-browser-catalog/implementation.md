@@ -25,7 +25,7 @@ Stable-channel slugs (`chrome`, `brave`, `edge`, `vivaldi`, `helium`, `arc`, `ch
 
 - Chrome for Testing and other Chromium derivatives not named in criterion 1.
 - Hardcoding the catalog in `extension/` (it already treats `knownBrowsers` as truth).
-- README / CHANGELOG (Lucas's prose).
+- README / CHANGELOG (mygirleatsmayo's prose).
 - Rewriting Brave manifests into Chrome's NativeMessagingHosts directory (KeePassXC reports Brave sometimes reads Chrome's dir; this repo already used `BraveSoftware/Brave-Browser` and criterion 5 says keep one catalog, not change Brave's historical path).
 
 ## Unverified OS facts

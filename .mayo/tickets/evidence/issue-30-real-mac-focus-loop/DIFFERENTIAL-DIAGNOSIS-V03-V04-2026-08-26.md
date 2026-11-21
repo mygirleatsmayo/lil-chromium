@@ -16,7 +16,7 @@ The comparison points are immutable commits with different Git tree objects. The
 
 ### Prior-comparison verdict
 
-No prior real v0.3-to-v0.4 comparison had occurred. Issues #26, #30, #31, #32, and #33 had no comments recording one. The existing evidence contained Lucas's recollection that v0.3 behaved better, while explicitly saying a differential loop still needed to pin Helium and vary extension code. The only live structured run was v0.4 at `f38dd44`, extension version `0.4.0-trial`.
+No prior real v0.3-to-v0.4 comparison had occurred. Issues #26, #30, #31, #32, and #33 had no comments recording one. The existing evidence contained mygirleatsmayo's recollection that v0.3 behaved better, while explicitly saying a differential loop still needed to pin Helium and vary extension code. The only live structured run was v0.4 at `f38dd44`, extension version `0.4.0-trial`.
 
 ### What changed across the 202 commits
 
@@ -70,7 +70,7 @@ The close gate can be tested first in v0.4 by tracing what `restorePriorContext`
 - Whether actual v0.3 raises a sibling cross-display under the same Helium build and topology.
 - Whether `NSRunningApplication.activate(from:)` from the faceless host visibly restores the intended external app on this macOS; H1 prevents the current trace from exercising it.
 - Whether Issue #33's wake hardening keeps the URL inside the lil in live Helium.
-- The Helium build used during Lucas's historical v0.3 use.
+- The Helium build used during mygirleatsmayo's historical v0.3 use.
 
 ## Manager adjudication
 

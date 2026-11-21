@@ -48,7 +48,7 @@ Each slice: failing test first, then the minimum production change.
 - `docs/PROTOCOL.md` — Lil Nap entry contract
 - `.mayosdd/tickets/evidence/issue-20-enter-lil-nap/IMPLEMENTATION.md`
 
-Internal registry keys (`slept`, `sleepCaptureKey`, `sleep.html`) kept so existing parked lils still restore. README / CHANGELOG left as Lucas’s prose.
+Internal registry keys (`slept`, `sleepCaptureKey`, `sleep.html`) kept so existing parked lils still restore. README / CHANGELOG left as mygirleatsmayo’s prose.
 
 ## Commands and results
 

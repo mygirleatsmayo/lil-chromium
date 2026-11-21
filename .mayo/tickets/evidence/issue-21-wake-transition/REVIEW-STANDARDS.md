@@ -8,7 +8,7 @@ Sources: `AGENTS.md`, `CONTEXT.md`, `docs/PROTOCOL.md`, smell baseline. Judgemen
 
 None.
 
-Checked: PROTOCOL wake text and extension hunks agree (preload inactive tab, 180 ms floor, 500 ms cap, swap then clear nap fields + capture, replacement-only fallback, `{ok:false}` leaves nap intact). No messages, `config.json`, sockets, slugs, routing, or pinned IDs — app/host correctly untouched. No AppKit / `@MainActor` / `verified:` edits. Internal `sleep*` identifiers kept; no new user-facing “Sleep” / “sleeping lil” copy. Lucas README/CHANGELOG prose untouched.
+Checked: PROTOCOL wake text and extension hunks agree (preload inactive tab, 180 ms floor, 500 ms cap, swap then clear nap fields + capture, replacement-only fallback, `{ok:false}` leaves nap intact). No messages, `config.json`, sockets, slugs, routing, or pinned IDs — app/host correctly untouched. No AppKit / `@MainActor` / `verified:` edits. Internal `sleep*` identifiers kept; no new user-facing “Sleep” / “sleeping lil” copy. mygirleatsmayo README/CHANGELOG prose untouched.
 
 ## Smell judgements
 

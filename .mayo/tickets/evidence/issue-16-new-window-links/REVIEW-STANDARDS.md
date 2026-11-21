@@ -11,7 +11,7 @@ No breaches.
 - **`AGENTS.md` / `PROTOCOL.md` three-component rule.** Classification text + MV3 worker only. No messages, `config.json`, sockets, slugs, routing, or pinned IDs. `mac/` / host correctly untouched. PROTOCOL’s new-window bullet and the #18 leave-alone list now match the worker (popup window or OAuth guard; missing `openerTabId` not decisive).
 - **`CONTEXT.md` language.** No new user-facing copy. Comments keep Chromium `type === "popup"` vs **lil**; they do not rename a lil a popup.
 - **`AGENTS.md` AppKit `@MainActor` / `verified:`.** No Swift or OS-behavior edits.
-- **Lucas’s prose.** PROTOCOL bullets were tightened in lockstep with the worker, not rewritten into different product language.
+- **mygirleatsmayo’s prose.** PROTOCOL bullets were tightened in lockstep with the worker, not rewritten into different product language.
 
 ## Baseline smells (judgement)
 

@@ -12,7 +12,7 @@ Read `AGENTS.md`, `docs/PROTOCOL.md`, `CONTEXT.md`, `docs/adr/0001`–`0003`, `d
 
 1. **AGENTS.md — three-component contract.** Diff is `mac/` + `.mayosdd/` evidence. No messages, `config.json`, sockets, slugs, routing, or pinned IDs. `docs/PROTOCOL.md` and `extension/` untouched — correct; Search-row promotion is palette row composition, not a contract change. Hover-bar “port the v0.2 palette ranking” still names the tier list this diff did not rewrite.
 2. **AGENTS.md — `@MainActor` / `verified:`.** No new AppKit type. `PaletteModel` stays Foundation-only. No new OS claim; no `verified:` comment in the hunks to keep accurate.
-3. **AGENTS.md — tests / prose.** Ordering cases land in `PaletteTests.swift` (`PaletteOrderingTests`). Shared fixtures stay at repo-root `fixtures/`. Lucas-facing copy untouched. Evidence is not product docs.
+3. **AGENTS.md — tests / prose.** Ordering cases land in `PaletteTests.swift` (`PaletteOrderingTests`). Shared fixtures stay at repo-root `fixtures/`. mygirleatsmayo-facing copy untouched. Evidence is not product docs.
 4. **PROTOCOL.md.** Search row still uses `searchEngine`. URL-like still Open then Search. Non-empty `capPerHost(..., perHost: 3)` unchanged.
 5. **CONTEXT.md / domain.md.** No avoided synonyms (popup, default browser, connected browser, sleep, …) in the hunks.
 6. **ADR 0001 / 0002 / 0003.** No Settings surface, no profile routing, no prior-context restore.

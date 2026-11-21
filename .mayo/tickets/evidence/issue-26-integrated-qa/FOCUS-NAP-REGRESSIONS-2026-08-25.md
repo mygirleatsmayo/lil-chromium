@@ -23,7 +23,7 @@ Published issue graph:
 - On 2026-08-24, worktrees were reassigned so `lil-chromium-v0.4` held `trial/v0.4-live`; version visibility landed at `6cf3671`.
 - The corrected current trial reports extension `0.4.0-trial` and app build `v0.2-192-g6cf3671`.
 - Current reproduction used Helium 0.15.7.1. An earlier running process was Helium 0.15.6.1, so any automated v0.3/v0.4 differential must pin the Helium build.
-- Lucas reports that v0.3 did not exhibit these opening, closing, or wake regressions.
+- mygirleatsmayo reports that v0.3 did not exhibit these opening, closing, or wake regressions.
 
 Sources:
 
@@ -115,7 +115,7 @@ The sibling that rises can be Primary or another lil. This points to Helium appl
 
 - Both v0.3 and v0.4 request a focused popup creation and explicitly focus the created window afterward.
 - Public Chromium/macOS research supports an activate-application-then-make-popup-key sequence that can raise the prior key sibling during activation, especially across displays or Spaces.
-- Because Lucas did not observe the regression on v0.3, that platform mechanism explains the visible sequence but does not identify the v0.4 regression source. A differential loop must pin Helium and vary extension code.
+- Because mygirleatsmayo did not observe the regression on v0.3, that platform mechanism explains the visible sequence but does not identify the v0.4 regression source. A differential loop must pin Helium and vary extension code.
 
 ### Lil Nap wake
 

@@ -10,7 +10,7 @@ Axis only: documented repo standards + Fowler baseline (always judgement). Not a
 - `@MainActor` N/A. No `verified:` comments in the hunks.
 - Tests drive the production service worker through public entry paths (`AGENTS.md`); repo-root `fixtures/` reused.
 - ADR 0001 / 0002 untouched. ADR 0003 named out of scope in `IMPLEMENTATION.md`, not silently overridden.
-- Lucas’s human-facing copy untouched.
+- mygirleatsmayo’s human-facing copy untouched.
 - Other baseline smells not raised. `spec.size` / `spec.focus` / `spec.registration` / `cascadeOrigin`’s second argument encode real pre-existing path differences.
 
 ## Findings

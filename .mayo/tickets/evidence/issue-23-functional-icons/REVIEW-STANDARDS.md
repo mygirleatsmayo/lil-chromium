@@ -30,7 +30,7 @@ Impact: ~1.3s wall clock; changing `COPY_TICK_MS` can fail the test or leave the
 - `PaletteController` / `SettingsWindowController` remain `@MainActor`. No new AppKit type. Existing `verified:` comments untouched.
 - Overlay `ICON_PATHS` matches all six SVG `d` values; tests pin that contract. Not filed as duplication: extracting at runtime would need WAR or a build step.
 - SwiftUI hunks: `Button`, private `@ScaledMetric`, dedicated `.accessibilityLabel`, no deprecated APIs. No Swift tests added — swift-testing-pro: do not test views.
-- Lucas README / CHANGELOG untouched.
+- mygirleatsmayo README / CHANGELOG untouched.
 
 ## Verification
 

@@ -15,7 +15,7 @@ No breaches.
 - **`AGENTS.md` / `PROTOCOL.md` three-component rule.** Extension-only: unassigned `let-this-lil-nap`, overlay keys stay non-commands, manual Nap while `sleep.enabled` is false. No messages, `config.json`, sockets, slugs, routing, or pinned IDs. Matches PROTOCOL’s existing extension-only pattern (issue #18). `mac/` untouched. *(ledger-consistent)*
 - **`CONTEXT.md` language.** Command description is “Let This Lil Nap”. Internal `sleepLil` / `sleep` stay PROTOCOL’s legacy identifiers; no new user-facing “sleep” copy.
 - **`AGENTS.md` AppKit `@MainActor` / `verified:`.** No Swift or OS-behavior edits.
-- **Lucas’s prose.** PROTOCOL bullets extended; not rewritten.
+- **mygirleatsmayo’s prose.** PROTOCOL bullets extended; not rewritten.
 
 ## Baseline smells (judgement)
 

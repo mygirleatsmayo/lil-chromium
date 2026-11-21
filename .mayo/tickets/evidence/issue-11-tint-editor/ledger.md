@@ -32,7 +32,7 @@ Note the asymmetry — the hoverbar path is correct. It omits the key rather tha
 
 ## Owner decision (2026-08-16) — supersedes settled interpretation 1
 
-Lucas rejected the sentinel. His decision:
+mygirleatsmayo rejected the sentinel. His decision:
 
 > **Lil Nap has no "no tint" choice at all.** Graphite is its neutral option. The hoverbar keeps "no tint" exactly as it ships.
 

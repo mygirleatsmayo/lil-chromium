@@ -48,7 +48,7 @@ The rule, in `scripts/focus-loop/verdict.mjs`:
      the lil took focus (ADR-0004);
   2. no browser window rose above another application's window during the
      close. The 2026-09-17 live run (#31) restored the right app and still left
-     the Primary window one step above the user's other apps — the flash Lucas
+     the Primary window one step above the user's other apps — the flash mygirleatsmayo
      sees; the frontmost app alone read that green. The reason names each risen
      window with its front-to-back position before and after.
 - A repetition that cannot be observed is **inconclusive** — never green. An

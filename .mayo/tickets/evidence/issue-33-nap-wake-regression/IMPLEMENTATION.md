@@ -33,7 +33,7 @@ Sole production caller of the swap is the `wakeLil` runtime message (`sleep.js` 
 
 ## Live Helium (current v0.4 trial, unfixed worker)
 
-Lucas woke the already-napping lil. No extension reload, no SW probe (so `tabs.create` request/return ids were not observed inside the worker).
+mygirleatsmayo woke the already-napping lil. No extension reload, no SW probe (so `tabs.create` request/return ids were not observed inside the worker).
 
 Command used with transient snapshots outside the durable evidence set:
 

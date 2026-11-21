@@ -11,7 +11,7 @@ None.
 - **`AGENTS.md` / `PROTOCOL.md` three-component rule.** Classification text + MV3 worker only. No messages, `config.json`, sockets, slugs, routing, or pinned IDs. `mac/` / host untouched. New-window branch 1 and the #18 leave-alone list both drop “missing opener is decisive,” matching the worker.
 - **`CONTEXT.md` language.** No new user-facing copy. “Popup” remains Chromium `windows.create`/`type === "popup"`, not a rename of a lil.
 - **`AGENTS.md` AppKit `@MainActor` / `verified:`.** No Swift or OS-behavior edits.
-- **Lucas’s prose.** PROTOCOL bullets tightened with the worker, not rewritten into different product language.
+- **mygirleatsmayo’s prose.** PROTOCOL bullets tightened with the worker, not rewritten into different product language.
 
 ## Smell judgements
 
