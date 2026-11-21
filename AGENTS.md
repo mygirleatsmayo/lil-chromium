@@ -8,6 +8,7 @@ lil chromium: a macOS menu-bar agent (the system default browser) that opens lin
 - Mark API/OS behavior you have confirmed on a real system with a `verified:` comment; keep existing ones accurate when changing the code they describe.
 - Validate with `swift test` in `mac/` (behavior tests for config, messages, routing, URL intent, and the palette) and `pnpm test` (extension suite: production service worker in Node, no browser). Fixtures live in the repo-root `fixtures/`, shared by both suites. `make app` is the release build. `make install` goes further: it replaces the live app in /Applications and rewrites every browser's native-host manifest.
 - Write JavaScript for maintained Node only; `engines.node` in `package.json` is the floor. When code needs an API above the floor, raise the floor if every release below that API is end of life; else ask Lucas.
+- `version_name` in `extension/manifest.json` is the extension build that the hoverbar's caret menu shows, and nothing generates it. Every PR that changes `extension/` updates it, with a new `version` or a descriptive PR slug (`0.4.2-palette-hoverbar`), so a live check can tell which build runs.
 - Never overwrite Lucas's human-facing prose.
 
 ## mayo SDLC
