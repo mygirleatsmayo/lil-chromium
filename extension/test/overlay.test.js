@@ -86,6 +86,96 @@ test("arrow keys still navigate suggestions without leaking to the page", async 
   assert.equal(back.defaultPrevented, false);
 });
 
+test("clicking the Search row searches for the typed text, even when it names a destination (#39)", async () => {
+  const page = await mountOverlay();
+  page.key(page.window, "l", { metaKey: true });
+  page.addr.value = "localhost";
+  page.addr.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 150));
+  await page.flush();
+
+  const rows = page.omni.querySelectorAll(".orow");
+  rows[rows.length - 1].dispatchEvent(new page.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  // Spread: the message is built in the overlay's realm.
+  assert.deepEqual({ ...page.chrome.messages.at(-1) }, { action: "navigate", search: "localhost" });
+});
+
+for (const [label, emptied] of [
+  ["emptying", ""],
+  ["leaving only whitespace in", "\u0085"],
+]) {
+  test(`${label} the address field drops a suggestions reply still pending`, async () => {
+    const page = await mountOverlay({ holdOmnibox: true });
+    page.key(page.window, "l", { metaKey: true });
+    page.addr.value = "git";
+    page.addr.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(page.chrome.messages.at(-1).action, "omnibox", "the query for git is pending");
+
+    page.addr.value = emptied;
+    page.addr.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+    page.chrome.releaseOmnibox();
+    await page.flush();
+    assert.equal(page.omni.classList.contains("open"), false, "the reply for git does not open suggestions");
+
+    await new Promise((r) => setTimeout(r, 150));
+    await page.flush();
+    assert.equal(page.omni.classList.contains("open"), false, "nothing reopens them later");
+  });
+}
+
+// N5: a quadratic trim took 1.4 s on 60,000 spaces; linear takes well under 1 ms.
+test("a long whitespace run in typed text trims in linear time", async () => {
+  const page = await mountOverlay();
+  page.key(page.window, "l", { metaKey: true });
+  const typed = "a" + " ".repeat(100_000) + "b";
+  page.addr.value = " " + typed + "\u3000";
+  const start = performance.now();
+  page.addr.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+  assert.ok(performance.now() - start < 100, "the input handler answers at once");
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(page.chrome.messages.at(-1).query, typed, "the query is the typed text, trimmed");
+});
+
+test("Escape drops a suggestions reply still pending", async () => {
+  const page = await mountOverlay({ holdOmnibox: true });
+  page.key(page.window, "l", { metaKey: true });
+  page.addr.value = "git";
+  page.addr.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 150));
+  page.chrome.releaseOmnibox();
+  await page.flush();
+  assert.equal(page.omni.classList.contains("open"), true, "suggestions for git are open");
+
+  page.addr.value = "gith";
+  page.addr.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(page.chrome.messages.at(-1).query, "gith", "the query for gith is pending");
+
+  page.key(page.addr, "Escape");
+  assert.equal(page.root.activeElement === page.addr, true, "the first Escape only closes suggestions");
+  page.chrome.releaseOmnibox();
+  await page.flush();
+  assert.equal(page.omni.classList.contains("open"), false, "the reply for gith does not reopen them");
+});
+
+test("Escape drops a suggestions query still waiting out the debounce", async () => {
+  const page = await mountOverlay();
+  page.key(page.window, "l", { metaKey: true });
+  page.addr.value = "git";
+  page.addr.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 150));
+  await page.flush();
+  assert.equal(page.omni.classList.contains("open"), true, "suggestions for git are open");
+
+  page.addr.value = "gith";
+  page.addr.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+  page.key(page.addr, "Escape");
+  await new Promise((r) => setTimeout(r, 150));
+  await page.flush();
+  assert.equal(page.omni.classList.contains("open"), false, "the query for gith does not reopen them");
+});
+
 test("keyboard isolation keeps address labels, pointer-transparent chrome, and Settings", async () => {
   const page = await mountOverlay();
   assert.equal(page.addr.getAttribute("aria-label"), "Address");
@@ -207,4 +297,39 @@ test("omnibox and menu rows use the same icon system as the bar", async () => {
   assert.ok(checked, "the menu marks a current choice");
   assertIconContract(checked.querySelector("svg.check"), "check");
   assert.doesNotMatch(menu.textContent, /[✓▾]/);
+});
+
+test("a lil on a local dev server gets the hoverbar", async () => {
+  const page = await mountOverlay({ url: "http://localhost:5173/app" });
+  assert.ok(page.bar, "localhost pages carry the hoverbar");
+  assert.equal(page.urlDisplay.textContent, "localhost:5173/app");
+});
+
+test("a lil showing a local file gets the hoverbar and reports activity", async () => {
+  const page = await mountOverlay({ url: "file:///Users/luke/Notes/index.html", clock: true });
+  assert.ok(page.bar, "file pages carry the hoverbar");
+  assert.ok(page.chrome.messages.some((m) => m.action === "interaction"));
+
+  const field = page.document.createElement("textarea");
+  page.document.body.appendChild(field);
+  field.value = "draft";
+  field.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+  await page.clock.advance(500);
+  assert.ok(page.chrome.messages.some((m) => m.action === "formDirty" && m.dirty === true));
+});
+
+test("a local file shows its decoded path, and the full URL when focused", async () => {
+  const href = "file:///Users/luke/My%20Notes/index.html";
+  const page = await mountOverlay({ url: href });
+  assert.equal(page.urlDisplay.textContent, "/Users/luke/My Notes/index.html");
+  assert.equal(page.urlDisplay.querySelector(".strong").textContent, "index.html");
+
+  page.key(page.window, "l", { metaKey: true });
+  assert.equal(page.addr.value, href);
+});
+
+test("a local file lil gets no hoverbar when the browser denies file access", async () => {
+  const page = await mountOverlay({ url: "file:///Users/luke/index.html", fileAccess: false });
+  assert.equal(page.host, null);
+  assert.deepEqual(page.chrome.messages, []);
 });
