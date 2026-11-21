@@ -41,3 +41,10 @@ Verdicts pending Lucas; the orchestrator's recommendation follows each.
 - R1: `7639af8`. S1, P1: `7e58c4c`. PROTOCOL.md's palette line now says text naming a history origin opens that origin's URL.
 - Accepted, as Chrome does it: typed `example.com` with only `http://example.com` in history opens http (`VisitClassifier` tries the `http://` prefix against visited URLs); this supersedes #54's out-of-scope line on rule 8 for text that names an origin. A single-label origin typed in full (`intranet`) leads with its Open row (Chrome promotes the what-you-typed match when the input is a visited URL).
 - Accepted as is: after accepting, the Open row and the origin row below Search open the same URL, as typed URLs such as `github.com` already do. Pre-#54 names that use "site" in plain English (`oneSiteCannotFloodTheList`) stay.
+
+## Remediation 1 (`1302950...3b9a0e6`)
+
+Resolved: S2, S3, S4, P3, R1. S1/P1 is unresolved through N1. Verdicts pending Lucas.
+
+- N1 · Regression: with `http://intranet` and a more frecent `https://intranet.dev.example` in history, typing `intranet` opened `http://intranet` at `1302950`; at `3b9a0e6` it completes to and opens `https://intranet.dev.example`. Text naming a history origin now gets an Open row, so the completion falls back to the best match (`bestMatchOrigin`) · recommend **fix**: text that names a history origin gets no completion to another origin. Chrome treats an exact visited match as the best match regardless of input type (`HistoryURLProvider::DoAutocomplete`: `exact_suggestion_is_in_history` → `WHAT_YOU_TYPED_MATCH`).
+- N2 · `sett` completes to a visited `http://settings`; accepting it makes the Settings row lead, so Return opens native Settings. Present before these fix rounds · recommend **won't-fix**: it needs a visited single-label host named `settings`.
