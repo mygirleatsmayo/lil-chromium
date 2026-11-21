@@ -22,7 +22,7 @@ Both reports were terse, so the criteria most open to faking were checked direct
 
 ## Settled interpretations
 
-1. `AGENTS.md` was edited to document `pnpm test`. Standards review raised no finding; the edit adds the new command and does not rewrite Lucas's prose. Flagged to Lucas for awareness.
+1. `AGENTS.md` was edited to document `pnpm test`. Standards review raised no finding; the edit adds the new command and does not rewrite mygirleatsmayo's prose. Flagged to mygirleatsmayo for awareness.
 2. Node's built-in test runner with zero new dependencies is the accepted harness. `pnpm-lock.yaml` gained 9 lines.
 
 ## Verdict

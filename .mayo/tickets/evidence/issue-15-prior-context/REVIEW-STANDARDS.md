@@ -34,4 +34,4 @@ The suite cannot catch it: `extension/test/chrome.js` `windows.remove` fires onl
 
 ## Checked, not filed
 
-Three-component landing is complete (PROTOCOL + `Messages.swift` + app `open` + host `restore-focus` + extension + shared fixtures). New AppKit type `ExternalAppRestorer` is `@MainActor`. No Lucas README/CHANGELOG overwrite. `type === "popup"` stays Chromium API. Cross-language `PriorContext` encode is the contract, not Duplicated Code. Required three-component edits are not Shotgun Surgery.
+Three-component landing is complete (PROTOCOL + `Messages.swift` + app `open` + host `restore-focus` + extension + shared fixtures). New AppKit type `ExternalAppRestorer` is `@MainActor`. No mygirleatsmayo README/CHANGELOG overwrite. `type === "popup"` stays Chromium API. Cross-language `PriorContext` encode is the contract, not Duplicated Code. Required three-component edits are not Shotgun Surgery.

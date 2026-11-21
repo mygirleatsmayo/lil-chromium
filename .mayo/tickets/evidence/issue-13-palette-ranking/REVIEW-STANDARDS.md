@@ -6,7 +6,7 @@ Axis: documented repo standards + Fowler ch.3 baseline. Method: `git diff main..
 
 1. **AGENTS.md — three-component contract.** Diff is `mac/` + evidence only. No messages, `config.json`, sockets, slugs, routing, or pinned IDs. Leaving `extension/` and `docs/PROTOCOL.md` untouched is correct.
 2. **AGENTS.md — `@MainActor` / `verified:`.** No new AppKit type. `PaletteModel` stays Foundation-only (`PaletteController` already `@MainActor`). No new API/OS claim; no `verified:` comment drifted.
-3. **AGENTS.md — tests / prose.** Palette behavior tests land in `PaletteTests.swift` (`PaletteOrderingTests`). No Lucas-facing copy overwritten. Evidence is under `.mayosdd/`, not the repo root.
+3. **AGENTS.md — tests / prose.** Palette behavior tests land in `PaletteTests.swift` (`PaletteOrderingTests`). No mygirleatsmayo-facing copy overwritten. Evidence is under `.mayosdd/`, not the repo root.
 4. **PROTOCOL.md.** Search row still uses `searchEngine`. URL-like input still leads with Open, then Search. Ranking still host-prefix > title-word-prefix > contains > dense fuzzy × frecency, host+path dedupe, ≤3/host. Hover-bar “port v0.2 palette ranking” is the extension omnibox contract; this diff does not rewrite it.
 5. **CONTEXT.md.** No avoided synonyms (popup, default browser, connected browser, sleep, etc.).
 6. **ADR-0001 / 0002 / 0003.** No Settings surface, no profile routing, no prior-context restore.

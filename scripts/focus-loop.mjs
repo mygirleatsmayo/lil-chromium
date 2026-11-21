@@ -186,7 +186,7 @@ class Run {
    *
    * The seam check is part of preflight, not of the first scenario: a run
    * without it can open a lil it has no safe way to close, which is how an
-   * earlier run left an unowned lil on Lucas's screen. Arming changes nothing
+   * earlier run left an unowned lil on mygirleatsmayo's screen. Arming changes nothing
    * on screen, so this costs no mutation.
    */
   async preflight() {

@@ -16,7 +16,7 @@ promote("default");  // ⌘O
 
 1. **AGENTS.md — three-component contract.** `docs/PROTOCOL.md`, `mac/` (config, merge, messages, host, routing), and `extension/` (SW context, overlay labels, manifest) all move together. Pinned IDs untouched.
 2. **AGENTS.md — `@MainActor` / `verified:`.** No new AppKit type. `SettingsWindowController` / `SettingsStore` stay `@MainActor`. No new OS claim; existing `verified:` comments untouched.
-3. **AGENTS.md — tests / prose.** Swift and extension tests cover decode, merge, routing, and context wire. README / CHANGELOG / Lucas copy not overwritten. PROTOCOL edits are the required contract update.
+3. **AGENTS.md — tests / prose.** Swift and extension tests cover decode, merge, routing, and context wire. README / CHANGELOG / mygirleatsmayo copy not overwritten. PROTOCOL edits are the required contract update.
 4. **PROTOCOL.md.** Schema v3 `primaryBrowser`, routing sockets, `get-context` fields, Settings excluding Primary while keeping sibling channels, legacy-key read + merge preserve, no version downgrade — match the Swift/JS implementations.
 5. **ADR-0002.** Launch candidates key off installation slugs via `BrowserTable`, not stale `knownBrowsers.bundleId` rows.
 

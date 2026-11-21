@@ -12,7 +12,7 @@ Read `AGENTS.md`, `docs/PROTOCOL.md`, `CONTEXT.md`, `docs/adr/0001`–`0003`, `d
 
 1. **AGENTS.md — three-component contract.** Diff is `extension/` + `.mayosdd/` evidence. No messages, `config.json`, sockets, slugs, routing, or pinned IDs. `docs/PROTOCOL.md` and `mac/` untouched — correct; no contract change.
 2. **AGENTS.md — `@MainActor` / `verified:`.** No Swift. No `verified:` comments in the hunks; none to keep accurate. macOS focus unreliability still cites `research §Focus`, not a new on-box claim.
-3. **AGENTS.md — tests / prose.** New tests boot the production service worker via `boot()`; fixtures stay at repo-root `fixtures/`. Lucas-facing copy untouched. Evidence is not product docs.
+3. **AGENTS.md — tests / prose.** New tests boot the production service worker via `boot()`; fixtures stay at repo-root `fixtures/`. mygirleatsmayo-facing copy untouched. Evidence is not product docs.
 4. **PROTOCOL.md Focus discipline.** User-initiated creates still `windows.create` then `focusWindow`. Restore `focus: false` is ledger interpretation 1.
 5. **CONTEXT.md / domain.md.** `type: "popup"` stays Chromium API (interpretation 3). Wire `sleep*` kept: PROTOCOL overrides **Lil Nap**. New test prose says “napping lil” / “incognito lil”. `openLittleWindow` → `openLil`.
 6. **ADR 0001 / 0002 / 0003.** No Settings surface, no profile routing. ADR 0003 named out of scope in `IMPLEMENTATION.md`, not silently overridden.

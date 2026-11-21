@@ -10,7 +10,7 @@
 //
 // So the oracle reads the native window list instead: a Helium window "rose"
 // when it overtook a window of some other application that used to be in front
-// of it. That is exactly the symptom Lucas reported, stated in a form a machine
+// of it. That is exactly the symptom mygirleatsmayo reported, stated in a form a machine
 // can decide.
 //
 // Everything here is pure over probe snapshots (see mac/Sources/LilFocusProbe)

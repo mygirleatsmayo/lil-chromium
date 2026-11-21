@@ -11,7 +11,7 @@ No breaches.
 - **`AGENTS.md` / `PROTOCOL.md` three-component rule.** Delta is overlay keyboard isolation plus the matching hover-bar sentence. No messages, `config.json`, sockets, slugs, routing, or pinned IDs. Same extension-only pattern PROTOCOL already uses for overlay/hover-bar behavior. `mac/` correctly untouched.
 - **`CONTEXT.md` language.** Hunks do not add user-facing copy or avoided synonyms (popup / default browser / sleep).
 - **`AGENTS.md` AppKit `@MainActor` / `verified:`.** No Swift or OS-behavior edits. No new `verified:` claims.
-- **Lucas’s prose.** PROTOCOL hover-bar bullet was extended, not rewritten. README/settings copy untouched.
+- **mygirleatsmayo’s prose.** PROTOCOL hover-bar bullet was extended, not rewritten. README/settings copy untouched.
 
 ## Baseline smells (judgement)
 

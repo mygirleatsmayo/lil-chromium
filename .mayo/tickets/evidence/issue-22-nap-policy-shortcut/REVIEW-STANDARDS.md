@@ -11,7 +11,7 @@ No breaches.
 - **`AGENTS.md` / `PROTOCOL.md` three-component rule.** Delta is extension-only (MV3 command, overlay-key non-remap, manual Nap while `sleep.enabled` is false). No messages, `config.json`, sockets, slugs, routing, or pinned IDs. Same “extension-only, no app/host change” pattern PROTOCOL already uses for attributable new-tab conversion. `mac/` correctly untouched.
 - **`CONTEXT.md` language.** User-facing command description is “Let This Lil Nap”. Internal `sleepLil` / `sleep` remain PROTOCOL’s named legacy identifiers; this diff does not introduce new user-facing “sleep” copy.
 - **`AGENTS.md` AppKit `@MainActor` / `verified:`.** No Swift or OS-behavior edits.
-- **Lucas’s prose.** PROTOCOL bullets were extended, not rewritten into different product language.
+- **mygirleatsmayo’s prose.** PROTOCOL bullets were extended, not rewritten into different product language.
 
 ## Baseline smells (judgement)
 

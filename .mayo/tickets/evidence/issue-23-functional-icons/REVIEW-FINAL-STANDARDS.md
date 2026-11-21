@@ -20,7 +20,7 @@ Diff: overlay + tests + harness, `PaletteController.swift`, `SettingsWindow.swif
 
 No findings.
 
-No new documented-rule breaks: no PROTOCOL/manifest/WAR edits (glyphs inlined into the closed shadow tree; SVGs are the licensed source of record, not runtime loads); `PaletteController` stays `@MainActor`; no new AppKit type; `verified:` comments untouched; Lucas prose untouched. SwiftUI hunks use `Button`, private `@State` / `@ScaledMetric`, `.foregroundStyle` / `.symbolRenderingMode`, dedicated labels — no deprecated APIs. No Swift tests added (do not test views). Overlay `icon()` / `setIcon()` keep names on the control; SVGs are `aria-hidden`.
+No new documented-rule breaks: no PROTOCOL/manifest/WAR edits (glyphs inlined into the closed shadow tree; SVGs are the licensed source of record, not runtime loads); `PaletteController` stays `@MainActor`; no new AppKit type; `verified:` comments untouched; mygirleatsmayo prose untouched. SwiftUI hunks use `Button`, private `@State` / `@ScaledMetric`, `.foregroundStyle` / `.symbolRenderingMode`, dedicated labels — no deprecated APIs. No Swift tests added (do not test views). Overlay `icon()` / `setIcon()` keep names on the control; SVGs are `aria-hidden`.
 
 Not filed: overlay `createClock()` resembles the worker harness clock — isolated test seams, not a product abstraction. `ICON_PATHS` vs vendored SVG `d` stays the no-build-step contract (tests pin equality).
 

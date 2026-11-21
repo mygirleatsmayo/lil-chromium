@@ -10,7 +10,7 @@ Ledger frozen. S1–S3 remain **resolved**; no reinterpretation.
 
 None.
 
-- **AGENTS.md:** Protocol/message/`config.json`/socket/slug changes land in app, host, extension, and `docs/PROTOCOL.md`. `SettingsStore` / window controller stay `@MainActor`. No new AppKit type without that annotation. No `verified:` drift. Shared `fixtures/`. Lucas-facing prose not overwritten.
+- **AGENTS.md:** Protocol/message/`config.json`/socket/slug changes land in app, host, extension, and `docs/PROTOCOL.md`. `SettingsStore` / window controller stay `@MainActor`. No new AppKit type without that annotation. No `verified:` drift. Shared `fixtures/`. mygirleatsmayo-facing prose not overwritten.
 - **CONTEXT.md:** PROTOCOL Settings singleton uses “live relays” and “lils”. Settings UI says “Reveal zone”. Avoided synonym “connected browser” is gone from production/protocol hunks.
 - **PROTOCOL.md:** `config-update` shape, clamp-at-model, fanout, reconnect catch-up, and overlay live-read match the three components.
 

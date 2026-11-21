@@ -14,7 +14,7 @@ so all connected browsers and lils converge without waiting for a reconnect
 
 That phrase is the avoided synonym, not “live relays” / “host browsers”. Settings UI copy correctly uses “Reveal zone”.
 
-No other hard breaches: three-component lockstep holds; `SettingsStore` / `SettingsWindowController` stay `@MainActor`; no new AppKit type; no `verified:` drift; shared fixtures; no Lucas README/CHANGELOG overwrite.
+No other hard breaches: three-component lockstep holds; `SettingsStore` / `SettingsWindowController` stay `@MainActor`; no new AppKit type; no `verified:` drift; shared fixtures; no mygirleatsmayo README/CHANGELOG overwrite.
 
 ## Judgement — baseline smells
 
