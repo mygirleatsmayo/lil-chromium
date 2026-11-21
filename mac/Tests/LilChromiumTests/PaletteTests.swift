@@ -117,8 +117,8 @@ struct PaletteRowsTests {
     @Test func autocompleteOffersOnlyAPrefixedHost() throws {
         let model = try makeModel()
 
-        #expect(model.results(for: "git").autocompleteHost == "github.com")
-        #expect(model.results(for: "quarterly budget review").autocompleteHost == nil)
+        #expect(model.results(for: "git").autocompleteOrigin?.text == "github.com")
+        #expect(model.results(for: "quarterly budget review").autocompleteOrigin == nil)
     }
 }
 
@@ -356,7 +356,7 @@ struct PaletteOrderingTests: PaletteHistoryFixture {
         #expect(rows[0].actionURL == "https://github.com")
         #expect(rows[2].actionURL == "https://hubspot.com")
         #expect(rows[0].host == "github.com")
-        #expect(palette.results(for: "hub").autocompleteHost == rows[0].host)
+        #expect(palette.results(for: "hub").autocompleteOrigin == rows[0].origin)
     }
 
     /// SP2: seven ineligible host-prefix rows would fill the old rank budget
@@ -1311,6 +1311,216 @@ struct PaletteCompletionTests {
         #expect(field.rows.map(\.actionURL) == palette.rows(for: typed).map(\.actionURL))
         let today = palette.action(for: typed, selectedRow: palette.rows(for: typed).first, chord: .plain)
         #expect(field.pressReturn() == today)
+    }
+}
+
+/// An origin is a host plus its port (issue #54). An origin row opens the
+/// origin as history has it: its most frecent page with the path, query and
+/// fragment removed, as Chrome's host-only suggestion does
+/// (`ConvertToHostOnly`).
+struct PaletteOriginTests: PaletteHistoryFixture {
+
+    /// The row opens the page's own scheme, host (`www.` too) and port; the
+    /// subtitle names the origin, which drops `www.`.
+    @Test(.bug(id: 54), arguments: [
+        (history: "http://intranet.example:8080/x?tab=2#top", typed: "intranet",
+         opens: "http://intranet.example:8080", shows: "intranet.example:8080"),
+        (history: "https://www.example.com:8443/wiki?page=1#intro", typed: "example",
+         opens: "https://www.example.com:8443", shows: "example.com:8443"),
+    ])
+    func originRowOpensTheSchemeHostAndPortFromHistory(history: String, typed: String, opens: String, shows: String) {
+        let rows = model(visit(history, title: "Wiki")).rows(for: typed)
+
+        #expect(rows.first?.kind == .history)
+        #expect(rows.first?.actionURL == opens)
+        #expect(rows.first?.subtitle == shows)
+    }
+
+    // MARK: - Origin identity
+
+    @Test(.bug(id: 54)) func portsAreSeparateOrigins() {
+        let rows = model(visit("http://localhost:3000/app"), visit("http://localhost:5173/app")).rows(for: "")
+
+        #expect(rows.map(\.actionURL) == ["http://localhost:3000", "http://localhost:5173"])
+        #expect(rows.map(\.subtitle) == ["localhost:3000", "localhost:5173"])
+    }
+
+    @Test(.bug(id: 54)) func pagesOnDifferentPortsNeverMerge() {
+        let rows = model(visit("http://localhost:3000/app"), visit("http://localhost:5173/app")).rows(for: "app")
+
+        #expect(rows.map(\.actionURL) == [
+            "https://www.startpage.com/sp/search?query=app",
+            "http://localhost:3000/app",
+            "http://localhost:5173/app",
+        ])
+        #expect(rows.dropFirst().map(\.subtitle) == ["localhost:3000/app", "localhost:5173/app"])
+    }
+
+    /// The per-origin cap (3 rows) counts each port on its own.
+    @Test(.bug(id: 54)) func eachPortHasItsOwnRowLimit() {
+        let rows = model(
+            ["a", "b", "c", "d"].map { visit("http://localhost:3000/\($0)") }
+                + [visit("http://localhost:5173/e")]
+        ).rows(for: "localhost")
+
+        #expect(rows.filter { $0.origin?.text == "localhost:3000" }.count == 3)
+        #expect(rows.filter { $0.origin?.text == "localhost:5173" }.count == 2)
+    }
+
+    /// A scheme's default port is no port: those pages join the portless origin.
+    @Test(.bug(id: 54), arguments: [("https", 443), ("http", 80)])
+    func defaultPortCountsAsNoPort(_ scheme: String, _ port: Int) {
+        let rows = model(
+            visit("\(scheme)://example.com/a", visits: 50),
+            visit("\(scheme)://example.com:\(port)/b")
+        ).rows(for: "")
+
+        #expect(rows.map(\.actionURL) == ["\(scheme)://example.com"])
+        #expect(rows.map(\.subtitle) == ["example.com"])
+    }
+
+    // MARK: - Which scheme an origin row opens
+
+    /// `http` and `https` pages on one host and port are one origin; its most
+    /// frecent page decides the scheme.
+    @Test(.bug(id: 54), arguments: [
+        (httpVisits: 5, httpsVisits: 50, opens: "https://example.com"),
+        (httpVisits: 50, httpsVisits: 5, opens: "http://example.com"),
+    ])
+    func mostFrecentPageChoosesTheScheme(httpVisits: Int, httpsVisits: Int, opens: String) {
+        let rows = model(
+            visit("http://example.com/a", visits: httpVisits),
+            visit("https://example.com/b", visits: httpsVisits)
+        ).rows(for: "")
+
+        #expect(rows.map(\.actionURL) == [opens])
+    }
+
+    /// Equal frecency: the most recently visited page decides the scheme,
+    /// whichever URL sorts first.
+    @Test(.bug(id: 54), arguments: [
+        (recent: "http://example.com/a", older: "https://example.com/b", opens: "http://example.com"),
+        (recent: "https://example.com/a", older: "http://example.com/b", opens: "https://example.com"),
+    ])
+    func equalFrecencyGoesToTheMostRecentVisit(recent: String, older: String, opens: String) throws {
+        // log10(1 + 9) · 0.5^0 == log10(1 + 99) · 0.5^(30/30) == 1, exactly.
+        try #require(Ranking.frecency(visitCount: 9, typedCount: 0, lastVisitTime: nowMs, nowMs: nowMs)
+            == Ranking.frecency(visitCount: 99, typedCount: 0, lastVisitTime: nowMs - 30 * 86_400_000, nowMs: nowMs))
+        let rows = model(visit(recent, visits: 9, daysAgo: 0), visit(older, visits: 99, daysAgo: 30)).rows(for: "")
+
+        #expect(rows.map(\.actionURL) == [opens])
+    }
+
+    // MARK: - Completion and Return agree
+
+    private func field(typing text: String, in palette: PaletteModel) -> PaletteCompletionTests.Field {
+        var field = PaletteCompletionTests.Field(palette: palette)
+        field.type(text)
+        return field
+    }
+
+    @Test(.bug(id: 54)) func completionShowsThePortAndReturnOpensIt() throws {
+        let field = field(typing: "localhos", in: model(visit("http://localhost:3000/app")))
+
+        #expect(field.input.text == "localhost:3000")
+        #expect(field.input.completionRange == NSRange(location: 8, length: 6))
+        #expect(field.rows.first?.subtitle == "localhost:3000")
+        let action = try #require(field.pressReturn())
+        #expect(action.kind == .open)
+        #expect(action.url == "http://localhost:3000")
+        #expect(action.hint == "⏎ Open")
+    }
+
+    @Test(.bug(id: 54), arguments: PaletteCompletionTests.Acceptance.allCases)
+    func acceptingThenReturnOpensTheSameURL(_ key: PaletteCompletionTests.Acceptance) throws {
+        var field = field(typing: "localhos", in: model(visit("http://localhost:3000/app")))
+        field.accept(by: key)
+
+        #expect(field.input.text == "localhost:3000")
+        #expect(field.input.completionRange == nil)
+        #expect(try #require(field.pressReturn()).url == "http://localhost:3000")
+    }
+
+    /// Origins whose URL-intent reading of the completed text differs from
+    /// history: rule 8's `https`, `localhost`'s `http`, and an IPv6 literal
+    /// that reads as search.
+    static let originsURLIntentMisreads = [
+        (history: "http://intranet.example:8080/x", typed: "intranet",
+         completes: "intranet.example:8080", opens: "http://intranet.example:8080"),
+        (history: "https://localhost:3000/app", typed: "localhos",
+         completes: "localhost:3000", opens: "https://localhost:3000"),
+        (history: "http://[::1]:3000/app", typed: "[::1",
+         completes: "[::1]:3000", opens: "http://[::1]:3000"),
+    ]
+
+    /// Field text that names an origin opens it from history, as Chrome's
+    /// history provider resolves typed text (`HistoryURLProvider::VisitClassifier`).
+    @Test(.bug(id: 54), arguments: originsURLIntentMisreads, PaletteCompletionTests.Acceptance.allCases)
+    func acceptingAnyCompletionThenReturnOpensItsOriginFromHistory(
+        _ origin: (history: String, typed: String, completes: String, opens: String),
+        _ key: PaletteCompletionTests.Acceptance
+    ) throws {
+        var field = field(typing: origin.typed, in: model(visit(origin.history)))
+        try #require(field.input.text == origin.completes)
+        #expect(try #require(field.pressReturn()).url == origin.opens, "before accepting")
+
+        field.accept(by: key)
+
+        try #require(field.input.completionRange == nil)
+        #expect(try #require(field.pressReturn()).url == origin.opens, "after accepting")
+    }
+
+    @Test(.bug(id: 54), arguments: originsURLIntentMisreads)
+    func typingAnOriginOutInFullOpensItFromHistory(
+        _ origin: (history: String, typed: String, completes: String, opens: String)
+    ) throws {
+        let field = field(typing: origin.completes.uppercased(), in: model(visit(origin.history)))
+
+        try #require(field.input.completionRange == nil)
+        #expect(try #require(field.pressReturn()).url == origin.opens)
+    }
+
+    /// An exact visited origin is the default match, so it beats a more
+    /// frecent origin it prefixes (`HistoryURLProvider::DoAutocomplete`).
+    /// Typed in capitals, so the last key doesn't just consume the
+    /// `intranet` completion the previous key showed.
+    @Test(.bug(id: 54)) func textNamingAnOriginDoesNotCompleteToAnother() throws {
+        let palette = model(
+            visit("http://intranet/", visits: 2),
+            visit("https://intranet.dev.example/x", visits: 40)
+        )
+        let field = field(typing: "INTRANET", in: palette)
+
+        #expect(field.input.completionRange == nil)
+        #expect(try #require(field.pressReturn()).url == "http://intranet")
+    }
+
+    @Test(.bug(id: 54), arguments: [
+        (visits3000: 40, visits5173: 5, completes: "localhost:3000"),
+        (visits3000: 5, visits5173: 40, completes: "localhost:5173"),
+    ])
+    func twoPortsCompleteToTheMoreFrecent(visits3000: Int, visits5173: Int, completes: String) throws {
+        let palette = model(
+            visit("http://localhost:3000/app", visits: visits3000),
+            visit("http://localhost:5173/app", visits: visits5173)
+        )
+        let field = field(typing: "localhos", in: palette)
+
+        #expect(field.input.text == completes)
+        #expect(try #require(field.pressReturn()).url == "http://\(completes)")
+    }
+
+    /// A typed port picks its origin even when another port is more frecent.
+    @Test(.bug(id: 54)) func aTypedPortCompletesToItsOrigin() throws {
+        let palette = model(
+            visit("http://localhost:3000/app", visits: 40),
+            visit("http://localhost:5173/app", visits: 5)
+        )
+        let field = field(typing: "localhost:5", in: palette)
+
+        #expect(field.input.text == "localhost:5173")
+        #expect(field.rows.first?.actionURL == "http://localhost:5173")
+        #expect(try #require(field.pressReturn()).url == "http://localhost:5173")
     }
 }
 
