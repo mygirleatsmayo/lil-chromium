@@ -1480,6 +1480,21 @@ struct PaletteOriginTests: PaletteHistoryFixture {
         #expect(try #require(field.pressReturn()).url == origin.opens)
     }
 
+    /// An exact visited origin is the default match, so it beats a more
+    /// frecent origin it prefixes (`HistoryURLProvider::DoAutocomplete`).
+    /// Typed in capitals, so the last key doesn't just consume the
+    /// `intranet` completion the previous key showed.
+    @Test(.bug(id: 54)) func textNamingAnOriginDoesNotCompleteToAnother() throws {
+        let palette = model(
+            visit("http://intranet/", visits: 2),
+            visit("https://intranet.dev.example/x", visits: 40)
+        )
+        let field = field(typing: "INTRANET", in: palette)
+
+        #expect(field.input.completionRange == nil)
+        #expect(try #require(field.pressReturn()).url == "http://intranet")
+    }
+
     @Test(.bug(id: 54), arguments: [
         (visits3000: 40, visits5173: 5, completes: "localhost:3000"),
         (visits3000: 5, visits5173: 40, completes: "localhost:5173"),

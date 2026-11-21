@@ -367,7 +367,10 @@ final class PaletteModel {
     ///
     /// The autocomplete origin comes from the same ranking pass: when a history
     /// row sits above Search, that is the origin Enter opens — ghost text must
-    /// name it too. Otherwise the best history match's origin, else nil.
+    /// name it too. Otherwise the best history match's origin, else nil. Text
+    /// that names an origin in history is its own autocomplete origin, so it
+    /// never completes to a longer one, as Chrome makes an exact visited match
+    /// the default (`HistoryURLProvider::DoAutocomplete`).
     func results(for query: String) -> PaletteResults {
         let trimmed = query.trimmingWhitespace()
 
@@ -380,7 +383,8 @@ final class PaletteModel {
         }
 
         var rows: [PaletteRow] = []
-        let openURL = originURL(named: trimmed) ?? URLIntent.intent(of: trimmed).url
+        let namedOrigin = origin(named: trimmed)
+        let openURL = namedOrigin?.url ?? URLIntent.intent(of: trimmed).url
 
         // Rank the full candidate set before spending the display budget, so an
         // eligible registrable-label match cannot be evicted by ineligible
@@ -416,18 +420,21 @@ final class PaletteModel {
         rows = Array(rows.prefix(maxRows))
 
         let topHistoryOrigin = rows.first.flatMap { openURL == nil && $0.kind == .history ? $0.origin : nil }
-        return PaletteResults(rows: rows, autocompleteOrigin: topHistoryOrigin ?? bestMatchOrigin)
+        return PaletteResults(
+            rows: rows,
+            autocompleteOrigin: namedOrigin?.origin ?? topHistoryOrigin ?? bestMatchOrigin
+        )
     }
 
-    /// The URL of the origin `text` names as its completion shows it
-    /// (`localhost:3000`), so Return opens the same URL whether the text was
-    /// typed or accepted (issue #54). Read alone, the text would lose
-    /// history's scheme (URL-intent rule 8's `https`, `localhost`'s `http`)
-    /// or search (`[::1]:3000`). Chrome's history provider resolves typed text
+    /// The origin `text` names as its completion shows it (`localhost:3000`).
+    /// Its URL opens, so Return opens the same URL whether the text was typed
+    /// or accepted (issue #54). Read alone, the text would lose history's
+    /// scheme (URL-intent rule 8's `https`, `localhost`'s `http`) or search
+    /// (`[::1]:3000`). Chrome's history provider resolves typed text
     /// against visited URLs the same way (`HistoryURLProvider::VisitClassifier`).
-    private func originURL(named text: String) -> String? {
+    private func origin(named text: String) -> Ranking.IndexedOrigin? {
         let text = text.lowercased()
-        return index.origins.first { $0.origin.text == text }?.url
+        return index.origins.first { $0.origin.text == text }
     }
 
     /// Among eligible registrable-label matches, frecency is the tie-breaker
