@@ -30,3 +30,8 @@ Verdicts pending Lucas; the orchestrator's recommendation follows each.
 
 - S2, P3: `a4a08e2`. S3: `c003d9a`. S4: `699b821`.
 - A site row's URL drops any `user:pass@`, where Chrome's `GetWithEmptyPath` keeps it. Moot: browser history stores no credentials (`HistoryURLProvider::VisitClassifier`: "the history backend strips auth creds").
+
+## Lucas's rulings after fix round 1
+
+- S1, P1: **fix**. Field text that names an origin in history, as that origin's completion shows it, opens that origin's URL from history, so Return opens the same URL whether the text was typed or accepted. The URL-intent rules (PROTOCOL.md *URL intent*) and the hoverbar stay as they are; Chrome's history provider resolves typed text against visited URLs on top of URL reading (`HistoryURLProvider::VisitClassifier`). Out of scope: page URLs typed out in full; the hoverbar.
+- R1 · **rename**: the palette's *site* (a host plus its port; http and https, with or without `www.`, count as one) is an *origin* in code, matching the existing "origin row" name and Firefox's origin autofill (`moz_origins` holds host and port; `UrlbarProviderAutofill` totals frecency across prefixes and `www.`). The web's *site* ignores ports and subdomains. The glossary entry is proposed on #37.
