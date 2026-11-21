@@ -25,3 +25,8 @@ Verdicts pending Lucas; the orchestrator's recommendation follows each.
 - P2: **won't-fix**, as recommended.
 - P4: **accept**, as recommended.
 - S1, P1: **open**. Lucas asked why it can't land in this PR. Chrome resolves typed text that names a visited URL to that URL in its history provider, on top of URL reading (`HistoryURLProvider::VisitClassifier`, which tries the input under each URL prefix against the URL database), so the URL-intent rules and the hoverbar stay as they are. The orchestrator now recommends fixing it here.
+
+## Fix round 1 (`58ad5c2...699b821`)
+
+- S2, P3: `a4a08e2`. S3: `c003d9a`. S4: `699b821`.
+- A site row's URL drops any `user:pass@`, where Chrome's `GetWithEmptyPath` keeps it. Moot: browser history stores no credentials (`HistoryURLProvider::VisitClassifier`: "the history backend strips auth creds").
