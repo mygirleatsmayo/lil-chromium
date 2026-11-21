@@ -117,8 +117,8 @@ struct PaletteRowsTests {
     @Test func autocompleteOffersOnlyAPrefixedHost() throws {
         let model = try makeModel()
 
-        #expect(model.results(for: "git").autocompleteSite?.text == "github.com")
-        #expect(model.results(for: "quarterly budget review").autocompleteSite == nil)
+        #expect(model.results(for: "git").autocompleteOrigin?.text == "github.com")
+        #expect(model.results(for: "quarterly budget review").autocompleteOrigin == nil)
     }
 }
 
@@ -356,7 +356,7 @@ struct PaletteOrderingTests: PaletteHistoryFixture {
         #expect(rows[0].actionURL == "https://github.com")
         #expect(rows[2].actionURL == "https://hubspot.com")
         #expect(rows[0].host == "github.com")
-        #expect(palette.results(for: "hub").autocompleteSite == rows[0].site)
+        #expect(palette.results(for: "hub").autocompleteOrigin == rows[0].origin)
     }
 
     /// SP2: seven ineligible host-prefix rows would fill the old rank budget
@@ -1314,20 +1314,21 @@ struct PaletteCompletionTests {
     }
 }
 
-/// A site is a host plus its port (issue #54). A site row opens the site as
-/// history has it: its most frecent page with the path, query and fragment
-/// removed, as Chrome's site suggestion does (`ConvertToHostOnly`).
-struct PaletteSiteTests: PaletteHistoryFixture {
+/// An origin is a host plus its port (issue #54). An origin row opens the
+/// origin as history has it: its most frecent page with the path, query and
+/// fragment removed, as Chrome's host-only suggestion does
+/// (`ConvertToHostOnly`).
+struct PaletteOriginTests: PaletteHistoryFixture {
 
     /// The row opens the page's own scheme, host (`www.` too) and port; the
-    /// subtitle names the site, which drops `www.`.
+    /// subtitle names the origin, which drops `www.`.
     @Test(.bug(id: 54), arguments: [
         (history: "http://intranet.example:8080/x?tab=2#top", typed: "intranet",
          opens: "http://intranet.example:8080", shows: "intranet.example:8080"),
         (history: "https://www.example.com:8443/wiki?page=1#intro", typed: "example",
          opens: "https://www.example.com:8443", shows: "example.com:8443"),
     ])
-    func siteRowOpensTheSchemeHostAndPortFromHistory(history: String, typed: String, opens: String, shows: String) {
+    func originRowOpensTheSchemeHostAndPortFromHistory(history: String, typed: String, opens: String, shows: String) {
         let rows = model(visit(history, title: "Wiki")).rows(for: typed)
 
         #expect(rows.first?.kind == .history)
@@ -1335,9 +1336,9 @@ struct PaletteSiteTests: PaletteHistoryFixture {
         #expect(rows.first?.subtitle == shows)
     }
 
-    // MARK: - Site identity
+    // MARK: - Origin identity
 
-    @Test(.bug(id: 54)) func portsAreSeparateSites() {
+    @Test(.bug(id: 54)) func portsAreSeparateOrigins() {
         let rows = model(visit("http://localhost:3000/app"), visit("http://localhost:5173/app")).rows(for: "")
 
         #expect(rows.map(\.actionURL) == ["http://localhost:3000", "http://localhost:5173"])
@@ -1355,18 +1356,18 @@ struct PaletteSiteTests: PaletteHistoryFixture {
         #expect(rows.dropFirst().map(\.subtitle) == ["localhost:3000/app", "localhost:5173/app"])
     }
 
-    /// The per-site cap (3 rows) counts each port on its own.
+    /// The per-origin cap (3 rows) counts each port on its own.
     @Test(.bug(id: 54)) func eachPortHasItsOwnRowLimit() {
         let rows = model(
             ["a", "b", "c", "d"].map { visit("http://localhost:3000/\($0)") }
                 + [visit("http://localhost:5173/e")]
         ).rows(for: "localhost")
 
-        #expect(rows.filter { $0.site?.text == "localhost:3000" }.count == 3)
-        #expect(rows.filter { $0.site?.text == "localhost:5173" }.count == 2)
+        #expect(rows.filter { $0.origin?.text == "localhost:3000" }.count == 3)
+        #expect(rows.filter { $0.origin?.text == "localhost:5173" }.count == 2)
     }
 
-    /// A scheme's default port is no port: those pages join the portless site.
+    /// A scheme's default port is no port: those pages join the portless origin.
     @Test(.bug(id: 54), arguments: [("https", 443), ("http", 80)])
     func defaultPortCountsAsNoPort(_ scheme: String, _ port: Int) {
         let rows = model(
@@ -1378,9 +1379,9 @@ struct PaletteSiteTests: PaletteHistoryFixture {
         #expect(rows.map(\.subtitle) == ["example.com"])
     }
 
-    // MARK: - Which scheme a site row opens
+    // MARK: - Which scheme an origin row opens
 
-    /// `http` and `https` pages on one host and port are one site; its most
+    /// `http` and `https` pages on one host and port are one origin; its most
     /// frecent page decides the scheme.
     @Test(.bug(id: 54), arguments: [
         (httpVisits: 5, httpsVisits: 50, opens: "https://example.com"),
@@ -1455,8 +1456,8 @@ struct PaletteSiteTests: PaletteHistoryFixture {
         #expect(try #require(field.pressReturn()).url == "http://\(completes)")
     }
 
-    /// A typed port picks its site even when another port is more frecent.
-    @Test(.bug(id: 54)) func aTypedPortCompletesToItsSite() throws {
+    /// A typed port picks its origin even when another port is more frecent.
+    @Test(.bug(id: 54)) func aTypedPortCompletesToItsOrigin() throws {
         let palette = model(
             visit("http://localhost:3000/app", visits: 40),
             visit("http://localhost:5173/app", visits: 5)
